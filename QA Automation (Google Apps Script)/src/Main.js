@@ -62,7 +62,7 @@ function createDraftForLatest() {
     var row   = _getLatestRow();
     var entry = new QAEntry(row);
 
-    var ss      = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    var ss      = SpreadsheetApp.getActiveSpreadsheet();
     var history = new AnalystHistory(ss);
 
     var pastEntries = history.getHistory(entry.agentName);
@@ -89,7 +89,7 @@ function createDraftForLatest() {
  */
 function rebuildHistory() {
   try {
-    var ss    = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    var ss    = SpreadsheetApp.getActiveSpreadsheet();
     var sheet = ss.getSheetByName(CONFIG.QA_SHEET_NAME);
     if (!sheet) throw new Error('QA Sheet "' + CONFIG.QA_SHEET_NAME + '" not found.');
 
@@ -135,7 +135,7 @@ function _processRow(row) {
   var entry = new QAEntry(row);
 
   // 2. Open spreadsheet and history manager
-  var ss      = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  var ss      = SpreadsheetApp.getActiveSpreadsheet();
   var history = new AnalystHistory(ss);
 
   // 3. Retrieve past entries BEFORE appending the current one
@@ -179,7 +179,7 @@ function _processRow(row) {
  * @return {Array}
  */
 function _getLatestRow() {
-  var ss    = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName(CONFIG.QA_SHEET_NAME);
   if (!sheet) throw new Error('QA Sheet "' + CONFIG.QA_SHEET_NAME + '" not found.');
 

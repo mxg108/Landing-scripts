@@ -7,8 +7,6 @@
 
 // ── Google Resource IDs ─────────────────────────────────────────────
 const CONFIG = {
-  SPREADSHEET_ID: 'REPLACE_WITH_YOUR_SPREADSHEET_ID',
-
   // ── Sheet names ─────────────────────────────────────────────────
   QA_SHEET_NAME:       'Form Responses 1',   // default name Google gives the linked sheet
   HISTORY_SHEET_NAME:  'Analyst_History',
