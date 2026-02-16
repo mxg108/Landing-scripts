@@ -30,7 +30,7 @@ const CONFIG = {
     IMPROVEMENTS:        14,  // O  (text)
     DIALPAD_LINK:        15,  // P  (URL)
     OVERALL_SCORE:       16,  // Q  (auto-calculated)
-    AGENT_EMAIL:         22,  // W  (Mails)
+    AGENT_EMAIL:         21,  // V  (Mails — ARRAYFORMULA lookup)
   },
 
   // ── Numeric score categories (1-5 scale) ────────────────────────

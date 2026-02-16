@@ -183,7 +183,12 @@ function _getLatestRow() {
   var sheet = ss.getSheetByName(CONFIG.QA_SHEET_NAME);
   if (!sheet) throw new Error('QA Sheet "' + CONFIG.QA_SHEET_NAME + '" not found.');
 
-  var lastRow = sheet.getLastRow();
+  // Use Timestamp column (A) to find the real last data row.
+  // sheet.getLastRow() is unreliable when ARRAYFORMULAs extend empty rows.
+  var timestamps = sheet.getRange('A:A').getValues();
+  var lastRow = timestamps.length;
+  while (lastRow > 1 && !timestamps[lastRow - 1][0]) lastRow--;
+
   if (lastRow < 2) throw new Error('No data rows found in the QA Sheet.');
 
   return sheet.getRange(lastRow, 1, 1, sheet.getLastColumn()).getValues()[0];
