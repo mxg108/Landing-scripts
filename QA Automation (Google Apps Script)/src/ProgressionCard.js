@@ -45,6 +45,9 @@ class ProgressionCard {
       html += this._renderHistoryTable();
     }
 
+    // Achievement card (shown regardless of history)
+    html += this._renderAchievementCard();
+
     html += '</td></tr>';
     html += '</table>';
     return html;
@@ -79,11 +82,12 @@ class ProgressionCard {
       var entry = entries[i];
       var prev  = i > 0 ? entries[i - 1] : null;
       var score = entry.overallScore;
-      var color = QAEntry.colorForScore(score);
+      var color = QAEntry.colorForOverallScore(score);
       var delta = this._deltaSymbol(score, prev ? prev.overallScore : null);
-      var pct   = (score / 5 * 100).toFixed(0);
+      var pct   = Math.min(score / CONFIG.QA_GOAL * 100, 100).toFixed(0);
       var dateStr = this._formatDate(entry.timestamp);
       var isCurrent = (i === entries.length - 1);
+      var isFirst   = (i === 0);
       var rowBg = isCurrent ? CONFIG.COLORS.LIGHT_BLUE : CONFIG.COLORS.WHITE;
 
       html += '<tr style="background:' + rowBg + ';'
@@ -95,7 +99,7 @@ class ProgressionCard {
             + score.toFixed(1) + '</td>'
             + '<td style="padding:8px;text-align:center;font-size:16px;">'
             + delta + '</td>'
-            + '<td style="padding:8px;">' + this._renderMiniBar(pct, color) + '</td>'
+            + '<td style="padding:8px;">' + this._renderMiniBar(pct, color, isFirst) + '</td>'
             + '</tr>';
     }
 
@@ -113,25 +117,71 @@ class ProgressionCard {
   _deltaSymbol(current, previous) {
     if (previous === null) return '<span style="color:' + CONFIG.COLORS.TEXT_GRAY + ';">&#8212;</span>';
     var diff = current - previous;
-    if (diff > 0.05)  return '<span style="color:' + CONFIG.COLORS.GREEN + ';">&#9650;</span>';
-    if (diff < -0.05) return '<span style="color:' + CONFIG.COLORS.RED   + ';">&#9660;</span>';
+    if (diff > 0.5)  return '<span style="color:' + CONFIG.COLORS.GREEN + ';">&#9650;</span>';
+    if (diff < -0.5) return '<span style="color:' + CONFIG.COLORS.RED   + ';">&#9660;</span>';
     return '<span style="color:' + CONFIG.COLORS.AMBER + ';">&#9679;</span>';
   }
 
   /**
    * Renders a compact inline bar for the progression table.
    * @private
-   * @param {number} pct
-   * @param {string} color
+   * @param {number}  pct
+   * @param {string}  color
+   * @param {boolean} showGoal — if true, adds an "85" label above the bar
    * @return {string}
    */
-  _renderMiniBar(pct, color) {
-    return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+  _renderMiniBar(pct, color, showGoal) {
+    var html = '';
+    if (showGoal) {
+      html += '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
+            + '<tr><td style="text-align:right;font-size:9px;color:' + CONFIG.COLORS.TEXT_GRAY
+            + ';padding:0 0 1px 0;font-family:Arial,sans-serif;line-height:1;">'
+            + CONFIG.QA_GOAL + '</td></tr></table>';
+    }
+    html += '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
          + 'style="border-radius:3px;overflow:hidden;">'
          + '<tr>'
          + '<td style="background:' + color + ';height:6px;width:' + pct + '%;"></td>'
          + '<td style="background:' + CONFIG.COLORS.LIGHT_BLUE + ';height:6px;width:' + (100 - pct) + '%;"></td>'
          + '</tr></table>';
+    return html;
+  }
+
+  /**
+   * Renders a small achievement card based on the current entry's overall score.
+   * @private
+   * @return {string}
+   */
+  _renderAchievementCard() {
+    var score = this.current.overallScore;
+    if (score >= 100) {
+      return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+           + 'style="margin-top:12px;border-radius:6px;overflow:hidden;">'
+           + '<tr><td style="'
+           + 'background:' + CONFIG.COLORS.GOLD_LIGHT + ';'
+           + 'border-left:4px solid ' + CONFIG.COLORS.GOLD + ';'
+           + 'padding:10px 14px;'
+           + 'font-family:Arial,sans-serif;'
+           + 'font-size:14px;'
+           + 'font-weight:bold;'
+           + 'color:' + CONFIG.COLORS.GOLD_DARK + ';'
+           + 'text-align:center;'
+           + '">&#9733; Perfect call!</td></tr></table>';
+    } else if (score >= CONFIG.QA_GOAL) {
+      return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+           + 'style="margin-top:12px;border-radius:6px;overflow:hidden;">'
+           + '<tr><td style="'
+           + 'background:' + CONFIG.COLORS.GREEN_LIGHT + ';'
+           + 'border-left:4px solid ' + CONFIG.COLORS.GREEN + ';'
+           + 'padding:10px 14px;'
+           + 'font-family:Arial,sans-serif;'
+           + 'font-size:14px;'
+           + 'font-weight:bold;'
+           + 'color:' + CONFIG.COLORS.GREEN + ';'
+           + 'text-align:center;'
+           + '">&#10003; QA goal reached!</td></tr></table>';
+    }
+    return '';
   }
 
   /** @private */

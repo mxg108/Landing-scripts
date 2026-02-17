@@ -74,14 +74,39 @@ class QAEntry {
   }
 
   /**
-   * Returns the color hex for a given numeric score based on thresholds.
+   * Returns color hex for a 1-5 category score.
    * @param {number} score
    * @return {string} hex color
    */
   static colorForScore(score) {
-    if (score >= CONFIG.THRESHOLDS.HIGH) return CONFIG.COLORS.ACCENT_BLUE;
-    if (score >= CONFIG.THRESHOLDS.MID)  return CONFIG.COLORS.AMBER;
+    if (score >= CONFIG.THRESHOLDS.CATEGORY_HIGH) return CONFIG.COLORS.GREEN;
+    if (score >= CONFIG.THRESHOLDS.CATEGORY_MID)  return CONFIG.COLORS.AMBER;
     return CONFIG.COLORS.RED;
+  }
+
+  /**
+   * Returns color hex for an overall 0-100 score.
+   * @param {number} score
+   * @return {string} hex color
+   */
+  static colorForOverallScore(score) {
+    if (score >= 100)                              return CONFIG.COLORS.GOLD;
+    if (score >= CONFIG.THRESHOLDS.OVERALL_HIGH)   return CONFIG.COLORS.GREEN;
+    if (score >= CONFIG.THRESHOLDS.OVERALL_MID)    return CONFIG.COLORS.AMBER;
+    return CONFIG.COLORS.RED;
+  }
+
+  /**
+   * Extracts a human-readable name from an email address.
+   * "john.doe@company.com" → "John Doe"
+   * @param {string} email
+   * @return {string}
+   */
+  static managerNameFromEmail(email) {
+    var local = (email || '').split('@')[0] || '';
+    return local.split(/[._-]/).map(function(part) {
+      return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+    }).join(' ');
   }
 
   // ────────────────────────────────────────────────────────────────

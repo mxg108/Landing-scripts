@@ -83,7 +83,7 @@ class ScoreCard {
 
     // ── Overall score footer ──────────────────────────────────────
     var overall      = this.entry.overallScore;
-    var overallColor = QAEntry.colorForScore(overall);
+    var overallColor = QAEntry.colorForOverallScore(overall);
 
     html += '<tr><td style="background:' + CONFIG.COLORS.LIGHT_BLUE
           + ';padding:12px 16px;text-align:center;font-family:Arial,sans-serif;">'

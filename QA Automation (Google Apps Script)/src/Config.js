@@ -11,6 +11,9 @@ const CONFIG = {
   QA_SHEET_NAME:       'Form Responses 1',   // default name Google gives the linked sheet
   HISTORY_SHEET_NAME:  'Analyst_History',
 
+  // ── QA goal (0-100 scale) ─────────────────────────────────────
+  QA_GOAL: 85,
+
   // ── QA Sheet column indices (0-based) ───────────────────────────
   COL: {
     TIMESTAMP:           0,   // A
@@ -53,9 +56,10 @@ const CONFIG = {
 
   // ── Score thresholds for color coding ───────────────────────────
   THRESHOLDS: {
-    HIGH:   4,   // 4-5 → accent blue
-    MID:    3,   // 3   → amber
-                 // 1-2 → red
+    OVERALL_HIGH: 85,     // >= 85 → green   (0-100 scale)
+    OVERALL_MID:  70,     // >= 70 → amber
+    CATEGORY_HIGH: 4.25,  // >= 4.25 → green (1-5 scale, ≈85%)
+    CATEGORY_MID:  3.5,   // >= 3.5  → amber (1-5 scale, ≈70%)
   },
 
   // ── Landing brand colors ────────────────────────────────────────
@@ -68,6 +72,10 @@ const CONFIG = {
     RED:         '#D9534F',
     GREEN:       '#28A745',
     TEXT_GRAY:   '#4A4A4A',
+    GOLD:        '#FFD700',
+    GOLD_DARK:   '#B8860B',
+    GOLD_LIGHT:  '#FFF8E1',
+    GREEN_LIGHT: '#E8F5E9',
   },
 
   // ── Email defaults ──────────────────────────────────────────────

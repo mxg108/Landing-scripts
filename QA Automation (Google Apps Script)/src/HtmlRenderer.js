@@ -78,8 +78,11 @@ class HtmlRenderer {
          + '<tr>'
          + '<td style="font-size:12px;color:' + CONFIG.COLORS.LIGHT_BLUE + ';">'
          + '&#128197; ' + this.entry.formattedDate + '</td>'
-         + '<td style="font-size:12px;color:' + CONFIG.COLORS.LIGHT_BLUE + ';text-align:right;">'
-         + '&#128100; ' + this._esc(this.entry.managerEmail) + '</td>'
+         + '<td style="text-align:right;">'
+         + '<span style="font-size:12px;color:' + CONFIG.COLORS.WHITE + ';'
+         + 'border:1px solid ' + CONFIG.COLORS.LIGHT_BLUE + ';'
+         + 'border-radius:4px;padding:3px 8px;'
+         + '">&#128100; ' + this._esc(QAEntry.managerNameFromEmail(this.entry.managerEmail)) + '</span></td>'
          + '</tr></table>'
          + '</td></tr>';
   }
