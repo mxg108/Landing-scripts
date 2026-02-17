@@ -84,7 +84,7 @@ class ProgressionCard {
       var score = entry.overallScore;
       var color = QAEntry.colorForOverallScore(score);
       var delta = this._deltaSymbol(score, prev ? prev.overallScore : null);
-      var pct   = Math.min(score / CONFIG.QA_GOAL * 100, 100).toFixed(0);
+      var pct   = Math.min(score, 100).toFixed(0);
       var dateStr = this._formatDate(entry.timestamp);
       var isCurrent = (i === entries.length - 1);
       var isFirst   = (i === 0);
@@ -124,26 +124,54 @@ class ProgressionCard {
 
   /**
    * Renders a compact inline bar for the progression table.
+   * The bar represents the full 0-100 score range with a goal marker at QA_GOAL (85).
+   * Only a score of 100 fills the bar completely (golden).
    * @private
-   * @param {number}  pct
+   * @param {number}  pct    — fill percentage (0-100, mapped 1:1 from score)
    * @param {string}  color
    * @param {boolean} showGoal — if true, adds an "85" label above the bar
    * @return {string}
    */
   _renderMiniBar(pct, color, showGoal) {
     var html = '';
+    var score = parseFloat(pct);
+    var goalPct = CONFIG.QA_GOAL;
+
     if (showGoal) {
       html += '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
-            + '<tr><td style="text-align:right;font-size:9px;color:' + CONFIG.COLORS.TEXT_GRAY
-            + ';padding:0 0 1px 0;font-family:Arial,sans-serif;line-height:1;">'
-            + CONFIG.QA_GOAL + '</td></tr></table>';
+            + '<tr>'
+            + '<td style="width:' + goalPct + '%;text-align:right;font-size:9px;color:'
+            + CONFIG.COLORS.TEXT_GRAY + ';padding:0 0 1px 0;font-family:Arial,sans-serif;line-height:1;">'
+            + goalPct + '</td>'
+            + '<td style="width:' + (100 - goalPct) + '%;"></td>'
+            + '</tr></table>';
     }
+
     html += '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
          + 'style="border-radius:3px;overflow:hidden;">'
-         + '<tr>'
-         + '<td style="background:' + color + ';height:6px;width:' + pct + '%;"></td>'
-         + '<td style="background:' + CONFIG.COLORS.LIGHT_BLUE + ';height:6px;width:' + (100 - pct) + '%;"></td>'
-         + '</tr></table>';
+         + '<tr>';
+
+    if (score >= goalPct) {
+      // Fill extends to or past the goal — show marker line at goal boundary
+      html += '<td style="background:' + color + ';height:6px;width:' + goalPct
+            + '%;border-right:2px solid ' + CONFIG.COLORS.WHITE + ';"></td>';
+      var pastGoal = Math.min(score, 100) - goalPct;
+      if (pastGoal > 0) {
+        html += '<td style="background:' + color + ';height:6px;width:' + pastGoal + '%;"></td>';
+      }
+      var empty = 100 - Math.min(score, 100);
+      if (empty > 0) {
+        html += '<td style="background:' + CONFIG.COLORS.LIGHT_BLUE + ';height:6px;width:' + empty + '%;"></td>';
+      }
+    } else {
+      // Fill below goal — subtle tick at goal position on the empty track
+      html += '<td style="background:' + color + ';height:6px;width:' + score + '%;"></td>';
+      html += '<td style="background:' + CONFIG.COLORS.LIGHT_BLUE + ';height:6px;width:' + (goalPct - score)
+            + '%;border-right:2px solid #D0D0D0;"></td>';
+      html += '<td style="background:' + CONFIG.COLORS.LIGHT_BLUE + ';height:6px;width:' + (100 - goalPct) + '%;"></td>';
+    }
+
+    html += '</tr></table>';
     return html;
   }
 
