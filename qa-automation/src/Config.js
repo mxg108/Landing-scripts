@@ -78,6 +78,10 @@ const CONFIG = {
     GREEN_LIGHT: '#E8F5E9',
   },
 
+  // ── First evaluation messaging ──────────────────────────────────
+  FIRST_EVAL_MESSAGE: 'This is {{agentName}}\'s first QA evaluation. Future emails will show score trends here.',
+  FIRST_EVAL_STYLE:   'font-size:14px;color:{{textGray}};margin:0 0 12px 0;',
+
   // ── Email defaults ──────────────────────────────────────────────
   EMAIL: {
     SUBJECT_TEMPLATE: 'QA Evaluation — {{agentName}} — {{date}}',
