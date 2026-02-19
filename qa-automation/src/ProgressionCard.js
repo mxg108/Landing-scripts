@@ -37,11 +37,13 @@ class ProgressionCard {
     // ── Body ──────────────────────────────────────────────────────
     html += '<tr><td style="padding:16px;font-family:Arial,sans-serif;">';
 
-    if (this.history.length === 0) {
-      html += '<p style="font-size:14px;color:' + CONFIG.COLORS.TEXT_GRAY + ';margin:0;">'
-            + 'This is ' + this._esc(this.current.agentName)
-            + '\'s first QA evaluation. Future emails will show score trends here.</p>';
-    } else {
+    if (this.history.length <= 1) {
+      var firstMsg = CONFIG.FIRST_EVAL_MESSAGE.replace('{{agentName}}', this._esc(this.current.agentName));
+      var firstStyle = CONFIG.FIRST_EVAL_STYLE.replace('{{textGray}}', CONFIG.COLORS.TEXT_GRAY);
+      html += '<p style="' + firstStyle + '">' + firstMsg + '</p>';
+    }
+
+    if (this.history.length > 0) {
       html += this._renderHistoryTable();
     }
 

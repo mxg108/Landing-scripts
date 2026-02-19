@@ -1,6 +1,6 @@
 /**
  * QA Automation — Configuration
- * Landing QA System v1.0.0
+ * Landing QA System v1.1
  *
  * Replace placeholder IDs before first clasp push.
  */
@@ -77,6 +77,10 @@ const CONFIG = {
     GOLD_LIGHT:  '#FFF8E1',
     GREEN_LIGHT: '#E8F5E9',
   },
+
+  // ── First evaluation messaging ──────────────────────────────────
+  FIRST_EVAL_MESSAGE: 'This is {{agentName}}\'s first QA evaluation. Future emails will show score trends here.',
+  FIRST_EVAL_STYLE:   'font-size:14px;color:{{textGray}};margin:0 0 12px 0;',
 
   // ── Email defaults ──────────────────────────────────────────────
   EMAIL: {
