@@ -79,6 +79,8 @@ function _loadTemplate_Annual_Fire_Inspection()  { loadTemplate_('Annual Fire In
 function _loadTemplate_Water_Outage()            { loadTemplate_('Water Outage');            }
 function _loadTemplate_General_Maintenance()     { loadTemplate_('General Maintenance');     }
 function _loadTemplate_Weather_Alert()           { loadTemplate_('Weather Alert');           }
+function _loadTemplate_Power_Outage()            { loadTemplate_('Power Outage');            }
+function _loadTemplate_WiFi_Outage()             { loadTemplate_('WiFi Outage');             }
 
 // ── About ─────────────────────────────────────────────────────────────────────
 
