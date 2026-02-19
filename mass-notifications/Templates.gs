@@ -89,6 +89,85 @@ const EMAIL_TEMPLATES = {
     send_mode:         'BCC',
   },
 
+  'Power Outage': {
+    event_name:        'Power Outage',
+    // Uses {{today}} instead of {{date_range}} — this is a live incident, not a scheduled window.
+    subject_template:  'Urgent: Power Outage at {{property_name}} — {{today}}',
+    greeting_template: '<p>Dear {{first_name | Resident}},</p>',
+    include_disclaimer: 'YES',
+    disclaimer_html:   '<div style="text-align:center;background-color:#E7EFFB;border:2.5px solid #15192D;border-radius:6px;padding:10px;color:#15192D;font-style:italic;">This is an urgent notification to all active residents at {{property_name}}. Please see the message below:</div>',
+    notification_card: 'POWER_OUTAGE',
+    body_intro_html:
+      '<p>We are reaching out because <strong>{{property_name}}</strong> is currently ' +
+      'experiencing an <strong>unexpected power outage</strong> affecting your unit. ' +
+      'We understand how disruptive this is — Landing is actively engaged with the ' +
+      'property management team and working toward the fastest possible resolution.</p>' +
+      '<p>While service is being restored, please take the following precautions:</p>' +
+      '<ul>' +
+      '<li><strong>Unplug sensitive electronics</strong> (laptops, TVs, gaming consoles) ' +
+      'to protect them from potential power surges when electricity is restored.</li>' +
+      '<li><strong>Keep your refrigerator and freezer doors closed</strong> — a closed ' +
+      'refrigerator will maintain safe temperatures for approximately 4 hours.</li>' +
+      '<li>Use <strong>flashlights instead of candles</strong> for your safety.</li>' +
+      '<li>If you rely on <strong>powered medical equipment</strong>, please contact us ' +
+      'immediately so we can assist you.</li>' +
+      '</ul>',
+    include_unit_line: 'NO',
+    closing_html:
+      '<p>For the latest updates or if you need immediate assistance, please reach out to ' +
+      'your General Manager <strong>{{manager_name}}</strong> directly, or contact our ' +
+      '<strong>24/7 Member Support</strong> team at ' +
+      '<a href="tel:+12058528798">(205) 852-8798</a> — we are standing by to help.</p>' +
+      '<p>We sincerely apologize for the inconvenience and thank you for your patience.<br>' +
+      'The Landing Team</p>',
+    send_mode: 'BCC',
+    _hint:
+      'Power Outage template loaded.\n\n' +
+      'Please fill in:\n  • property_name\n  • manager_email\n\n' +
+      'Dates are optional for live outages — {{today}} in the subject will\n' +
+      'automatically reflect the send date.\n\n' +
+      'Run Dry Run → Preview to verify before sending.',
+  },
+
+  'WiFi Outage': {
+    event_name:        'WiFi Service Disruption',
+    subject_template:  'Service Notice: WiFi Outage at {{property_name}} — {{today}}',
+    greeting_template: '<p>Dear {{first_name | Resident}},</p>',
+    include_disclaimer: 'YES',
+    disclaimer_html:   '<div style="text-align:center;background-color:#E7EFFB;border:2.5px solid #15192D;border-radius:6px;padding:10px;color:#15192D;font-style:italic;">This is a notification to all active residents at {{property_name}}. Please see the message below:</div>',
+    notification_card: 'WIFI_OUTAGE',
+    body_intro_html:
+      '<p>We are writing to let you know that <strong>{{property_name}}</strong> is ' +
+      'currently experiencing a <strong>WiFi service disruption</strong> affecting your unit. ' +
+      'Our team is actively coordinating with the property and the internet service provider ' +
+      'to identify the cause and restore service as quickly as possible.</p>' +
+      '<p>In the meantime, here are a few things that may help:</p>' +
+      '<ul>' +
+      '<li>Your <strong>mobile data plan</strong> can serve as a reliable backup for ' +
+      'essential connectivity while service is restored.</li>' +
+      '<li>If your device connects automatically to the property WiFi, consider ' +
+      '<strong>disabling WiFi on your device temporarily</strong> so it falls back to ' +
+      'mobile data without interruption.</li>' +
+      '<li>Once service is restored, <strong>restarting your devices or toggling WiFi ' +
+      'off and back on</strong> should reconnect you automatically.</li>' +
+      '</ul>',
+    include_unit_line: 'NO',
+    closing_html:
+      '<p>For updates on the status of this outage or if you need any assistance, please ' +
+      'reach out to your General Manager <strong>{{manager_name}}</strong>, or contact our ' +
+      '<strong>24/7 Member Support</strong> team at ' +
+      '<a href="tel:+12058528798">(205) 852-8798</a>.</p>' +
+      '<p>We appreciate your patience and apologize for any inconvenience this causes.<br>' +
+      'The Landing Team</p>',
+    send_mode: 'BCC',
+    _hint:
+      'WiFi Outage template loaded.\n\n' +
+      'Please fill in:\n  • property_name\n  • manager_email\n\n' +
+      'Dates are optional for live outages — {{today}} in the subject will\n' +
+      'automatically reflect the send date.\n\n' +
+      'Run Dry Run → Preview to verify before sending.',
+  },
+
 };
 
 // ── Template loader ───────────────────────────────────────────────────────────
@@ -108,15 +187,18 @@ function loadTemplate_(templateName) {
     return;
   }
 
-  // Apply template-defined values
-  Object.entries(template).forEach(([key, value]) => setConfigValue_(key, value));
+  // Apply template-defined values, skipping the internal _hint key
+  Object.entries(template).forEach(([key, value]) => {
+    if (!key.startsWith('_')) setConfigValue_(key, value);
+  });
 
   // Clear run-specific fields that the operator must fill in
   TEMPLATE_BLANK_KEYS.forEach(key => {
     if (!(key in template)) setConfigValue_(key, '');
   });
 
-  safeAlert_(
+  // Use the template's custom hint if provided, otherwise show the generic one
+  safeAlert_(template._hint ||
     `Template "${templateName}" loaded.\n\n` +
     'Please fill in:\n  • property_name\n  • manager_email\n  • window_start / window_end\n\n' +
     'Then run Dry Run → Preview to verify before sending.'

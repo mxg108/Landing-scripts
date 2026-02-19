@@ -6,6 +6,7 @@
  *
  * USAGE IN CONFIG SHEET:
  *   notification_card = FIRE_INSPECTION | WATER_OUTAGE | MAINTENANCE | WEATHER_ALERT
+ *                     | POWER_OUTAGE | WIFI_OUTAGE
  *   Leave blank to include no card.
  *
  * ADDING A NEW CARD TYPE:
@@ -31,6 +32,7 @@ const LANDING = {
   LIGHT_BLUE:  '#E7EFFB',
   WHITE:       '#FFFFFF',
   AMBER:       '#E8A317',
+  ORANGE:      '#D4600A', // Power outage — urgent but distinct from RED
   RED:         '#D9534F',
   GREEN:       '#28A745',
   TEXT_GRAY:   '#4A4A4A',
@@ -160,6 +162,41 @@ class WeatherAlertCard extends NotificationCard {
   }
 }
 
+class PowerOutageCard extends NotificationCard {
+  render() {
+    const body = [
+      this._row('Property', '{{property_name}}'),
+      this._row('Reported', '{{today}}', LANDING.ORANGE),
+      this._row('Status',
+        '<strong>Active</strong> — Landing is engaged with the property ' +
+        'and working toward the fastest possible resolution.'),
+      this._row('Immediate steps',
+        'Unplug sensitive electronics &nbsp;·&nbsp; ' +
+        'Keep fridge &amp; freezer closed &nbsp;·&nbsp; ' +
+        'Use flashlights, not candles'),
+    ].join('');
+
+    return this._shell(LANDING.ORANGE, '⚡', 'Power Outage — Active', body);
+  }
+}
+
+class WiFiOutageCard extends NotificationCard {
+  render() {
+    const body = [
+      this._row('Property', '{{property_name}}'),
+      this._row('Reported', '{{today}}', LANDING.AMBER),
+      this._row('Status',
+        '<strong>Active</strong> — Landing is coordinating with the property ' +
+        'and the internet service provider on a resolution.'),
+      this._row('In the meantime',
+        'Mobile data is available as a backup &nbsp;·&nbsp; ' +
+        'Disable WiFi on your device to switch automatically'),
+    ].join('');
+
+    return this._shell(LANDING.AMBER, '📶', 'WiFi Service Disruption — Active', body);
+  }
+}
+
 // ── Registry & factory ────────────────────────────────────────────────────────
 
 /**
@@ -171,6 +208,8 @@ const CARD_REGISTRY = {
   WATER_OUTAGE:    WaterOutageCard,
   MAINTENANCE:     MaintenanceCard,
   WEATHER_ALERT:   WeatherAlertCard,
+  POWER_OUTAGE:    PowerOutageCard,
+  WIFI_OUTAGE:     WiFiOutageCard,
 };
 
 /**
