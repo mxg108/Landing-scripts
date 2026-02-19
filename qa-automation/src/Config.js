@@ -1,6 +1,6 @@
 /**
  * QA Automation — Configuration
- * Landing QA System v1.0.0
+ * Landing QA System v1.1
  *
  * Replace placeholder IDs before first clasp push.
  */
