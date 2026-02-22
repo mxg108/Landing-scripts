@@ -22,7 +22,7 @@ untouched until Phase 3.
 Current QA approach: managers manually score calls using a rubric. Some teams upload Dialpad
 transcripts to a ChatGPT or Grok project trained with SOPs/policies. This misses critical
 audio nuances — tone, language proficiency, instances of disrespect — that only listening
-to the actual call can catch.
+to the actual call can catch. Landing also handles calls in Spanish although those calls are outliers, we still need to be able to account for them and correctly evaluate them. Heavy accents are also commonplace.
 
 We have: many Analysts, few Managers, no dedicated QA team. Managers are the bottleneck.
 
@@ -126,6 +126,62 @@ Binary check. Mark N/A if not applicable.
 
 ---
 
+## QA Sampling Strategy
+
+### Why We Don't Score Every Call
+At ~13,000 calls/month, scoring every call is operationally unrealistic and statistically unnecessary.
+A well-designed sample delivers 95%+ confidence in conclusions at a fraction of the cost.
+The VP goal should be reframed as: "statistically representative sample per agent, per week" — not full coverage.
+
+### Sample Size
+- **30–35 calls per agent per week** — roughly 10% of an agent's weekly call volume (~300 calls/week)
+- Across a rolling 4-week window, this yields ~120 scored calls per agent — a robust basis for coaching and trend analysis
+
+### Sampling Method: Stratified Random
+Pure random sampling risks accidental clustering (e.g., all Monday morning calls for one agent).
+Instead, sample randomly within these strata:
+
+| Stratum | Why It Matters |
+|---|---|
+| Day of week | Behavior and volume differ across the week |
+| Time of day | Morning vs. end-of-shift fatigue affects performance |
+| Call duration | Short transactional calls vs. complex escalations |
+| Call type | Billing vs. maintenance vs. move-in vs. general inquiry |
+| Language | English vs. Spanish calls should both be represented |
+
+### Call Length Cap
+- **Calls over 25 minutes are flagged as "manual QA only"** — never scored by AI
+- These are typically the most complex, escalated calls — they warrant direct human review anyway
+- The flag is automatic; the system surfaces them to a manager without attempting AI scoring
+
+### CSAT Is a Separate Pipeline
+The current practice of selecting QA calls from low CSAT scores is **selection bias** — it
+systematically over-samples bad calls and distorts the picture of each agent's real skill level.
+Two distinct workflows must exist and never be mixed:
+
+1. **Scheduled QA sample** — stratified random selection, runs weekly, primary performance metric
+2. **Flagged call review** — triggered by low CSAT, complaints, or manager discretion, separate from QA sample
+
+Coaching built only on flagged calls is reactive. Coaching built on the random sample is diagnostic.
+
+### Database Implication
+The database must store call metadata **before scoring happens** — from Phase 1 onward — to enable
+the sampler. Required fields per call record:
+
+| Field | Purpose |
+|---|---|
+| Agent ID | Link score to agent history |
+| Call date & time | Stratified sampling across days/shifts |
+| Call duration | Apply 25-min cap, stratify by length |
+| Call type / disposition | Stratify by call category |
+| Dialpad call ID | Unique identifier, links back to source recording |
+| CSAT score | Available from Dialpad; used only in flagged pipeline |
+| Language | English or Spanish — ensure both are sampled |
+| Sampling status | `sampled` / `not_sampled` / `manual_only` |
+| Scoring status | `pending` / `in_progress` / `complete` / `manual_only` |
+
+---
+
 ## Tech Stack
 
 | Layer | Tool | Notes |
@@ -133,7 +189,7 @@ Binary check. Mark N/A if not applicable.
 | Primary audio AI | Gemini 2.5 Flash | Google ecosystem, native audio ingestion, cheapest at scale |
 | Transcription fallback | OpenAI Whisper (open source) | High accuracy, no per-token cost, runs locally |
 | Speaker diarization | pyannote.audio | Separates agent vs caller voice channels |
-| Backend | FastAPI (Python) | Lightweight, async, well-documented |
+| Backend | FastAPI (Python) | Lightweight, async for batch processing, well-documented |
 | SOP/RAG vector store | ChromaDB | Free, embeddable, no external service needed |
 | Database | PostgreSQL | Via Railway or Render |
 | Hosting | Railway or Render | GitHub-connected deploy, free tier available |
@@ -159,7 +215,7 @@ Binary check. Mark N/A if not applicable.
 ### Phase 0 — Validation (Weeks 1–3) ← START HERE
 **Goal:** Prove AI scoring quality before building anything.
 
-- Pull 15–20 real calls from Dialpad (mp4 or mp3)
+- Pull 20-25 real calls from Dialpad (mp4 or mp3), calls must reflect a diversity of textbook great performances, clearly poor performances, Spanish calls and genuinely difficult calls with ambiguous resolutions.
 - Write a standalone Python script that feeds each call to Gemini 2.5 Flash
 - Output: a JSON scorecard per call (skip Documentation section)
 - Sit with a Manager and compare AI scores to human scores
@@ -176,6 +232,8 @@ Binary check. Mark N/A if not applicable.
 - Write draft scorecard to Google Sheets via Sheets API
 - Manager reviews draft in Sheets, approves → triggers existing Apps Script email flow
 - Host on Railway or Render, deploy from GitHub
+- **Database schema must include full call metadata from day one** (see QA Sampling Strategy above)
+  — retrofitting metadata fields later is painful; design for the sampler even before it's built
 
 **Deliverables:** Running API, draft score in Sheets after call upload, manager review column.
 
@@ -201,8 +259,9 @@ Binary check. Mark N/A if not applicable.
 **Deliverables:** Web app managers use daily. Apps Script email still fires on approval.
 
 ### Phase 4 — Dialpad Webhook Automation (Weeks 19–24)
-**Goal:** Zero manual steps. Calls score themselves at end of call.
+**Goal:** Zero manual steps. Calls score themselves at end of call. 
 
+- 30 - 35 calls per agent per week, randomly selected (statistically significant)
 - Investigate Dialpad webhook for call completion events
 - If available: auto-trigger scoring pipeline on call end
 - Manager opens dashboard next morning to review overnight scores
