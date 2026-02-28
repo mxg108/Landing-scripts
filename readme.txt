@@ -310,8 +310,9 @@ KEY PRINCIPLES
   CONTRIBUTING & CHANGE MANAGEMENT
 --------------------------------------------------------------------------------
 
-  [FILL IN: How changes are reviewed and deployed — e.g., PR process, who approves,
-   testing requirements before going live, how to notify the team of changes.]
+  Change strategy: Notify Max Pérez via Slack of necessary changes or bugs. 
+  As of today, there are no other contributors to this repo so all commits, PRs, and 
+  issues are managed by Max.
 
   Branch strategy: feature branches → PR → merge to main.
   Current active branch: feature/ai-scoring (AI-Scoring Phase 0 scaffolding)
