@@ -4,7 +4,7 @@
 ================================================================================
 
   Maintained by: [Maximiliano Pérez / Member Support Management]
-  Department:    [e.g., Operations / Business Intelligence]
+  Department:    Operations
   Last Updated:  February 2026
   Status:        Active — both scripts are live and in use
 
@@ -212,11 +212,14 @@ DRY RUN / MANUAL TRIGGERS
     - Rebuild History      — reconstructs Analyst_History from scratch from form data
 
 CURRENT LIMITATIONS / KNOWN ISSUES
-    - Scorecard still needs to be manually filled by the Analyst
+    - onFormSubmit runs automatically, there is no way for a score to be logged without 
+    an email being sent.
+    - Columns with ARRAYFORMULAs might not resolve some triggers/function calls
+    - QA Anallysts still need to manually pick and score every call
 
 CONTACTS / OWNERSHIP
   Script maintained by: Maximiliano Pérez García
-  QA Analyst users: Member Support Managers
+  QA Automation users: Member Support Managers, Gaby (MX Ops VP), Executive Resolutions
   For issues: Message Max Pérez via Slack or create a post in #ert-member-support
 
 --------------------------------------------------------------------------------
@@ -322,7 +325,7 @@ KEY PRINCIPLES
 --------------------------------------------------------------------------------
 
   For questions, bug reports, or feature requests:
-    #ert-member-support
+    Slack channel #ert-member-support, maximiliano.perez@hellolanding.com
 
   For urgent issues affecting live sends:
     Max Pérez on Slack
