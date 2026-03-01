@@ -28,7 +28,15 @@ function onFormSubmit(e) {
   Logger.log('=== end of e.values dump ===');
 
   try {
-    var row = e.range.getValues()[0];  // flat array of the submitted row's values
+    // e.range.getRow() tells us exactly which row the form just appended.
+    // We sleep briefly to let ARRAYFORMULAs (overallScore col Q, agentEmail col V)
+    // finish computing before we re-read the full row from the live sheet.
+    var rowNum = e.range.getRow();
+    Utilities.sleep(3000);
+
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.QA_SHEET_NAME);
+    var row   = sheet.getRange(rowNum, 1, 1, sheet.getLastColumn()).getValues()[0];
+
     _processRow(row);
   } catch (err) {
     _handleError(err, 'onFormSubmit');
