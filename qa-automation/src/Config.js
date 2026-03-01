@@ -10,6 +10,7 @@ const CONFIG = {
   // ── Sheet names ─────────────────────────────────────────────────
   QA_SHEET_NAME:       'Form Responses 1',   // default name Google gives the linked sheet
   HISTORY_SHEET_NAME:  'Analyst_History',
+  MAILS_SHEET_NAME:    'Mails',              // source of truth for agent name → email mapping
 
   // ── QA goal (0-100 scale) ─────────────────────────────────────
   QA_GOAL: 85,

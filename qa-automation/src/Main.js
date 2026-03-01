@@ -15,13 +15,20 @@
 
 /**
  * Installable trigger — runs each time a form response is submitted.
- * Set this up via:  Triggers → Add Trigger → onFormSubmit → From spreadsheet → On form submit
  *
  * @param {Object} e — the event object from the form-submit trigger
  */
 function onFormSubmit(e) {
+  // Sanity-check: log every element in e.values with its index and column letter.
+  // Useful for confirming which columns the form populates vs. which are formula-driven.
+  Logger.log('=== onFormSubmit e.values dump (%s elements) ===', e.values.length);
+  for (var i = 0; i < e.values.length; i++) {
+    Logger.log('  [%s] col %s: "%s"', i, String.fromCharCode(65 + i), e.values[i]);
+  }
+  Logger.log('=== end of e.values dump ===');
+
   try {
-    var row = e.values;  // flat array of the submitted row's values
+    var row = e.range.getValues()[0];  // flat array of the submitted row's values
     _processRow(row);
   } catch (err) {
     _handleError(err, 'onFormSubmit');
@@ -134,6 +141,10 @@ function _processRow(row) {
   // 1. Parse the row into a structured QAEntry
   var entry = new QAEntry(row);
 
+  // 1b. Column V (agentEmail) is ARRAYFORMULA-driven and may be empty when the
+  //     trigger fires. Always resolve from the Mails sheet as the source of truth.
+  entry.agentEmail = _lookupAgentEmail(entry.agentName);
+
   // 2. Open spreadsheet and history manager
   var ss      = SpreadsheetApp.getActiveSpreadsheet();
   var history = new AnalystHistory(ss);
@@ -192,6 +203,37 @@ function _getLatestRow() {
   if (lastRow < 2) throw new Error('No data rows found in the QA Sheet.');
 
   return sheet.getRange(lastRow, 1, 1, sheet.getLastColumn()).getValues()[0];
+}
+
+/**
+ * Looks up an agent's email from the "Mails" sheet by agent name.
+ * This is the source of truth for agent emails — more reliable than the
+ * ARRAYFORMULA in column V, which may not resolve before the trigger fires.
+ *
+ * Expects the Mails sheet to have:
+ *   Column A — Agent name (must match QA form exactly)
+ *   Column B — Agent email
+ *
+ * @private
+ * @param {string} agentName
+ * @return {string} email address, or empty string if not found
+ */
+function _lookupAgentEmail(agentName) {
+  var ss    = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(CONFIG.MAILS_SHEET_NAME);
+  if (!sheet) {
+    Logger.log('_lookupAgentEmail: sheet "%s" not found.', CONFIG.MAILS_SHEET_NAME);
+    return '';
+  }
+  var data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {  // row 0 is the header
+    if (data[i][0] === agentName) {
+      Logger.log('_lookupAgentEmail: found "%s" → %s', agentName, data[i][1]);
+      return data[i][1];
+    }
+  }
+  Logger.log('_lookupAgentEmail: no match found for "%s"', agentName);
+  return '';
 }
 
 /**
