@@ -176,6 +176,8 @@ KEY SHEETS
   - Form Responses 1   Raw QA form submissions (auto-populated by Google Forms).
   - Analyst_History    Running log of all past evaluations per agent.
                        Used to generate trend data in the ProgressionCard.
+  - Mails              Contains the list of current analysts and their emails in Columns
+                        A and B respectively
 
 QA SCORECARD CATEGORIES
   Numeric (scored 1–5):
