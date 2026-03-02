@@ -56,18 +56,18 @@ class NotificationCard {
    * Shared helper: wraps content in the standard card shell.
    *
    * @param {string} accentColor  — left-border / header background
-   * @param {string} icon         — emoji or text icon shown in the header
+   * @param {string} codepoint    — HTML hex entity for the icon (e.g. &#x1F525;), avoids Gmail emoji-encoding issues
    * @param {string} title        — card heading
    * @param {string} bodyHtml     — inner content rows
    * @return {string}
    */
-  _shell(accentColor, icon, title, bodyHtml) {
+  _shell(accentColor, codepoint, title, bodyHtml) {
     return `
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
   style="border:2px solid ${accentColor};border-radius:8px;overflow:hidden;margin:12px 0;font-family:Arial,Helvetica,sans-serif;">
   <tr>
     <td style="background:${accentColor};padding:10px 16px;color:${LANDING.WHITE};font-size:15px;font-weight:bold;">
-      ${icon}&nbsp; ${title}
+      ${codepoint}&nbsp; ${title}
     </td>
   </tr>
   <tr>
@@ -116,7 +116,7 @@ class FireInspectionCard extends NotificationCard {
         'Please ensure your smoke detectors are unobstructed.'),
     ].join('');
 
-    return this._shell(LANDING.ACCENT_BLUE, '🔥', 'Annual Fire Inspection', body);
+    return this._shell(LANDING.ACCENT_BLUE, '&#x1F525;', 'Annual Fire Inspection', body);
   }
 }
 
@@ -130,7 +130,7 @@ class WaterOutageCard extends NotificationCard {
         'We apologize for the inconvenience.'),
     ].join('');
 
-    return this._shell(LANDING.AMBER, '🚿', 'Planned Water Outage', body);
+    return this._shell(LANDING.AMBER, '&#x1F6BF;', 'Planned Water Outage', body);
   }
 }
 
@@ -144,7 +144,7 @@ class MaintenanceCard extends NotificationCard {
         'Some common areas may be temporarily unavailable.'),
     ].join('');
 
-    return this._shell(LANDING.DARK_NAVY, '🔧', 'Scheduled Maintenance', body);
+    return this._shell(LANDING.DARK_NAVY, '&#x1F527;', 'Scheduled Maintenance', body);
   }
 }
 
@@ -158,7 +158,7 @@ class WeatherAlertCard extends NotificationCard {
         'Please take necessary precautions for your safety and secure any outdoor belongings.'),
     ].join('');
 
-    return this._shell(LANDING.RED, '⛈️', 'Weather Advisory', body);
+    return this._shell(LANDING.RED, '&#x26C8;&#xFE0F;', 'Weather Advisory', body);
   }
 }
 
@@ -176,7 +176,7 @@ class PowerOutageCard extends NotificationCard {
         'Use flashlights, not candles'),
     ].join('');
 
-    return this._shell(LANDING.ORANGE, '⚡', 'Power Outage — Active', body);
+    return this._shell(LANDING.ORANGE, '&#x26A1;', 'Power Outage — Active', body);
   }
 }
 
@@ -193,7 +193,7 @@ class WiFiOutageCard extends NotificationCard {
         'Disable WiFi on your device to switch automatically'),
     ].join('');
 
-    return this._shell(LANDING.AMBER, '📶', 'WiFi Service Disruption — Active', body);
+    return this._shell(LANDING.AMBER, '&#x1F4F6;', 'WiFi Service Disruption — Active', body);
   }
 }
 
