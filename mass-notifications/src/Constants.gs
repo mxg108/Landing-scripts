@@ -6,7 +6,7 @@
  * here is available project-wide without imports.
  */
 
-const VERSION                    = 'v3.1.0';
+const VERSION                    = 'v3.1.1';
 const CONFIG_SHEET               = 'Config';
 const DEFAULT_RECIPIENTS_SHEET   = 'Mass_Notification';
 const RUN_LOG_SHEET              = 'Run_Log';

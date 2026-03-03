@@ -12,8 +12,8 @@
  *   F  Actor          (email of the user who triggered the run)
  *   G  Subject        (truncated to 180 chars)
  *   H  ConfigSnapshot (JSON — version, sendMode, propertyName, eventName, window)
- *   I  RowStates      (JSON — array of {row, email, prevStatus, prevLastSent,
- *                                        newStatus, newLastSent})
+ *   I  RowStates      (JSON — array of {row, email, name, unit, prevStatus,
+ *                                        prevLastSent, newStatus, newLastSent})
  *   J  Notes          (error message or freeform)
  *   K  Completed      (TRUE/FALSE)
  */
@@ -51,8 +51,10 @@ function logRunStart_({ mode, cfg, shName, subject, rows, emails }) {
 
   const before = rows.map(r => ({
     row:          r,
-    email:        sh ? (sh.getRange(r, COL.EMAIL).getValue()     || '') : '',
-    prevStatus:   sh ? (sh.getRange(r, COL.STATUS).getValue()   || null) : null,
+    email:        sh ? (sh.getRange(r, COL.EMAIL    ).getValue() || '')   : '',
+    name:         sh ? (sh.getRange(r, COL.NAME     ).getValue() || '')   : '',
+    unit:         sh ? (sh.getRange(r, COL.UNIT     ).getValue() || '')   : '',
+    prevStatus:   sh ? (sh.getRange(r, COL.STATUS   ).getValue() || null) : null,
     prevLastSent: sh ? (sh.getRange(r, COL.LAST_SENT).getValue() || null) : null,
   }));
 
@@ -102,6 +104,8 @@ function logRunComplete_(run, count, errorMsg) {
     return {
       row:          b.row,
       email:        b.email,
+      name:         b.name         ?? '',
+      unit:         b.unit         ?? '',
       prevStatus:   b.prevStatus   ?? null,
       prevLastSent: b.prevLastSent ?? null,
       newStatus:    after.status   ?? null,
@@ -121,12 +125,11 @@ function logRunComplete_(run, count, errorMsg) {
  * Restores recipients recorded in a Run_Log row back to the recipients sheet.
  *
  * For each entry in the RowStates JSON (column I of the given log row):
- *   - Writes email       → COL.EMAIL     at the recorded row number.
+ *   - Writes email       → COL.EMAIL
+ *   - Writes name        → COL.NAME
+ *   - Writes unit        → COL.UNIT
  *   - Restores prevStatus   → COL.STATUS
  *   - Restores prevLastSent → COL.LAST_SENT
- *
- * NOTE: COL.NAME and COL.UNIT are not captured in Run_Log and therefore
- * cannot be restored from the log; those cells are left unchanged.
  *
  * @param {number} logRow   — 1-based row number in the Run_Log sheet.
  * @param {string} [shName] — Recipients sheet to write into.
@@ -153,9 +156,11 @@ function restoreRecipientsFromRow(logRow, shName) {
   const recSheet = SpreadsheetApp.getActive().getSheetByName(sheetName);
   if (!recSheet) throw new Error(`Recipients sheet not found: "${sheetName}"`);
 
-  states.forEach(({ row, email, prevStatus, prevLastSent }) => {
+  states.forEach(({ row, email, name, unit, prevStatus, prevLastSent }) => {
     if (!row || row < 2) return;
     recSheet.getRange(row, COL.EMAIL    ).setValue(email        ?? '');
+    recSheet.getRange(row, COL.NAME     ).setValue(name         ?? '');
+    recSheet.getRange(row, COL.UNIT     ).setValue(unit         ?? '');
     recSheet.getRange(row, COL.STATUS   ).setValue(prevStatus   ?? '');
     recSheet.getRange(row, COL.LAST_SENT).setValue(prevLastSent ?? '');
   });
