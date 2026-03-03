@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mass Notifications</title>
+  <style>
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      background: #f5f7fa;
+      color: #15192D;
+      margin: 0;
+      padding: 32px;
+    }
+    h1 { font-size: 22px; margin: 0 0 8px; }
+    p  { color: #4A4A4A; }
+  </style>
+</head>
+<body>
+
+  <h1>Mass Notifications</h1>
+  <p>Web App shell — sections coming soon.</p>
+
+  <!--
+    SECTION PARTIALS WILL GO HERE, e.g.:
+      <?!= include('WebApp_Recipients') ?>
+      <?!= include('WebApp_Config')     ?>
+      <?!= include('WebApp_Preview')    ?>
+
+    The <?!= ... ?> syntax runs server-side GAS code at render time.
+    include() is defined in WebApp.gs and returns the raw HTML of each file.
+  -->
+
+  <script>
+    /**
+     * google.script.run — how the browser talks to WebApp.gs
+     *
+     * Pattern:
+     *   google.script.run
+     *     .withSuccessHandler(fn)   ← called with the return value on success
+     *     .withFailureHandler(fn)   ← called with the Error object on failure
+     *     .yourServerFunction(args) ← any public function in WebApp.gs
+     *
+     * This is asynchronous — the browser doesn't block while GAS runs.
+     */
+    document.addEventListener('DOMContentLoaded', function () {
+      google.script.run
+        .withSuccessHandler(function (data) {
+          console.log('Initial data loaded:', data);
+          // TODO: hand data off to each section's init function.
+        })
+        .withFailureHandler(function (err) {
+          console.error('Failed to load initial data:', err.message);
+        })
+        .getInitialData();
+    });
+  </script>
+
+</body>
+</html>
