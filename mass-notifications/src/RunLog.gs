@@ -115,6 +115,56 @@ function logRunComplete_(run, count, errorMsg) {
   if (errorMsg) log.getRange(lastRow, 10).setValue(`ERROR: ${errorMsg}`);
 }
 
+// ── Restore ───────────────────────────────────────────────────────────────────
+
+/**
+ * Restores recipients recorded in a Run_Log row back to the recipients sheet.
+ *
+ * For each entry in the RowStates JSON (column I of the given log row):
+ *   - Writes email       → COL.EMAIL     at the recorded row number.
+ *   - Restores prevStatus   → COL.STATUS
+ *   - Restores prevLastSent → COL.LAST_SENT
+ *
+ * NOTE: COL.NAME and COL.UNIT are not captured in Run_Log and therefore
+ * cannot be restored from the log; those cells are left unchanged.
+ *
+ * @param {number} logRow   — 1-based row number in the Run_Log sheet.
+ * @param {string} [shName] — Recipients sheet to write into.
+ *                            Defaults to the value recorded in column D of that log row.
+ * @return {number} Number of recipient rows restored.
+ */
+function restoreRecipientsFromRow(logRow, shName) {
+  const log       = getRunLogSheet_();
+  const sheetName = shName
+                    || String(log.getRange(logRow, 4).getValue()).trim()
+                    || DEFAULT_RECIPIENTS_SHEET;
+
+  const raw = log.getRange(logRow, 9).getValue();
+  if (!raw) return 0;
+
+  let states;
+  try {
+    states = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`Run_Log row ${logRow}: malformed RowStates JSON — ${e.message}`);
+  }
+  if (!Array.isArray(states) || !states.length) return 0;
+
+  const recSheet = SpreadsheetApp.getActive().getSheetByName(sheetName);
+  if (!recSheet) throw new Error(`Recipients sheet not found: "${sheetName}"`);
+
+  states.forEach(({ row, email, prevStatus, prevLastSent }) => {
+    if (!row || row < 2) return;
+    recSheet.getRange(row, COL.EMAIL    ).setValue(email        ?? '');
+    recSheet.getRange(row, COL.STATUS   ).setValue(prevStatus   ?? '');
+    recSheet.getRange(row, COL.LAST_SENT).setValue(prevLastSent ?? '');
+  });
+
+  return states.length;
+}
+
+// ── Row appending ─────────────────────────────────────────────────────────────
+
 /**
  * Appends a single row to Run_Log.  Used by logRunStart_() and undoLastRunFromLog().
  *
