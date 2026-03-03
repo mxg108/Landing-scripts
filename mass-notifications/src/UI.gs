@@ -46,12 +46,14 @@ function onOpen() {
   main.addItem('Send', 'sendMassNotifications');
   main.addSeparator();
 
-  // ── Reset / Archive ──────────────────────────────────────────────────────
-  const reset = ui.createMenu('Reset / Archive');
+  // ── Reset / Archive / Restore ────────────────────────────────────────────
+  const reset = ui.createMenu('Reset / Archive / Restore');
   reset.addItem('Archive recipients',               'archiveAndClearRecipients');
   reset.addItem('Reset statuses & timestamps',      'resetStatusesOnly');
   reset.addItem('Full reset',                       'fullResetForNextUse');
   reset.addItem('Undo LAST run (from Run_Log)',      'undoLastRunFromLog');
+  reset.addSeparator();
+  reset.addItem('Restore recipients from Run_Log row…', 'promptRestoreRecipientsFromRow');
   main.addSubMenu(reset);
   main.addSeparator();
 
@@ -97,6 +99,46 @@ function aboutModal_() {
         Available templates: ${Object.keys(EMAIL_TEMPLATES).join(', ')}
       </div>
     </div>`, 'About Mass Notifications');
+}
+
+// ── Restore prompt ────────────────────────────────────────────────────────────
+
+/**
+ * Prompts the operator for a Run_Log row number, then calls
+ * restoreRecipientsFromRow() and reports the result.
+ *
+ * The row number refers to the 1-based row in the Run_Log sheet (including
+ * the header row), so data rows start at 2.
+ */
+function promptRestoreRecipientsFromRow() {
+  const ui  = SpreadsheetApp.getUi();
+  const res = ui.prompt(
+    'Restore recipients from Run_Log',
+    'Enter the Run_Log row number whose recipients JSON (column I) you want to restore.\n' +
+    '(Row 1 is the header — data rows start at 2.)',
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+
+  const raw    = res.getResponseText().trim();
+  const logRow = parseInt(raw, 10);
+
+  if (!raw || isNaN(logRow) || logRow < 2) {
+    ui.alert('Invalid row', `"${raw}" is not a valid row number. Enter a whole number ≥ 2.`, ui.ButtonSet.OK);
+    return;
+  }
+
+  try {
+    const count = restoreRecipientsFromRow(logRow);
+    ui.alert(
+      'Restore complete',
+      `${count} recipient row${count !== 1 ? 's' : ''} restored from Run_Log row ${logRow}.`,
+      ui.ButtonSet.OK
+    );
+  } catch (e) {
+    ui.alert('Restore failed', e.message, ui.ButtonSet.OK);
+  }
 }
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
