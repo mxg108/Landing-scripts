@@ -1,0 +1,696 @@
+<!--
+  WebApp_Config.html — Section 2: Email Configuration
+  Included into Index.html via <?!= include('WebApp_Config') ?>
+
+  Responsibilities:
+    • Template chips — one-click pre-population of the Config sheet.
+    • Campaign basics — property, event, date window.
+    • Notification card picker — visual buttons matching Cards.gs types.
+    • Send settings — mode, manager, CC/BCC, sender name.
+    • Email content — subject field + Quill rich-text editor for body_intro_html.
+    • Closing & disclaimer — textarea + YES/NO toggles.
+    • Auto-saves each field to the Config sheet on blur / change via saveConfigValue().
+    • Exposes Config.init(data) and Config.getValues() to Index.html.
+
+  QUILL.JS — rich text editor loaded from CDN.
+    <link> and <script> in a partial are fine — they land in the document
+    body, which browsers handle correctly. Quill must load before our <script>
+    block initialises it, which is guaranteed by top-to-bottom HTML parsing.
+-->
+
+<!-- Quill CSS -->
+<link href="https://cdn.quilljs.com/1.3.7/quill.snow.css" rel="stylesheet">
+
+<style>
+  /* ── Section card ─────────────────────────────────────────────────────── */
+  #section-config {
+    background: #ffffff;
+    border: 1px solid #dce3f0;
+    border-radius: 10px;
+    padding: 24px 28px;
+    margin-bottom: 28px;
+  }
+  #section-config h2 {
+    font-size: 17px;
+    font-weight: 700;
+    color: #15192D;
+    margin: 0 0 20px;
+  }
+
+  /* ── Form groups (visually separated blocks) ────────────────────────── */
+  .cfg-group {
+    border-top: 1px solid #f0f2f7;
+    padding: 18px 0 4px;
+    margin-bottom: 6px;
+  }
+  .cfg-group-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    color: #1A61D9;
+    margin-bottom: 14px;
+  }
+
+  /* ── Field wrappers ─────────────────────────────────────────────────── */
+  .cfg-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-bottom: 14px;
+  }
+  .cfg-field label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #15192D;
+  }
+  .cfg-token-hint {
+    font-weight: 400;
+    color: #888;
+    font-size: 11px;
+  }
+
+  /* 2-column and 3-column grid rows */
+  .cfg-row-2 { display: grid; grid-template-columns: 1fr 1fr;     gap: 14px; }
+  .cfg-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  @media (max-width: 640px) {
+    .cfg-row-2, .cfg-row-3 { grid-template-columns: 1fr; }
+  }
+
+  /* ── Text inputs and textareas ──────────────────────────────────────── */
+  .cfg-input, .cfg-textarea {
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 13px;
+    color: #15192D;
+    background: #fafbfd;
+    border: 1px solid #dce3f0;
+    border-radius: 6px;
+    padding: 7px 10px;
+    outline: none;
+    transition: border-color .15s, background .15s;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .cfg-input:focus, .cfg-textarea:focus {
+    border-color: #1A61D9;
+    background: #fff;
+  }
+  .cfg-textarea { resize: vertical; min-height: 80px; }
+
+  /* ── Segmented controls (send_mode, YES/NO toggles) ────────────────── */
+  .cfg-segmented {
+    display: inline-flex;
+    border: 1px solid #dce3f0;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .cfg-segmented button {
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 16px;
+    border: none;
+    background: #f5f7fa;
+    color: #4A4A4A;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+  }
+  .cfg-segmented button + button { border-left: 1px solid #dce3f0; }
+  .cfg-segmented button.cfg-active {
+    background: #1A61D9;
+    color: #fff;
+  }
+
+  /* ── Template chips ─────────────────────────────────────────────────── */
+  #cfg-templates {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .cfg-chip {
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 12px;
+    padding: 5px 13px;
+    border: 1px solid #c3d4ef;
+    border-radius: 20px;
+    background: #E7EFFB;
+    color: #15192D;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  .cfg-chip:hover   { background: #d0e2f7; }
+  .cfg-chip.cfg-active {
+    background: #1A61D9;
+    color: #fff;
+    border-color: #1A61D9;
+  }
+
+  /* ── Notification card picker ───────────────────────────────────────── */
+  #cfg-cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .cfg-card-btn {
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 12px;
+    padding: 6px 14px;
+    border: 1px solid #dce3f0;
+    border-radius: 6px;
+    background: #f5f7fa;
+    color: #15192D;
+    cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s;
+  }
+  .cfg-card-btn:hover { background: #E7EFFB; border-color: #c3d4ef; }
+  .cfg-card-btn.cfg-active {
+    background: #15192D;
+    color: #fff;
+    border-color: #15192D;
+  }
+
+  /* ── Quill editor ───────────────────────────────────────────────────── */
+  #cfg-body-editor {
+    min-height: 160px;
+    border: 1px solid #dce3f0;
+    border-radius: 0 0 6px 6px;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 13px;
+    background: #fafbfd;
+  }
+  /* Attach the toolbar border cleanly to the editor box */
+  .ql-toolbar.ql-snow {
+    border: 1px solid #dce3f0;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    background: #f5f7fa;
+  }
+  .ql-container.ql-snow { border: none; }
+  #cfg-body-editor:focus-within {
+    outline: none;
+    border-color: #1A61D9;
+    background: #fff;
+  }
+
+  /* ── Token reference list ───────────────────────────────────────────── */
+  .cfg-token-list {
+    font-size: 11px;
+    color: #888;
+    margin-top: 8px;
+    line-height: 1.8;
+  }
+  .cfg-token-list code {
+    background: #f0f2f7;
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 11px;
+    color: #1A61D9;
+  }
+
+  /* ── Template hint toast ────────────────────────────────────────────── */
+  #cfg-hint-toast {
+    display: none;
+    background: #E7EFFB;
+    border: 1px solid #c3d4ef;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 12px;
+    color: #15192D;
+    white-space: pre-line;
+    margin-bottom: 14px;
+  }
+</style>
+
+<section id="section-config">
+  <h2>Email Configuration</h2>
+
+  <!-- Template hint shown after a template is loaded -->
+  <div id="cfg-hint-toast"></div>
+
+  <!-- ── Template selector ────────────────────────────────────────────── -->
+  <div class="cfg-group">
+    <div class="cfg-group-label">Load Template</div>
+    <div id="cfg-templates"></div>
+  </div>
+
+  <!-- ── Campaign basics ──────────────────────────────────────────────── -->
+  <div class="cfg-group">
+    <div class="cfg-group-label">Campaign</div>
+    <div class="cfg-row-2">
+      <div class="cfg-field">
+        <label for="cfg-property_name">Property Name</label>
+        <input id="cfg-property_name" class="cfg-input" type="text"
+               placeholder="e.g. Skyline Lofts" data-key="property_name">
+      </div>
+      <div class="cfg-field">
+        <label for="cfg-event_name">Event Name</label>
+        <input id="cfg-event_name" class="cfg-input" type="text"
+               placeholder="e.g. Annual Fire Inspection" data-key="event_name">
+      </div>
+    </div>
+    <div class="cfg-row-2">
+      <div class="cfg-field">
+        <label for="cfg-window_start">Window Start</label>
+        <input id="cfg-window_start" class="cfg-input" type="date" data-key="window_start">
+      </div>
+      <div class="cfg-field">
+        <label for="cfg-window_end">Window End</label>
+        <input id="cfg-window_end" class="cfg-input" type="date" data-key="window_end">
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Notification card picker ─────────────────────────────────────── -->
+  <div class="cfg-group">
+    <div class="cfg-group-label">Notification Card</div>
+    <div id="cfg-cards"></div>
+  </div>
+
+  <!-- ── Send settings ────────────────────────────────────────────────── -->
+  <div class="cfg-group">
+    <div class="cfg-group-label">Send Settings</div>
+    <div class="cfg-row-2">
+      <div class="cfg-field">
+        <label>Send Mode</label>
+        <div class="cfg-segmented" data-key="send_mode">
+          <button class="cfg-active" data-val="INDIVIDUAL">Individual</button>
+          <button data-val="BCC">BCC</button>
+        </div>
+      </div>
+      <div class="cfg-field">
+        <label>Include Unit Line</label>
+        <div class="cfg-segmented" data-key="include_unit_line">
+          <button class="cfg-active" data-val="YES">Yes</button>
+          <button data-val="NO">No</button>
+        </div>
+      </div>
+    </div>
+    <div class="cfg-row-2">
+      <div class="cfg-field">
+        <label for="cfg-manager_email">Manager Email</label>
+        <input id="cfg-manager_email" class="cfg-input" type="email"
+               placeholder="gm@hellolanding.com" data-key="manager_email">
+      </div>
+      <div class="cfg-field">
+        <label for="cfg-manager_name">Manager Name</label>
+        <input id="cfg-manager_name" class="cfg-input" type="text"
+               placeholder="First Last" data-key="manager_name">
+      </div>
+    </div>
+    <div class="cfg-row-3">
+      <div class="cfg-field">
+        <label for="cfg-cc_extra">CC</label>
+        <input id="cfg-cc_extra" class="cfg-input" type="text"
+               placeholder="email, email" data-key="cc_extra">
+      </div>
+      <div class="cfg-field">
+        <label for="cfg-bcc_extra">BCC</label>
+        <input id="cfg-bcc_extra" class="cfg-input" type="text"
+               placeholder="email, email" data-key="bcc_extra">
+      </div>
+      <div class="cfg-field">
+        <label for="cfg-sender_display_name">Sender Display Name</label>
+        <input id="cfg-sender_display_name" class="cfg-input" type="text"
+               placeholder="Landing Notifications" data-key="sender_display_name">
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Email content ────────────────────────────────────────────────── -->
+  <div class="cfg-group">
+    <div class="cfg-group-label">Email Content</div>
+    <div class="cfg-field">
+      <label for="cfg-subject_template">
+        Subject <span class="cfg-token-hint">— supports tokens</span>
+      </label>
+      <input id="cfg-subject_template" class="cfg-input" type="text"
+             placeholder="Notice: {{event_name}} — {{property_name}} ({{date_range}})"
+             data-key="subject_template">
+    </div>
+    <div class="cfg-field" style="margin-top:6px;">
+      <label>Body <span class="cfg-token-hint">— supports tokens</span></label>
+      <!-- Quill mounts here. The toolbar is injected above this div by Quill. -->
+      <div id="cfg-body-editor"></div>
+    </div>
+    <div class="cfg-token-list">
+      <strong>Available tokens:</strong>&nbsp;
+      <code>{{property_name}}</code> &nbsp;
+      <code>{{event_name}}</code> &nbsp;
+      <code>{{date_range}}</code> &nbsp;
+      <code>{{today}}</code> &nbsp;
+      <code>{{first_name}}</code> &nbsp;
+      <code>{{member_name}}</code> &nbsp;
+      <code>{{unit}}</code> &nbsp;
+      <code>{{manager_name}}</code>
+    </div>
+  </div>
+
+  <!-- ── Closing & disclaimer ─────────────────────────────────────────── -->
+  <div class="cfg-group">
+    <div class="cfg-group-label">Closing &amp; Disclaimer</div>
+    <div class="cfg-row-2" style="margin-bottom:14px;">
+      <div class="cfg-field">
+        <label>Include Disclaimer</label>
+        <div class="cfg-segmented" data-key="include_disclaimer">
+          <button class="cfg-active" data-val="YES">Yes</button>
+          <button data-val="NO">No</button>
+        </div>
+      </div>
+    </div>
+    <div class="cfg-field">
+      <label for="cfg-closing_html">
+        Closing HTML <span class="cfg-token-hint">— supports tokens</span>
+      </label>
+      <textarea id="cfg-closing_html" class="cfg-textarea" rows="4"
+                placeholder="<p>Warm regards,&lt;br&gt;The Landing Team</p>"
+                data-key="closing_html"></textarea>
+    </div>
+  </div>
+
+</section>
+
+<!-- Quill JS — must appear after the #cfg-body-editor div -->
+<script src="https://cdn.quilljs.com/1.3.7/quill.min.js"></script>
+
+<script>
+/**
+ * Config module — manages the email configuration section.
+ *
+ * Exposed globally so Index.html can call:
+ *   Config.init(data)      — populate all fields from getInitialData()
+ *   Config.getValues()     — collect current form state (for preview / send)
+ */
+const Config = (() => {
+
+  // ── State ─────────────────────────────────────────────────────────────────
+  let _quill        = null;
+  let _selectedCard = '';
+  const _segValues  = {};  // current value of each segmented control, keyed by data-key
+
+  // Card registry labels — mirrors CARD_LABELS in Cards.gs.
+  // Using HTML entities (same as our GAS fix) so rendering is consistent.
+  const CARD_LABELS = {
+    FIRE_INSPECTION: '&#x1F525; Fire Inspection',
+    WATER_OUTAGE:    '&#x1F6BF; Water Outage',
+    MAINTENANCE:     '&#x1F527; Maintenance',
+    WEATHER_ALERT:   '&#x26C8;&#xFE0F; Weather Alert',
+    POWER_OUTAGE:    '&#x26A1; Power Outage',
+    WIFI_OUTAGE:     '&#x1F4F6; WiFi Outage',
+  };
+
+  // ── Public API ─────────────────────────────────────────────────────────────
+
+  /**
+   * Populates every form control from the data returned by getInitialData().
+   * Called once from Index.html after the server responds.
+   *
+   * @param {{ config, templates, cards }} data
+   */
+  function init(data) {
+    const cfg = data.config;
+    _buildTemplateChips(data.templates);
+    _buildCardPicker(data.cards, cfg.notificationCard || '');
+    _initSegmentedControls();
+    _populateFields(cfg);
+    _initQuill(cfg.bodyIntroHtml || '');
+    _wireAutoSave();
+  }
+
+  /**
+   * Returns current form state as a flat snake_case object suitable for
+   * iterating and calling saveConfigValue(key, value) on each entry.
+   *
+   * Called by Index.html before triggering a preview or send.
+   *
+   * @return {Object}
+   */
+  function getValues() {
+    return {
+      property_name:       _val('property_name'),
+      event_name:          _val('event_name'),
+      window_start:        _val('window_start'),
+      window_end:          _val('window_end'),
+      manager_email:       _val('manager_email'),
+      manager_name:        _val('manager_name'),
+      cc_extra:            _val('cc_extra'),
+      bcc_extra:           _val('bcc_extra'),
+      sender_display_name: _val('sender_display_name'),
+      subject_template:    _val('subject_template'),
+      closing_html:        _val('closing_html'),
+      body_intro_html:     _quill ? _quill.root.innerHTML : '',
+      send_mode:           _segValues['send_mode']          || 'INDIVIDUAL',
+      include_unit_line:   _segValues['include_unit_line']  || 'YES',
+      include_disclaimer:  _segValues['include_disclaimer'] || 'YES',
+      notification_card:   _selectedCard,
+    };
+  }
+
+  // ── Template chips ─────────────────────────────────────────────────────────
+
+  function _buildTemplateChips(templates) {
+    const container = document.getElementById('cfg-templates');
+    templates.forEach(name => {
+      const btn = document.createElement('button');
+      btn.className   = 'cfg-chip';
+      btn.textContent = name;
+      btn.addEventListener('click', () => _loadTemplate(name, btn));
+      container.appendChild(btn);
+    });
+  }
+
+  /**
+   * Loads a template: calls the server to write it to the Config sheet,
+   * then re-fetches getInitialData() to repopulate the form.
+   *
+   * We do a full re-fetch rather than applying template values locally
+   * to guarantee the form always reflects what's actually on the sheet.
+   */
+  function _loadTemplate(name, btn) {
+    _setChipActive(btn);
+    _showHint('Loading…');
+
+    google.script.run
+      .withSuccessHandler(hint => {
+        // Template written to sheet — now re-fetch and repopulate
+        google.script.run
+          .withSuccessHandler(data => {
+            _populateFields(data.config);
+            if (_quill) _quill.root.innerHTML = data.config.bodyIntroHtml || '';
+            _showHint(hint || (name + ' loaded. Fill in property name and dates.'));
+          })
+          .withFailureHandler(_onErr)
+          .getInitialData();
+      })
+      .withFailureHandler(_onErr)
+      .loadTemplateFrontend(name);
+  }
+
+  function _setChipActive(activeBtn) {
+    document.querySelectorAll('.cfg-chip').forEach(b => b.classList.remove('cfg-active'));
+    activeBtn.classList.add('cfg-active');
+  }
+
+  function _showHint(text) {
+    const toast = document.getElementById('cfg-hint-toast');
+    if (!text) { toast.style.display = 'none'; return; }
+    toast.textContent = text;
+    toast.style.display = 'block';
+  }
+
+  // ── Card picker ────────────────────────────────────────────────────────────
+
+  function _buildCardPicker(cards, currentCard) {
+    const container = document.getElementById('cfg-cards');
+
+    // "None" option first — clears the card selection
+    container.appendChild(_makeCardBtn('&#x2205; None', ''));
+
+    cards.forEach(key => {
+      container.appendChild(_makeCardBtn(CARD_LABELS[key] || key, key));
+    });
+
+    _setCard((currentCard || '').toUpperCase());
+  }
+
+  function _makeCardBtn(label, value) {
+    const btn = document.createElement('button');
+    btn.className    = 'cfg-card-btn';
+    btn.innerHTML    = label;
+    btn.dataset.val  = value;  // store value in data-val for reliable comparison
+    btn.addEventListener('click', () => {
+      _setCard(value);
+      _save('notification_card', value);
+    });
+    return btn;
+  }
+
+  function _setCard(value) {
+    _selectedCard = value || '';
+    // Compare by data-val attribute, not by rendered text (which may have HTML entities)
+    document.querySelectorAll('.cfg-card-btn').forEach(b => {
+      b.classList.toggle('cfg-active', b.dataset.val === _selectedCard);
+    });
+  }
+
+  // ── Segmented controls ─────────────────────────────────────────────────────
+
+  /**
+   * Wires all .cfg-segmented groups: tracks the active value in _segValues
+   * and auto-saves to the Config sheet on every toggle.
+   */
+  function _initSegmentedControls() {
+    document.querySelectorAll('.cfg-segmented').forEach(group => {
+      const key = group.dataset.key;
+      // Capture the initial value from whichever button is pre-marked active
+      const initial = group.querySelector('button.cfg-active');
+      if (initial) _segValues[key] = initial.dataset.val;
+
+      group.querySelectorAll('button').forEach(btn => {
+        btn.addEventListener('click', () => {
+          group.querySelectorAll('button').forEach(b => b.classList.remove('cfg-active'));
+          btn.classList.add('cfg-active');
+          _segValues[key] = btn.dataset.val;
+          _save(key, btn.dataset.val);
+        });
+      });
+    });
+  }
+
+  /**
+   * Sets a segmented control to a specific value, updating both the UI
+   * and the _segValues tracker. Called when populating from server data.
+   *
+   * @param {string} key   — data-key attribute of the .cfg-segmented group
+   * @param {string} value — one of the button data-val values (already uppercase)
+   */
+  function _setSegmented(key, value) {
+    const group = document.querySelector('.cfg-segmented[data-key="' + key + '"]');
+    if (!group) return;
+    group.querySelectorAll('button').forEach(btn => {
+      const active = btn.dataset.val === String(value).toUpperCase();
+      btn.classList.toggle('cfg-active', active);
+      if (active) _segValues[key] = btn.dataset.val;
+    });
+  }
+
+  // ── Field population ───────────────────────────────────────────────────────
+
+  /**
+   * Populates all plain input/textarea fields from the camelCase cfg object
+   * returned by loadConfig_() (passed through getInitialData).
+   *
+   * The mapping from camelCase (server) → snake_case element IDs is explicit
+   * here so there's no magic — easy to trace if something doesn't populate.
+   */
+  function _populateFields(cfg) {
+    _set('property_name',       cfg.propertyName      || '');
+    _set('event_name',          cfg.eventName         || '');
+    _set('manager_email',       cfg.managerEmail      || '');
+    _set('manager_name',        cfg.managerName       || '');
+    _set('cc_extra',            cfg.ccExtra           || '');
+    _set('bcc_extra',           cfg.bccExtra          || '');
+    _set('sender_display_name', cfg.senderDisplayName || '');
+    _set('subject_template',    cfg.subjectTemplate   || '');
+    _set('closing_html',        cfg.closingHtml       || '');
+
+    // Dates — use the pre-formatted strings added by getInitialData()
+    // rather than trying to format the Date objects on the client.
+    _set('window_start', cfg.windowStartStr || '');
+    _set('window_end',   cfg.windowEndStr   || '');
+
+    // Segmented controls
+    // sendMode is already a string ('INDIVIDUAL' | 'BCC')
+    _setSegmented('send_mode',         cfg.sendMode || 'INDIVIDUAL');
+    // includeUnitLine and includeDisclaimer are booleans from toBool_() in loadConfig_
+    _setSegmented('include_unit_line',  cfg.includeUnitLine  ? 'YES' : 'NO');
+    _setSegmented('include_disclaimer', cfg.includeDisclaimer ? 'YES' : 'NO');
+
+    // Card picker
+    _setCard((cfg.notificationCard || '').toUpperCase());
+  }
+
+  // ── Quill rich-text editor ─────────────────────────────────────────────────
+
+  /**
+   * Creates the Quill editor instance the first time, or updates its
+   * content on subsequent calls (e.g. after a template is loaded).
+   *
+   * @param {string} html — existing body_intro_html to pre-populate
+   */
+  function _initQuill(html) {
+    if (_quill) {
+      // Editor already exists — just update the content
+      _quill.root.innerHTML = html;
+      return;
+    }
+
+    _quill = new Quill('#cfg-body-editor', {
+      theme: 'snow',
+      placeholder: 'Write the email body here… supports {{tokens}}',
+      modules: {
+        toolbar: [
+          ['bold', 'italic', 'underline'],
+          [{ list: 'ordered' }, { list: 'bullet' }],
+          ['link', 'clean'],
+        ],
+      },
+    });
+
+    if (html) _quill.root.innerHTML = html;
+
+    // Auto-save body content after the user stops typing for 800 ms.
+    // Debouncing prevents flooding the server on every keystroke.
+    let _debounceTimer;
+    _quill.on('text-change', () => {
+      clearTimeout(_debounceTimer);
+      _debounceTimer = setTimeout(() => {
+        _save('body_intro_html', _quill.root.innerHTML);
+      }, 800);
+    });
+  }
+
+  // ── Auto-save on blur ──────────────────────────────────────────────────────
+
+  /**
+   * Wires every input and textarea that has a data-key attribute to call
+   * saveConfigValue() when the field loses focus (blur event).
+   *
+   * Using blur (not input/keyup) limits server calls to once per field exit
+   * rather than once per keystroke — important given GAS call overhead.
+   */
+  function _wireAutoSave() {
+    document.querySelectorAll('#section-config .cfg-input[data-key], #section-config .cfg-textarea[data-key]')
+      .forEach(el => {
+        el.addEventListener('blur', () => _save(el.dataset.key, el.value));
+      });
+  }
+
+  // ── Utilities ──────────────────────────────────────────────────────────────
+
+  function _save(key, value) {
+    google.script.run
+      .withFailureHandler(_onErr)
+      .saveConfigValue(key, value);
+  }
+
+  /** Gets the trimmed value of a cfg-prefixed element by snake_case key. */
+  function _val(key) {
+    const el = document.getElementById('cfg-' + key);
+    return el ? el.value.trim() : '';
+  }
+
+  /** Sets the value of a cfg-prefixed element by snake_case key. */
+  function _set(key, val) {
+    const el = document.getElementById('cfg-' + key);
+    if (el) el.value = val;
+  }
+
+  function _onErr(e) {
+    console.error('[Config] Server error:', e && e.message);
+  }
+
+  // ── Public interface ───────────────────────────────────────────────────────
+  return { init, getValues };
+
+})(); // end Config IIFE
+</script>

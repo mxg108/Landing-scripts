@@ -84,8 +84,17 @@ function include(filename) {
  * }}
  */
 function getInitialData() {
+  const cfg = loadConfig_();
+  const tz  = cfg.timezone || 'America/Mexico_City';
   return {
-    config:     loadConfig_(),
+    // Date objects (cfg.start / cfg.end) don't survive the google.script.run
+    // JSON serialisation cleanly across all browsers. Format them as plain
+    // yyyy-MM-dd strings server-side so <input type="date"> can consume them
+    // directly without any client-side date-parsing gymnastics.
+    config: Object.assign({}, cfg, {
+      windowStartStr: cfg.start ? Utilities.formatDate(cfg.start, tz, 'yyyy-MM-dd') : '',
+      windowEndStr:   cfg.end   ? Utilities.formatDate(cfg.end,   tz, 'yyyy-MM-dd') : '',
+    }),
     recipients: getRecipientsForWebApp_(),
     templates:  Object.keys(EMAIL_TEMPLATES),
     cards:      Object.keys(CARD_REGISTRY),
@@ -161,6 +170,34 @@ function saveRecipients(rows) {
  */
 function saveConfigValue(key, value) {
   setConfigValue_(key, value);
+}
+
+// ── Client → Server: templates ────────────────────────────────────────────────
+
+/**
+ * Web-App-safe version of loadTemplate_().
+ * Writes the template's config values to the Config sheet, then returns
+ * the hint text as a string (instead of calling safeAlert_ which pops a
+ * dialog in the spreadsheet UI, not the web app).
+ *
+ * Called via google.script.run.loadTemplateFrontend(name).
+ *
+ * @param  {string}      templateName — must match a key in EMAIL_TEMPLATES
+ * @return {string|null} hint text, or null if the template has no _hint
+ */
+function loadTemplateFrontend(templateName) {
+  const template = EMAIL_TEMPLATES[templateName];
+  if (!template) throw new Error(`Template "${templateName}" not found.`);
+
+  Object.entries(template).forEach(([key, value]) => {
+    if (!key.startsWith('_')) setConfigValue_(key, value);
+  });
+
+  TEMPLATE_BLANK_KEYS.forEach(key => {
+    if (!(key in template)) setConfigValue_(key, '');
+  });
+
+  return template._hint || null;
 }
 
 // ── Client → Server: preview ──────────────────────────────────────────────────

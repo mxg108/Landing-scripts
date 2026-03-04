@@ -23,7 +23,10 @@
   <!-- Section 1: Recipients grid -->
   <?!= include('WebApp_Recipients') ?>
 
-  <!-- Sections 2 and 3 (WebApp_Config, WebApp_Preview) will be included here once built. -->
+  <!-- Section 2: Email configuration -->
+  <?!= include('WebApp_Config') ?>
+
+  <!-- Section 3 (WebApp_Preview) will be included here once built. -->
 
   <script>
     /**
@@ -43,7 +46,7 @@
           // data = { config, recipients, templates, cards }
           // Hand each piece off to its section's init function.
           Recipients.init(data.recipients, data.config.maxPerRun);
-          // Config.init(data)    ← coming next
+          Config.init(data);
           // Preview.init(data)   ← coming after that
         })
         .withFailureHandler(function (err) {
