@@ -66,6 +66,13 @@
     margin-top: 4px;
   }
 
+  /* ── Reset row (always visible, separated by a rule) ─────────────────────── */
+  #send-reset-row {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid #f0f2f7;
+  }
+
   /* ── Buttons ─────────────────────────────────────────────────────────────── */
   .send-btn {
     font-family: Arial, Helvetica, sans-serif;
@@ -107,8 +114,6 @@
     background: #f5f7fa;
     color: #15192D;
     border: 1px solid #dce3f0;
-    display: none;
-    margin-top: 12px;
   }
   #btn-send-reset:hover:not(:disabled) { background: #e8ecf4; }
 
@@ -146,6 +151,7 @@
   <!-- Success banner -->
   <div id="send-success-banner" class="send-banner">
     <span id="send-success-text"></span>
+    <span id="send-countdown"></span>
   </div>
 
   <!-- Action buttons -->
@@ -161,8 +167,8 @@
     </button>
   </div>
 
-  <!-- Reset button (visible only after a successful send) -->
-  <div>
+  <!-- Reset row — always visible below a separator line -->
+  <div id="send-reset-row">
     <button type="button" id="btn-send-reset" class="send-btn">
       &#x1F504; Reset for next campaign
     </button>
@@ -178,11 +184,12 @@
  *   loading    → button shows spinner + disabled
  *   warnings   → warning banner + "Proceed" / "Cancel" buttons
  *   errors     → error banner shown, send button re-enabled
- *   success    → success banner + "Reset" button
+ *   success    → success banner + 5-second auto-reset countdown
  */
 const Send = (() => {
 
   var _pendingWarnings = [];
+  var _autoResetTimer  = null;   // holds the setInterval id during countdown
 
   // ── DOM refs (safe after DOMContentLoaded) ─────────────────────────────────
 
@@ -198,25 +205,35 @@ const Send = (() => {
     var errBanner   = _el('send-error-banner');
     var warnBanner  = _el('send-warning-banner');
     var succBanner  = _el('send-success-banner');
+    var countdown   = _el('send-countdown');
 
-    // Reset everything first
+    // Cancel any running auto-reset timer when changing state.
+    _clearCountdown();
+
+    // Reset to defaults first
     btnPrimary.style.display  = '';
     btnProceed.style.display  = 'none';
     btnCancel.style.display   = 'none';
-    btnReset.style.display    = 'none';
     errBanner.style.display   = 'none';
     warnBanner.style.display  = 'none';
     succBanner.style.display  = 'none';
+    countdown.innerHTML       = '';
     btnPrimary.disabled       = false;
     btnPrimary.innerHTML      = '&#128235; Send Notifications';
+
+    // Reset button is always enabled except while loading or resetting.
+    btnReset.disabled         = false;
+    btnReset.innerHTML        = '&#x1F504; Reset for next campaign';
 
     if (state === 'loading') {
       btnPrimary.disabled     = true;
       btnPrimary.innerHTML    = '<span class="send-spinner"></span> Sending\u2026';
+      btnReset.disabled       = true;
 
     } else if (state === 'saving') {
       btnPrimary.disabled     = true;
       btnPrimary.innerHTML    = '<span class="send-spinner"></span> Saving\u2026';
+      btnReset.disabled       = true;
 
     } else if (state === 'warnings') {
       _el('send-warning-list').innerHTML = (data || [])
@@ -235,10 +252,53 @@ const Send = (() => {
       _el('send-success-text').innerHTML =
         '&#9989; Sent <strong>' + data.count + '</strong> email' +
         (data.count !== 1 ? 's' : '') + ' successfully. ' +
-        'Run Log row: <strong>' + data.runLogRow + '</strong>.';
+        'Run Log row: <strong>' + data.runLogRow + '</strong>. ';
       succBanner.style.display  = 'block';
       btnPrimary.style.display  = 'none';
-      btnReset.style.display    = '';
+
+      // Start 5-second auto-reset countdown.
+      _startCountdown(5);
+    }
+  }
+
+  // ── Auto-reset countdown ───────────────────────────────────────────────────
+
+  function _startCountdown(seconds) {
+    var remaining = seconds;
+    var countdown = _el('send-countdown');
+    countdown.innerHTML = '&nbsp;Resetting in <strong>' + remaining + 's</strong>\u2026 ' +
+      '<a href="#" id="send-reset-now" style="color:#166534;">Reset now</a>';
+
+    document.getElementById('send-reset-now').addEventListener('click', function (e) {
+      e.preventDefault();
+      _clearCountdown();
+      _onResetClick();
+    });
+
+    _autoResetTimer = setInterval(function () {
+      remaining--;
+      if (remaining <= 0) {
+        _clearCountdown();
+        _onResetClick();
+        return;
+      }
+      var cd = _el('send-countdown');
+      if (cd) {
+        cd.innerHTML = '&nbsp;Resetting in <strong>' + remaining + 's</strong>\u2026 ' +
+          '<a href="#" id="send-reset-now" style="color:#166534;">Reset now</a>';
+        document.getElementById('send-reset-now').addEventListener('click', function (e) {
+          e.preventDefault();
+          _clearCountdown();
+          _onResetClick();
+        });
+      }
+    }, 1000);
+  }
+
+  function _clearCountdown() {
+    if (_autoResetTimer !== null) {
+      clearInterval(_autoResetTimer);
+      _autoResetTimer = null;
     }
   }
 
@@ -287,15 +347,31 @@ const Send = (() => {
   // ── Reset flow ─────────────────────────────────────────────────────────────
 
   function _onResetClick() {
+    _clearCountdown();
     var btn = _el('btn-send-reset');
-    btn.disabled    = true;
-    btn.textContent = 'Resetting\u2026';
+    btn.disabled  = true;
+    btn.innerHTML = '<span class="send-spinner" style="border-top-color:#15192D;border-color:rgba(21,25,45,.3);"></span> Resetting\u2026';
+
     google.script.run
-      .withSuccessHandler(function () { window.location.reload(); })
+      .withSuccessHandler(function (r) {
+        if (r && !r.ok) {
+          btn.disabled  = false;
+          btn.innerHTML = '&#x1F504; Reset for next campaign';
+          var succBanner = _el('send-success-banner');
+          if (succBanner.style.display === 'block') {
+            succBanner.innerHTML +=
+              '<br><span style="color:#991B1B;">Reset failed: ' + _esc(r.error || 'unknown error') + '</span>';
+          } else {
+            _setState('errors', ['Reset failed: ' + _esc(r.error || 'unknown error')]);
+          }
+          return;
+        }
+        window.location.reload();
+      })
       .withFailureHandler(function (e) {
-        btn.disabled    = false;
-        btn.textContent = '\u{1F504} Reset for next campaign';
-        _onErr(e);
+        btn.disabled  = false;
+        btn.innerHTML = '&#x1F504; Reset for next campaign';
+        _setState('errors', ['Reset failed: ' + (e && e.message ? e.message : String(e))]);
       })
       .webAppReset();
   }

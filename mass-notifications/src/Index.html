@@ -36,6 +36,10 @@
     document.addEventListener('DOMContentLoaded', function () {
       google.script.run
         .withSuccessHandler(function (data) {
+          if (!data) {
+            console.error('getInitialData returned null — likely a GAS serialisation error. Check server logs.');
+            return;
+          }
           // data = { config, recipients, templates, cards }
           Recipients.init(data.recipients, data.config.maxPerRun);
           Config.init(data);

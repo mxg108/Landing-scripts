@@ -308,6 +308,20 @@ const Recipients = (() => {
 
   // ── Private helpers ───────────────────────────────────────────────────────
 
+  /** Validates a single non-email field (name/unit): green if filled, red if empty. */
+  function _validateField(input, rowHasEmail) {
+    if (!rowHasEmail) { input.classList.remove('rec-invalid', 'rec-valid'); return; }
+    const filled = input.value.trim() !== '';
+    input.classList.toggle('rec-invalid', !filled);
+    input.classList.toggle('rec-valid',    filled);
+  }
+
+  /** Re-validates name and unit cells in a row after the email changes. */
+  function _validateRowFields(tr, rowHasEmail) {
+    _validateField(tr.querySelector('.rec-name'), rowHasEmail);
+    _validateField(tr.querySelector('.rec-unit'), rowHasEmail);
+  }
+
   /**
    * Creates and appends one table row.
    * data is optional — passing {} gives a blank row.
@@ -332,16 +346,26 @@ const Recipients = (() => {
            ' value="' + _esc(data.unit  || '') + '"></td>' +
       '<td><button class="rec-del-btn" title="Remove row">&#x2715;</button></td>';
 
-    // Validate email when the field loses focus (blur event).
+    // Validate email on blur; also re-validate name/unit for the same row.
     tr.querySelector('.rec-email').addEventListener('blur', function () {
       const val = this.value.trim();
       if (val === '') {
         this.classList.remove('rec-invalid', 'rec-valid');
+        _validateRowFields(tr, false);
         return;
       }
       const ok = _validEmail(val);
       this.classList.toggle('rec-invalid', !ok);
       this.classList.toggle('rec-valid',    ok);
+      _validateRowFields(tr, true);
+    });
+
+    // Validate name/unit on blur when the row has an email.
+    tr.querySelector('.rec-name').addEventListener('blur', function () {
+      _validateField(this, tr.querySelector('.rec-email').value.trim() !== '');
+    });
+    tr.querySelector('.rec-unit').addEventListener('blur', function () {
+      _validateField(this, tr.querySelector('.rec-email').value.trim() !== '');
     });
 
     // Delete button removes this row from the DOM.

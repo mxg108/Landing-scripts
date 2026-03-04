@@ -84,24 +84,47 @@ function include(filename) {
  * }}
  */
 function getInitialData() {
-  const cfg = loadConfig_();
-  const tz  = cfg.timezone || 'America/Mexico_City';
-
   // Strip the non-serialisable Date objects from cfg before sending to the
   // client. Replace them with pre-formatted yyyy-MM-dd strings so that
   // <input type="date"> can consume them directly.
+  const cfg = loadConfig_();
+  const tz  = cfg.timezone || 'America/Mexico_City';
   const clientCfg = Object.assign({}, cfg);
   delete clientCfg.start;
   delete clientCfg.end;
   clientCfg.windowStartStr = cfg.start ? Utilities.formatDate(cfg.start, tz, 'yyyy-MM-dd') : '';
   clientCfg.windowEndStr   = cfg.end   ? Utilities.formatDate(cfg.end,   tz, 'yyyy-MM-dd') : '';
 
-  return {
+  const result = {
     config:     clientCfg,
     recipients: getRecipientsForWebApp_(cfg.recipientsSheetName),
     templates:  Object.keys(EMAIL_TEMPLATES),
     cards:      Object.keys(CARD_REGISTRY),
   };
+
+  // Verify serializability before returning. GAS silently passes null to the
+  // success handler when the return value contains a non-serialisable type
+  // (e.g. a Date object that slipped through). Catching it here converts the
+  // silent null into a real error that routes to the failure handler instead.
+  try {
+    JSON.stringify(result);
+  } catch (e) {
+    throw new Error('getInitialData: payload not JSON-serialisable — ' + e.message +
+      '. clientCfg keys: ' + Object.keys(clientCfg).join(', '));
+  }
+
+  return result;
+}
+
+/**
+ * Converts a Google Sheets cell value to a plain string safe for JSON.
+ * Sheets formats numeric unit numbers (e.g. 1101) as Date objects when the
+ * column has date formatting — in that case we extract the year, which is the
+ * original numeric value Sheets mis-interpreted as a year.
+ */
+function _sheetCellToStr_(v) {
+  if (v instanceof Date) return String(v.getFullYear());
+  return String(v == null ? '' : v);
 }
 
 /**
@@ -121,9 +144,9 @@ function getRecipientsForWebApp_(sheetName) {
     .getValues()
     .filter(r => String(r[COL.EMAIL - 1]).trim())
     .map(r => ({
-      email: r[COL.EMAIL - 1],
-      name:  r[COL.NAME  - 1],
-      unit:  r[COL.UNIT  - 1],
+      email: String(r[COL.EMAIL - 1] || ''),
+      name:  String(r[COL.NAME  - 1] || ''),
+      unit:  _sheetCellToStr_(r[COL.UNIT - 1]),
     }));
 }
 
@@ -160,6 +183,11 @@ function saveRecipients(rows) {
   });
 
   sh.getRange(2, 1, data.length, COL_MAX).setValues(data);
+
+  // Force the unit column to plain-text number format so Sheets does not
+  // re-interpret numeric unit numbers (e.g. 1101) as dates on the next read.
+  sh.getRange(2, COL.UNIT, data.length, 1).setNumberFormat('@');
+
   return data.length;
 }
 
@@ -330,6 +358,10 @@ function webAppSend(skipWarnings) {
  * @return {{ ok: boolean }}
  */
 function webAppReset() {
-  fullResetForNextUse();
-  return { ok: true };
+  try {
+    fullResetForNextUse();
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 }
