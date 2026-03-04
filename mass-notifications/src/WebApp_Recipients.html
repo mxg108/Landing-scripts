@@ -1,0 +1,486 @@
+<!--
+  WebApp_Recipients.html — Section 1: Recipients Grid
+  Included into Index.html via <?!= include('WebApp_Recipients') ?>
+
+  Responsibilities:
+    • Display an editable table (Email / Name / Unit) pre-populated from
+      the Mass_Notification sheet via getInitialData().recipients.
+    • Validate email addresses on blur (inline red highlight).
+    • Let the operator add/remove rows manually.
+    • Parse and import a .csv file (columns: email, name, unit).
+    • Detect a paste from Google Sheets (tab-separated) and auto-fill rows.
+    • Expose Recipients.getRows() so other sections can collect the data
+      before calling saveRecipients() on the server.
+-->
+
+<style>
+  /* ── Section card ─────────────────────────────────────────────────────── */
+  #section-recipients {
+    background: #ffffff;
+    border: 1px solid #dce3f0;
+    border-radius: 10px;
+    padding: 24px 28px;
+    margin-bottom: 28px;
+  }
+
+  /* ── Header row ─────────────────────────────────────────────────────── */
+  .rec-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 16px;
+  }
+  .rec-header h2 {
+    font-size: 17px;
+    font-weight: 700;
+    color: #15192D;
+    margin: 0 0 4px;
+  }
+  .rec-subtitle {
+    font-size: 12px;
+    color: #4A4A4A;
+    margin: 0;
+  }
+
+  /* ── Row counter badge ──────────────────────────────────────────────── */
+  #rec-counter {
+    font-size: 13px;
+    font-weight: 600;
+    background: #E7EFFB;
+    color: #1A61D9;
+    border-radius: 20px;
+    padding: 4px 12px;
+    white-space: nowrap;
+  }
+  #rec-counter.rec-over-limit {
+    background: #fde8e8;
+    color: #D9534F;
+  }
+
+  /* ── Toolbar ────────────────────────────────────────────────────────── */
+  .rec-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+  .rec-btn {
+    font-size: 13px;
+    font-family: Arial, Helvetica, sans-serif;
+    border-radius: 6px;
+    padding: 6px 14px;
+    cursor: pointer;
+    border: none;
+    transition: opacity .15s;
+  }
+  .rec-btn:hover { opacity: .85; }
+  .rec-btn-primary {
+    background: #1A61D9;
+    color: #fff;
+  }
+  .rec-btn-secondary {
+    background: #E7EFFB;
+    color: #15192D;
+    border: 1px solid #c3d4ef;
+  }
+  .rec-toolbar-hint {
+    font-size: 12px;
+    color: #888;
+    margin-left: 4px;
+  }
+
+  /* ── Table ──────────────────────────────────────────────────────────── */
+  .rec-table-wrap {
+    overflow-x: auto;
+    border: 1px solid #dce3f0;
+    border-radius: 8px;
+  }
+  #rec-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  #rec-table thead tr {
+    background: #f5f7fa;
+  }
+  #rec-table th {
+    text-align: left;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: #4A4A4A;
+    padding: 9px 10px;
+    border-bottom: 1px solid #dce3f0;
+  }
+  #rec-table td {
+    padding: 4px 6px;
+    border-bottom: 1px solid #f0f2f7;
+    vertical-align: middle;
+  }
+  #rec-table tbody tr:last-child td { border-bottom: none; }
+  #rec-table tbody tr:hover { background: #fafbfd; }
+
+  /* ── Column widths ──────────────────────────────────────────────────── */
+  .rec-col-num  { width: 36px; text-align: center; color: #aaa; font-size: 12px; }
+  .rec-col-email{ min-width: 220px; }
+  .rec-col-name { min-width: 160px; }
+  .rec-col-unit { min-width: 90px;  }
+  .rec-col-del  { width: 36px; text-align: center; }
+
+  /* ── Inputs inside table cells ──────────────────────────────────────── */
+  .rec-input {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-size: 13px;
+    font-family: Arial, Helvetica, sans-serif;
+    color: #15192D;
+    background: transparent;
+    outline: none;
+    transition: border-color .15s, background .15s;
+  }
+  .rec-input:focus {
+    border-color: #1A61D9;
+    background: #fff;
+  }
+  /* Email states set by JS on blur */
+  .rec-input.rec-invalid {
+    border-color: #D9534F;
+    background: #fff5f5;
+  }
+  .rec-input.rec-valid {
+    border-color: #28A745;
+  }
+
+  /* ── Delete button ──────────────────────────────────────────────────── */
+  .rec-del-btn {
+    background: none;
+    border: none;
+    color: #ccc;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 4px 6px;
+    border-radius: 4px;
+    transition: color .15s, background .15s;
+  }
+  .rec-del-btn:hover {
+    color: #D9534F;
+    background: #fde8e8;
+  }
+
+  /* ── Required asterisk ──────────────────────────────────────────────── */
+  .rec-req { color: #D9534F; margin-left: 2px; }
+
+  /* ── Empty state ────────────────────────────────────────────────────── */
+  #rec-empty {
+    text-align: center;
+    padding: 32px 16px;
+    color: #aaa;
+    font-size: 13px;
+    display: none;
+  }
+</style>
+
+<section id="section-recipients">
+
+  <div class="rec-header">
+    <div>
+      <h2>Recipients</h2>
+      <p class="rec-subtitle">
+        Maps to Mass_Notification sheet — col A (Email), B (Name), C (Unit).
+        Saving will overwrite the sheet.
+      </p>
+    </div>
+    <span id="rec-counter">0 / 500</span>
+  </div>
+
+  <div class="rec-toolbar">
+    <button id="rec-add-btn" class="rec-btn rec-btn-primary">+ Add row</button>
+    <button id="rec-csv-btn" class="rec-btn rec-btn-secondary">&#x2B06; Import CSV</button>
+    <!--
+      Hidden file input — triggered programmatically by the Import CSV button.
+      accept=".csv" limits the OS file picker to CSV files only.
+    -->
+    <input type="file" id="rec-csv-input" accept=".csv" style="display:none">
+    <span class="rec-toolbar-hint">or copy cells from Google Sheets and paste below</span>
+  </div>
+
+  <div class="rec-table-wrap">
+    <table id="rec-table">
+      <thead>
+        <tr>
+          <th class="rec-col-num">#</th>
+          <th class="rec-col-email">Email<span class="rec-req">*</span></th>
+          <th class="rec-col-name">Name</th>
+          <th class="rec-col-unit">Unit</th>
+          <th class="rec-col-del"></th>
+        </tr>
+      </thead>
+      <tbody id="rec-tbody"></tbody>
+    </table>
+    <div id="rec-empty">No recipients yet — add a row or import a CSV.</div>
+  </div>
+
+</section>
+
+<script>
+/**
+ * Recipients module — manages the editable recipients grid.
+ *
+ * Exposed globally so Index.html and other sections can call:
+ *   Recipients.init(rows, maxPerRun) — populate from server data
+ *   Recipients.getRows()             — collect current grid data before saving
+ *   Recipients.validate()            — highlight invalid emails, returns true/false
+ */
+const Recipients = (() => {
+
+  // ── State ────────────────────────────────────────────────────────────────
+  let _maxRows = 500;
+
+  // Shorthand DOM lookups (functions so they always return live elements)
+  const $tbody   = () => document.getElementById('rec-tbody');
+  const $counter = () => document.getElementById('rec-counter');
+  const $empty   = () => document.getElementById('rec-empty');
+
+  // ── Public API ────────────────────────────────────────────────────────────
+
+  /**
+   * Populates the grid from the data returned by getInitialData().
+   * Called once from Index.html after the server responds.
+   *
+   * @param {Array<{email,name,unit}>} rows
+   * @param {number} maxPerRun — from cfg.maxPerRun, drives the counter cap
+   */
+  function init(rows, maxPerRun) {
+    _maxRows = maxPerRun || 500;
+    (rows || []).forEach(r => _addRow(r));
+    _refresh();
+  }
+
+  /**
+   * Returns the current grid contents as an array of plain objects,
+   * filtering out any rows with no email (blank rows are ignored).
+   *
+   * Called by Index.html before invoking saveRecipients() on the server.
+   *
+   * @return {Array<{email:string, name:string, unit:string}>}
+   */
+  function getRows() {
+    return Array.from($tbody().querySelectorAll('tr')).map(tr => ({
+      email: tr.querySelector('.rec-email').value.trim(),
+      name:  tr.querySelector('.rec-name').value.trim(),
+      unit:  tr.querySelector('.rec-unit').value.trim(),
+    })).filter(r => r.email);
+  }
+
+  /**
+   * Highlights invalid email addresses in red.
+   * Returns true if all non-empty email fields are valid.
+   * Called by Index.html before allowing a preview or send.
+   *
+   * @return {boolean}
+   */
+  function validate() {
+    let allValid = true;
+    $tbody().querySelectorAll('tr').forEach(tr => {
+      const inp = tr.querySelector('.rec-email');
+      const val = inp.value.trim();
+      if (val === '') return; // blank rows are filtered out by getRows(), not an error here
+      const ok = _validEmail(val);
+      inp.classList.toggle('rec-invalid', !ok);
+      inp.classList.toggle('rec-valid',    ok);
+      if (!ok) allValid = false;
+    });
+    return allValid;
+  }
+
+  // ── Private helpers ───────────────────────────────────────────────────────
+
+  /**
+   * Creates and appends one table row.
+   * data is optional — passing {} gives a blank row.
+   */
+  function _addRow(data) {
+    data = data || {};
+    const tr = document.createElement('tr');
+
+    // We build the cell structure directly. Each cell holds one <input>.
+    // _esc() prevents data values that contain quotes from breaking the
+    // value="" attribute (e.g. a name like O'Brien or an email with <).
+    tr.innerHTML =
+      '<td class="rec-col-num"></td>' +
+      '<td><input class="rec-input rec-email" type="email"' +
+           ' placeholder="resident@email.com"' +
+           ' value="' + _esc(data.email || '') + '"></td>' +
+      '<td><input class="rec-input rec-name" type="text"' +
+           ' placeholder="First Last"' +
+           ' value="' + _esc(data.name  || '') + '"></td>' +
+      '<td><input class="rec-input rec-unit" type="text"' +
+           ' placeholder="101"' +
+           ' value="' + _esc(data.unit  || '') + '"></td>' +
+      '<td><button class="rec-del-btn" title="Remove row">&#x2715;</button></td>';
+
+    // Validate email when the field loses focus (blur event).
+    tr.querySelector('.rec-email').addEventListener('blur', function () {
+      const val = this.value.trim();
+      if (val === '') {
+        this.classList.remove('rec-invalid', 'rec-valid');
+        return;
+      }
+      const ok = _validEmail(val);
+      this.classList.toggle('rec-invalid', !ok);
+      this.classList.toggle('rec-valid',    ok);
+    });
+
+    // Delete button removes this row from the DOM.
+    tr.querySelector('.rec-del-btn').addEventListener('click', function () {
+      tr.remove();
+      _refresh();
+    });
+
+    $tbody().appendChild(tr);
+    _refresh();
+  }
+
+  /**
+   * Re-numbers the # column and updates the counter badge.
+   * Called after every row add or remove.
+   */
+  function _refresh() {
+    const rows = Array.from($tbody().querySelectorAll('tr'));
+    rows.forEach((tr, i) => {
+      tr.querySelector('.rec-col-num').textContent = i + 1;
+    });
+    const n = rows.length;
+    $counter().textContent = n + ' / ' + _maxRows;
+    $counter().classList.toggle('rec-over-limit', n > _maxRows);
+    $empty().style.display = n === 0 ? 'block' : 'none';
+  }
+
+  /** Simple but solid email regex — rejects missing @ or missing TLD. */
+  function _validEmail(v) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v);
+  }
+
+  /**
+   * Escapes characters that would break a value="" HTML attribute.
+   * Prevents a name like O"Brien from closing the attribute early.
+   */
+  function _esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  }
+
+  // ── CSV import ────────────────────────────────────────────────────────────
+
+  /**
+   * Parses the selected .csv file and adds a row for each data line.
+   * Handles quoted fields (including quoted commas and escaped quotes).
+   * Auto-detects and skips a header row (first cell has no @ sign).
+   *
+   * This runs entirely in the browser (FileReader API) — no server call needed.
+   *
+   * @param {Event} event — change event from the hidden <input type="file">
+   */
+  function handleCSV(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function (e) {
+      const rows = _parseCSV(e.target.result);
+      // If the first cell of the first row looks like a header (no @), skip it.
+      const start = (rows.length > 0 && !_validEmail(rows[0][0])) ? 1 : 0;
+      rows.slice(start).forEach(cols => {
+        if (!cols[0]) return;
+        _addRow({ email: cols[0], name: cols[1] || '', unit: cols[2] || '' });
+      });
+      event.target.value = ''; // reset so the same file can be imported again
+    };
+    reader.readAsText(file);
+  }
+
+  /**
+   * RFC-4180-ish CSV parser.
+   * Handles: quoted fields, commas inside quotes, "" as escaped quote,
+   * both \r\n and \n line endings.
+   *
+   * @param  {string} text — raw file contents
+   * @return {Array<string[]>} — 2D array of cell values
+   */
+  function _parseCSV(text) {
+    return text.replace(/\r\n/g, '\n').split('\n').map(line => {
+      const cols = [];
+      let cur = '', inQuote = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+          // Two consecutive quotes inside a quoted field = literal "
+          if (inQuote && line[i + 1] === '"') { cur += '"'; i++; }
+          else inQuote = !inQuote;
+        } else if (ch === ',' && !inQuote) {
+          cols.push(cur.trim()); cur = '';
+        } else {
+          cur += ch;
+        }
+      }
+      cols.push(cur.trim());
+      return cols;
+    }).filter(r => r.some(c => c)); // drop entirely blank lines
+  }
+
+  // ── Paste from Google Sheets ──────────────────────────────────────────────
+  //
+  // When a user selects cells in Google Sheets and presses Cmd/Ctrl+C, the
+  // clipboard contains tab-separated values (\t between columns, \n between
+  // rows). We intercept paste events inside the table and auto-fill rows
+  // instead of pasting raw text into a single cell.
+
+  document.addEventListener('paste', function (e) {
+    // Only fire when the user is pasting inside the recipients table.
+    if (!e.target.closest('#rec-table')) return;
+
+    const text = (e.clipboardData || window.clipboardData).getData('text');
+    // If there are no tabs or newlines it's a plain single-value paste —
+    // let the browser handle it normally inside the focused input.
+    if (!text.includes('\t') && !text.includes('\n')) return;
+
+    e.preventDefault(); // stop the browser from inserting raw text
+    text.replace(/\r\n/g, '\n').trim().split('\n').forEach(line => {
+      if (!line.trim()) return;
+      const cols = line.split('\t');
+      _addRow({ email: cols[0] || '', name: cols[1] || '', unit: cols[2] || '' });
+    });
+  });
+
+  // ── Return public interface ───────────────────────────────────────────────
+  return { init, getRows, validate, addRow: _addRow };
+
+})(); // end Recipients IIFE
+
+
+// ── Toolbar wiring ──────────────────────────────────────────────────────────
+//
+// These live outside the module because they reference DOM elements by ID
+// and run after the HTML above has been parsed.
+
+document.getElementById('rec-add-btn').addEventListener('click', function () {
+  Recipients.addRow({});
+});
+
+// The Import CSV button triggers the hidden file input.
+// This pattern avoids styling a native <input type="file"> (notoriously hard).
+document.getElementById('rec-csv-btn').addEventListener('click', function () {
+  document.getElementById('rec-csv-input').click();
+});
+
+document.getElementById('rec-csv-input').addEventListener('change', function (e) {
+  Recipients.handleCSV
+    ? Recipients.handleCSV(e)
+    : void 0;
+});
+</script>

@@ -19,16 +19,14 @@
 <body>
 
   <h1>Mass Notifications</h1>
-  <p>Web App shell — sections coming soon.</p>
+
+  <!-- Section 1: Recipients grid -->
+  <?!= include('WebApp_Recipients') ?>
 
   <!--
-    SECTION PARTIALS WILL GO HERE, e.g.:
-      <?!= include('WebApp_Recipients') ?>
-      <?!= include('WebApp_Config')     ?>
-      <?!= include('WebApp_Preview')    ?>
-
-    The <?!= ... ?> syntax runs server-side GAS code at render time.
-    include() is defined in WebApp.gs and returns the raw HTML of each file.
+    Sections 2 and 3 will follow:
+      <?!= include('WebApp_Config')   ?>
+      <?!= include('WebApp_Preview')  ?>
   -->
 
   <script>
@@ -46,8 +44,11 @@
     document.addEventListener('DOMContentLoaded', function () {
       google.script.run
         .withSuccessHandler(function (data) {
-          console.log('Initial data loaded:', data);
-          // TODO: hand data off to each section's init function.
+          // data = { config, recipients, templates, cards }
+          // Hand each piece off to its section's init function.
+          Recipients.init(data.recipients, data.config.maxPerRun);
+          // Config.init(data)    ← coming next
+          // Preview.init(data)   ← coming after that
         })
         .withFailureHandler(function (err) {
           console.error('Failed to load initial data:', err.message);
