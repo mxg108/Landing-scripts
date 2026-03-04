@@ -26,28 +26,21 @@
   <!-- Section 2: Email configuration -->
   <?!= include('WebApp_Config') ?>
 
-  <!-- Section 3 (WebApp_Preview) will be included here once built. -->
+  <!-- Section 3: Live preview -->
+  <?!= include('WebApp_Preview') ?>
+
+  <!-- Section 4: Send -->
+  <?!= include('WebApp_Send') ?>
 
   <script>
-    /**
-     * google.script.run — how the browser talks to WebApp.gs
-     *
-     * Pattern:
-     *   google.script.run
-     *     .withSuccessHandler(fn)   ← called with the return value on success
-     *     .withFailureHandler(fn)   ← called with the Error object on failure
-     *     .yourServerFunction(args) ← any public function in WebApp.gs
-     *
-     * This is asynchronous — the browser doesn't block while GAS runs.
-     */
     document.addEventListener('DOMContentLoaded', function () {
       google.script.run
         .withSuccessHandler(function (data) {
           // data = { config, recipients, templates, cards }
-          // Hand each piece off to its section's init function.
           Recipients.init(data.recipients, data.config.maxPerRun);
           Config.init(data);
-          // Preview.init(data)   ← coming after that
+          // Seed the send summary with the loaded values.
+          Send.updateSummary(data.recipients.length, data.config);
         })
         .withFailureHandler(function (err) {
           console.error('Failed to load initial data:', err.message);

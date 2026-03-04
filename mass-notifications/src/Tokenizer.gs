@@ -127,7 +127,14 @@ function buildHtmlBody_(cfg, tokens, unitStr) {
     if (cardHtml) parts.push(cardHtml);
   }
 
-  parts.push(renderWithTokens_(cfg.bodyIntroHtml, tokens));
+  // Quill (the web-app body editor) wraps each paragraph in a bare <p> tag.
+  // Browser-default <p> margins (~16px top + bottom) make multi-paragraph
+  // bodies appear double-spaced in email clients. Apply a compact inline
+  // margin so spacing matches the editor view. This only affects the rendered
+  // email — the stored body_intro_html is left unchanged.
+  const introHtml = renderWithTokens_(cfg.bodyIntroHtml, tokens)
+    .replace(/<p>/gi, '<p style="margin:0 0 0.8em 0;">');
+  parts.push(introHtml);
 
   if (cfg.includeUnitLine && unitStr) {
     parts.push(`<p><strong>Your unit number is:</strong> ${sanitize_(unitStr)}</p>`);

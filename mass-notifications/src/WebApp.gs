@@ -86,16 +86,19 @@ function include(filename) {
 function getInitialData() {
   const cfg = loadConfig_();
   const tz  = cfg.timezone || 'America/Mexico_City';
+
+  // Strip the non-serialisable Date objects from cfg before sending to the
+  // client. Replace them with pre-formatted yyyy-MM-dd strings so that
+  // <input type="date"> can consume them directly.
+  const clientCfg = Object.assign({}, cfg);
+  delete clientCfg.start;
+  delete clientCfg.end;
+  clientCfg.windowStartStr = cfg.start ? Utilities.formatDate(cfg.start, tz, 'yyyy-MM-dd') : '';
+  clientCfg.windowEndStr   = cfg.end   ? Utilities.formatDate(cfg.end,   tz, 'yyyy-MM-dd') : '';
+
   return {
-    // Date objects (cfg.start / cfg.end) don't survive the google.script.run
-    // JSON serialisation cleanly across all browsers. Format them as plain
-    // yyyy-MM-dd strings server-side so <input type="date"> can consume them
-    // directly without any client-side date-parsing gymnastics.
-    config: Object.assign({}, cfg, {
-      windowStartStr: cfg.start ? Utilities.formatDate(cfg.start, tz, 'yyyy-MM-dd') : '',
-      windowEndStr:   cfg.end   ? Utilities.formatDate(cfg.end,   tz, 'yyyy-MM-dd') : '',
-    }),
-    recipients: getRecipientsForWebApp_(),
+    config:     clientCfg,
+    recipients: getRecipientsForWebApp_(cfg.recipientsSheetName),
     templates:  Object.keys(EMAIL_TEMPLATES),
     cards:      Object.keys(CARD_REGISTRY),
   };
@@ -105,11 +108,12 @@ function getInitialData() {
  * Reads the recipients sheet and returns rows as plain objects.
  * Skips blank rows (no email).
  *
+ * @param  {string=} sheetName — overrides DEFAULT_RECIPIENTS_SHEET when supplied
  * @return {Array<{email: string, name: string, unit: string}>}
  */
-function getRecipientsForWebApp_() {
+function getRecipientsForWebApp_(sheetName) {
   const ss = SpreadsheetApp.getActive();
-  const sh = ss.getSheetByName(DEFAULT_RECIPIENTS_SHEET);
+  const sh = ss.getSheetByName(sheetName || DEFAULT_RECIPIENTS_SHEET);
   if (!sh || sh.getLastRow() < 2) return [];
 
   return sh
@@ -177,13 +181,13 @@ function saveConfigValue(key, value) {
 /**
  * Web-App-safe version of loadTemplate_().
  * Writes the template's config values to the Config sheet, then returns
- * the hint text as a string (instead of calling safeAlert_ which pops a
- * dialog in the spreadsheet UI, not the web app).
+ * both the hint text and the refreshed config in a single call — so the
+ * client can populate all fields without a second getInitialData() round-trip.
  *
  * Called via google.script.run.loadTemplateFrontend(name).
  *
- * @param  {string}      templateName — must match a key in EMAIL_TEMPLATES
- * @return {string|null} hint text, or null if the template has no _hint
+ * @param  {string} templateName — must match a key in EMAIL_TEMPLATES
+ * @return {{ hint: string|null, config: Object }}
  */
 function loadTemplateFrontend(templateName) {
   const template = EMAIL_TEMPLATES[templateName];
@@ -197,64 +201,135 @@ function loadTemplateFrontend(templateName) {
     if (!(key in template)) setConfigValue_(key, '');
   });
 
-  return template._hint || null;
+  // Read back the updated config so the client can populate all fields in
+  // one round-trip instead of making a separate getInitialData() call.
+  // Strip non-serialisable Date objects (same pattern as getInitialData).
+  const cfg = loadConfig_();
+  const tz  = cfg.timezone || 'America/Mexico_City';
+  const clientCfg = Object.assign({}, cfg);
+  delete clientCfg.start;
+  delete clientCfg.end;
+  clientCfg.windowStartStr = cfg.start ? Utilities.formatDate(cfg.start, tz, 'yyyy-MM-dd') : '';
+  clientCfg.windowEndStr   = cfg.end   ? Utilities.formatDate(cfg.end,   tz, 'yyyy-MM-dd') : '';
+  return {
+    hint:   template._hint || null,
+    config: clientCfg,
+  };
 }
 
 // ── Client → Server: preview ──────────────────────────────────────────────────
 
 /**
- * Returns a rendered HTML string for a live email preview.
+ * Returns a rendered preview of the email for the first eligible recipient.
  *
- * The front-end calls saveRecipients() and saveConfigValue() first to persist
- * the current form state to the sheets, then calls this function. We read
- * everything from the sheets (same path as a real send) so the preview is
- * guaranteed to match what would actually go out.
+ * The client saves recipients + config to the sheets first (same as before
+ * a real send), then calls this. We read everything from the sheets so the
+ * preview is guaranteed to match what would actually go out.
  *
- * Returns the HTML for the FIRST eligible recipient only (row 2).
- *
- * @return {string} Rendered email HTML, or an error message string.
+ * @return {{ html: string, recipientEmail: string|null, error: string|null }}
  */
 function getEmailPreview() {
   try {
-    const cfg  = loadConfig_();
-    const html = buildPreviewHtml_(cfg);
-    return html;
+    const cfg    = loadConfig_();
+    const result = buildPreviewHtml_(cfg);
+    return { html: result.html, recipientEmail: result.recipientEmail, error: null };
   } catch (e) {
-    return `<p style="color:red;font-family:sans-serif;">Preview error: ${e.message}</p>`;
+    return { html: '', recipientEmail: null, error: e.message };
   }
 }
 
 /**
- * Builds a preview HTML string from the first eligible recipient row.
- * Stub — will be wired to the existing template/token pipeline in a later pass.
+ * Builds a preview HTML string using the real send pipeline.
+ * Uses the first eligible recipient row for per-row tokens; falls back to
+ * generic tokens if the recipients sheet is empty or has no eligible rows.
  *
- * @param {Object} cfg — result of loadConfig_()
- * @return {string}
+ * @param  {Object} cfg — result of loadConfig_()
+ * @return {{ html: string, recipientEmail: string|null }}
  */
 function buildPreviewHtml_(cfg) {
-  // TODO: wire to buildEmailBody_() / renderWithTokens_() pipeline.
-  // Returning a placeholder until WebApp_Preview.html is built.
-  return `
-    <p style="font-family:Arial,sans-serif;color:#555;padding:16px;">
-      Preview will render here. Config loaded: <strong>${cfg.propertyName || '(no property name)'}</strong>
-    </p>`;
+  const sh      = getRecipientsSheet_(cfg);
+  const targets = getTargetRows_(sh, 1);
+
+  let tokens;
+  let recipientEmail = null;
+
+  if (targets.length) {
+    tokens         = buildPerRowTokens_(cfg, targets[0]);
+    recipientEmail = targets[0].email;
+  } else {
+    // No eligible rows — use global tokens with placeholder values
+    tokens = Object.assign(buildGlobalTokens_(cfg), {
+      first_name:    'Resident',
+      member_name:   'Resident',
+      member_email:  '',
+      unit:          '101',
+    });
+  }
+
+  return {
+    html:           buildHtmlBody_(cfg, tokens, tokens.unit || ''),
+    recipientEmail: recipientEmail,
+  };
 }
 
 // ── Client → Server: send ─────────────────────────────────────────────────────
 
 /**
- * Sends the mass notification, then resets the sheet.
+ * Sends the mass notification from the Web App.
  *
- * The front-end must call saveRecipients() and saveConfigValue() for all
- * changed fields BEFORE calling this — we read everything from the sheets.
+ * The client must call saveRecipients() BEFORE calling this so the sheet
+ * reflects the current recipients grid.  Config fields are auto-saved on
+ * blur, so they're already up to date.
  *
- * @return {{ count: number, runLogRow: number }}
- *   count      — number of emails sent
- *   runLogRow  — Run_Log row the operator can use with restoreRecipientsFromRow()
+ * safeAlert_()    — no-op in Web App context (try-catch fallback to Logger)
+ * confirmProceed_() — returns true automatically in headless/non-UI context
+ * So calling sendModeIndividual_() / sendModeBcc_() directly is safe here.
+ *
+ * @param  {boolean} skipWarnings — pass true to send despite config warnings
+ * @return {{
+ *   ok:              boolean,
+ *   count:           number,    sent count   (set when ok: true)
+ *   runLogRow:       number,    Run_Log row  (set when ok: true)
+ *   errors:          string[],  blocking errors
+ *   warnings:        string[],  non-blocking warnings
+ *   requiresConfirm: boolean,   true when only warnings exist (no errors)
+ * }}
  */
-function webAppSend() {
-  // TODO: call sendMassNotifications() once the send pipeline is wired to
-  // accept a caller-supplied cfg rather than always calling loadConfig_() itself.
-  // For now this is a guarded stub so the button exists but does nothing destructive.
-  throw new Error('Send not yet wired — coming in the next development pass.');
+function webAppSend(skipWarnings) {
+  const cfg = loadConfig_();
+  const v   = validateConfig_(cfg);
+
+  if (v.errors.length) {
+    return { ok: false, errors: v.errors, warnings: v.warnings || [], requiresConfirm: false };
+  }
+
+  if (v.warnings.length && !skipWarnings) {
+    return { ok: false, errors: [], warnings: v.warnings, requiresConfirm: true };
+  }
+
+  // Run the send pipeline. Both helper functions are safe in non-UI context.
+  String(cfg.sendMode).toUpperCase() === 'BCC'
+    ? sendModeBcc_(cfg)
+    : sendModeIndividual_(cfg);
+
+  // logRunComplete_() is called inside the send functions and appends the
+  // final row to Run_Log. Read it back so the client can display it.
+  const log       = getRunLogSheet_();
+  const runLogRow = log.getLastRow();
+  const count     = Number(log.getRange(runLogRow, 5).getValue() || 0);
+
+  return { ok: true, count, runLogRow, errors: [], warnings: [] };
+}
+
+/**
+ * Archives + clears recipients and restores all config keys to safe defaults.
+ * Wraps fullResetForNextUse() — safe from Web App because every internal
+ * call uses safeAlert_() (which silently logs in non-UI context).
+ * The client should reload the page after this returns.
+ *
+ * @return {{ ok: boolean }}
+ */
+function webAppReset() {
+  fullResetForNextUse();
+  return { ok: true };
 }

@@ -1,0 +1,241 @@
+<style>
+  /* ── Section card ────────────────────────────────────────────────────────── */
+  #section-preview {
+    background: #ffffff;
+    border: 1px solid #dce3f0;
+    border-radius: 10px;
+    padding: 24px 28px;
+    margin-bottom: 28px;
+  }
+
+  /* ── Header row ──────────────────────────────────────────────────────────── */
+  #preview-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  #section-preview h2 {
+    font-size: 17px;
+    font-weight: 700;
+    color: #15192D;
+    margin: 0;
+  }
+  #preview-recipient-tag {
+    font-size: 11px;
+    color: #888;
+    background: #f0f2f7;
+    border-radius: 20px;
+    padding: 3px 10px;
+    display: none;
+  }
+
+  /* ── Refresh button ──────────────────────────────────────────────────────── */
+  #btn-preview-refresh {
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 7px 16px;
+    border: 1px solid #dce3f0;
+    border-radius: 6px;
+    background: #f5f7fa;
+    color: #15192D;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: background .15s;
+  }
+  #btn-preview-refresh:hover:not(:disabled) { background: #E7EFFB; border-color: #c3d4ef; }
+  #btn-preview-refresh:disabled { opacity: .5; cursor: default; }
+
+  /* ── Spinner (reuse animation from Send section) ─────────────────────────── */
+  .preview-spinner {
+    display: inline-block;
+    width: 12px; height: 12px;
+    border: 2px solid rgba(26,97,217,.3);
+    border-top-color: #1A61D9;
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    vertical-align: middle;
+  }
+
+  /* ── Placeholder / idle state ────────────────────────────────────────────── */
+  #preview-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 180px;
+    color: #aaa;
+    font-size: 13px;
+    gap: 10px;
+    border: 1px dashed #dce3f0;
+    border-radius: 8px;
+  }
+  #preview-placeholder svg { opacity: .35; }
+
+  /* ── Error banner ────────────────────────────────────────────────────────── */
+  #preview-error {
+    display: none;
+    background: #FEF2F2;
+    border: 1px solid #FCA5A5;
+    color: #991B1B;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 13px;
+  }
+
+  /* ── iframe wrapper ──────────────────────────────────────────────────────── */
+  #preview-frame-wrap {
+    display: none;
+    border: 1px solid #dce3f0;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fff;
+  }
+  #preview-frame {
+    width: 100%;
+    min-height: 500px;
+    border: none;
+    display: block;
+  }
+</style>
+
+<section id="section-preview">
+  <div id="preview-header">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <h2>Email Preview</h2>
+      <span id="preview-recipient-tag"></span>
+    </div>
+    <button type="button" id="btn-preview-refresh">
+      &#x1F50D; Refresh Preview
+    </button>
+  </div>
+
+  <!-- Error banner -->
+  <div id="preview-error"></div>
+
+  <!-- Idle / loading placeholder -->
+  <div id="preview-placeholder">
+    <!-- Envelope icon -->
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none"
+         stroke="#15192D" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="4" width="20" height="16" rx="2"/>
+      <path d="M2 7l10 7 10-7"/>
+    </svg>
+    <span>Click &ldquo;Refresh Preview&rdquo; to render the email</span>
+  </div>
+
+  <!-- Rendered preview in a sandboxed iframe -->
+  <div id="preview-frame-wrap">
+    <iframe id="preview-frame" title="Email preview" sandbox="allow-same-origin"></iframe>
+  </div>
+</section>
+
+<script>
+/**
+ * Preview module — renders a live email preview for the first eligible recipient.
+ *
+ * Flow:
+ *   1. User clicks "Refresh Preview"
+ *   2. Client saves recipients + pending config fields to the sheets
+ *   3. Server calls buildHtmlBody_() through the real send pipeline
+ *   4. HTML is injected into a sandboxed iframe (preserves email CSS, isolates JS)
+ */
+const Preview = (() => {
+
+  var _loaded = false;
+
+  function _el(id) { return document.getElementById(id); }
+
+  // ── Refresh ────────────────────────────────────────────────────────────────
+
+  function refresh() {
+    var btn = _el('btn-preview-refresh');
+    btn.disabled   = true;
+    btn.innerHTML  = '<span class="preview-spinner"></span> Loading\u2026';
+
+    _el('preview-error').style.display      = 'none';
+    _el('preview-placeholder').style.display = 'flex';
+    _el('preview-frame-wrap').style.display  = 'none';
+
+    // Save recipients first, then fetch the preview.
+    google.script.run
+      .withSuccessHandler(function () {
+        google.script.run
+          .withSuccessHandler(_renderResult)
+          .withFailureHandler(_onErr)
+          .getEmailPreview();
+      })
+      .withFailureHandler(_onErr)
+      .saveRecipients(Recipients.getRows());
+  }
+
+  function _renderResult(result) {
+    var btn = _el('btn-preview-refresh');
+    btn.disabled  = false;
+    btn.innerHTML = '&#x1F50D; Refresh Preview';
+
+    if (result.error) {
+      _showError('Preview error: ' + result.error);
+      return;
+    }
+
+    // Inject into iframe via srcdoc for CSS isolation.
+    var frame = _el('preview-frame');
+    frame.srcdoc = result.html;
+
+    // Auto-resize iframe to content height after it loads.
+    frame.onload = function () {
+      try {
+        var h = frame.contentDocument.body.scrollHeight;
+        if (h > 100) frame.style.minHeight = (h + 32) + 'px';
+      } catch (_) { /* cross-origin fallback — keep min-height */ }
+    };
+
+    _el('preview-placeholder').style.display = 'none';
+    _el('preview-frame-wrap').style.display  = 'block';
+
+    // Recipient tag
+    var tag = _el('preview-recipient-tag');
+    if (result.recipientEmail) {
+      tag.textContent    = 'Previewing for: ' + result.recipientEmail;
+      tag.style.display  = 'inline';
+    } else {
+      tag.textContent    = 'Generic preview (no recipients)';
+      tag.style.display  = 'inline';
+    }
+
+    _loaded = true;
+
+    // Keep the Send summary in sync with current live values.
+    if (typeof Send !== 'undefined' && Send.refresh) Send.refresh();
+  }
+
+  function _onErr(e) {
+    var btn = _el('btn-preview-refresh');
+    btn.disabled  = false;
+    btn.innerHTML = '&#x1F50D; Refresh Preview';
+    _showError('Server error: ' + (e && e.message ? e.message : String(e)));
+  }
+
+  function _showError(msg) {
+    var el = _el('preview-error');
+    el.textContent    = msg;
+    el.style.display  = 'block';
+    _el('preview-placeholder').style.display = 'none';
+  }
+
+  // ── Wire static UI ─────────────────────────────────────────────────────────
+
+  document.addEventListener('DOMContentLoaded', function () {
+    _el('btn-preview-refresh').addEventListener('click', refresh);
+  });
+
+  return { refresh: refresh };
+
+})();
+</script>

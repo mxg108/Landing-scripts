@@ -89,6 +89,13 @@
     color: #888;
     margin-left: 4px;
   }
+  /* Drag-over visual feedback on the toolbar drop zone */
+  .rec-toolbar.rec-drag-over {
+    background: #E7EFFB;
+    border: 2px dashed #1A61D9;
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
 
   /* ── Table ──────────────────────────────────────────────────────────── */
   .rec-table-wrap {
@@ -479,8 +486,37 @@ document.getElementById('rec-csv-btn').addEventListener('click', function () {
 });
 
 document.getElementById('rec-csv-input').addEventListener('change', function (e) {
-  Recipients.handleCSV
-    ? Recipients.handleCSV(e)
-    : void 0;
+  Recipients.handleCSV(e);
 });
+
+// ── Drag & drop CSV onto the toolbar ────────────────────────────────────────
+(function () {
+  var toolbar = document.querySelector('.rec-toolbar');
+
+  toolbar.addEventListener('dragover', function (e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    toolbar.classList.add('rec-drag-over');
+  });
+
+  toolbar.addEventListener('dragleave', function (e) {
+    // Only remove highlight when leaving the toolbar entirely (not just
+    // moving between its children).
+    if (!toolbar.contains(e.relatedTarget)) {
+      toolbar.classList.remove('rec-drag-over');
+    }
+  });
+
+  toolbar.addEventListener('drop', function (e) {
+    e.preventDefault();
+    toolbar.classList.remove('rec-drag-over');
+    var files = e.dataTransfer.files;
+    if (!files || !files.length) return;
+    var file = files[0];
+    // Accept .csv files or text/csv MIME type
+    if (!file.name.toLowerCase().endsWith('.csv') && file.type !== 'text/csv') return;
+    // Reuse the handleCSV parser with a synthetic event-like object
+    Recipients.handleCSV({ target: { files: files, value: '' } });
+  });
+})();
 </script>
