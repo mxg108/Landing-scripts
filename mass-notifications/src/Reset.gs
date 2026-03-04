@@ -68,7 +68,7 @@ function fullResetForNextUse() {
   const genericClosing =
     '<p>If you have any questions or need assistance, please call or text your General Manager ' +
     '{{manager_name}} or our 24/7 Member Support Line at ' +
-    '<a href="tel:+12058528798">(205) 852-8798</a> and we will be happy to help.</p>' +
+    '<a href="tel:' + LANDING_IVR_PHONE + '">' + LANDING_IVR_PHONE_DISPLAY + '</a> and we will be happy to help.</p>' +
     '<p>Warm regards,<br>The Landing Team</p>';
 
   const genericDisclaimer =
@@ -78,17 +78,18 @@ function fullResetForNextUse() {
     'Please see the message below:</div>';
 
   const defaultSignature =
-    '<div dir="ltr"><table cellpadding="0" cellspacing="0" border="0" style="font-family:system-ui,-apple-system,&quot;Segoe UI&quot;,Helvetica,Arial,sans-serif;color:rgb(21,25,45);line-height:1.4"><tbody><tr><td style="padding:0px 0px 12px"><img src="https://ci3.googleusercontent.com/meips/ADKq_NYQ2JyWw4de4nk2IAgm_AJdcgvRKAP04KzuLYwBIdvrQvqL7SMUfmGubd_duRT85QgM0v9L-BHtatzMNuJIOzetDUbuiLJZYUsIDOdsNDoUh60BXX_pHifpp4NCi_qFUWr2ra0ZHEpL2EhcFK0sZjnaR4Phmouz-7FJMA=s0-d-e1-ft#https://www.hellolanding.com/blog/wp-content/uploads/2025/08/landing_logomark_landing-bright-blue.png" alt="Landing" width="26" height="28" style="display:block;border:0px;outline:none"></td></tr><tr><td style="padding:0px 0px 8px"><span style="font-size:20px;letter-spacing:0.25px">Landing Member Support</span></td></tr><tr><td style="padding:0px 0px 3px"><span style="font-size:13px;letter-spacing:0.2px;color:rgb(11,56,98);display:block"></span></td></tr><tr><td style="padding:0px 0px 3px"><span style="font-size:13px;letter-spacing:0.2px;color:rgb(11,56,98);display:block">Member Support Team</span><span style="font-size:13px;letter-spacing:0.2px;color:rgb(11,56,98);display:block"></span></td></tr><tr><td><a href="tel:+14152311701" style="color:rgb(17,85,204);font-family:Arial;font-size:9pt" target="_blank">(415) 231-1701</a><br><a href="http://hellolanding.com" style="color:rgb(11,56,98);font-size:13px;letter-spacing:0.2px;display:inline-block" target="_blank">member.support@hellolanding.com</a></td></tr></tbody></table></div>';
+    '<div dir="ltr"><table cellpadding="0" cellspacing="0" border="0" style="font-family:system-ui,-apple-system,&quot;Segoe UI&quot;,Helvetica,Arial,sans-serif;color:rgb(21,25,45);line-height:1.4"><tbody><tr><td style="padding:0px 0px 12px"><img src="https://ci3.googleusercontent.com/meips/ADKq_NYQ2JyWw4de4nk2IAgm_AJdcgvRKAP04KzuLYwBIdvrQvqL7SMUfmGubd_duRT85QgM0v9L-BHtatzMNuJIOzetDUbuiLJZYUsIDOdsNDoUh60BXX_pHifpp4NCi_qFUWr2ra0ZHEpL2EhcFK0sZjnaR4Phmouz-7FJMA=s0-d-e1-ft#https://www.hellolanding.com/blog/wp-content/uploads/2025/08/landing_logomark_landing-bright-blue.png" alt="Landing" width="26" height="28" style="display:block;border:0px;outline:none"></td></tr><tr><td style="padding:0px 0px 8px"><span style="font-size:20px;letter-spacing:0.25px">Landing Member Support</span></td></tr><tr><td style="padding:0px 0px 3px"><span style="font-size:13px;letter-spacing:0.2px;color:rgb(11,56,98);display:block"></span></td></tr><tr><td style="padding:0px 0px 3px"><span style="font-size:13px;letter-spacing:0.2px;color:rgb(11,56,98);display:block">Member Support Team</span><span style="font-size:13px;letter-spacing:0.2px;color:rgb(11,56,98);display:block"></span></td></tr><tr><td><a href="tel:' + LANDING_IVR_PHONE + '" style="color:rgb(17,85,204);font-family:Arial;font-size:9pt" target="_blank">' + LANDING_IVR_PHONE_DISPLAY + '</a><br><a href="http://hellolanding.com" style="color:rgb(11,56,98);font-size:13px;letter-spacing:0.2px;display:inline-block" target="_blank">member.support@hellolanding.com</a></td></tr></tbody></table></div>';
 
   // Clear run-specific fields
   [
-    'window_start', 'window_end', 'manager_email', 'property_name', 'event_name',
+    'window_start', 'window_end', 'manager_email','manager_name', 'property_name', 'event_name',
     'reply_to', 'cc_extra', 'bcc_extra', 'body_full_html', 'attachment_file_ids',
     'test_email', 'notification_card',
   ].forEach(k => setConfigValue_(k, ''));
 
   // Restore safe defaults
   setConfigValue_('body_intro_html',       genericIntro);
+  setConfigValue_('send_mode',            'INDIVIDUAL');
   setConfigValue_('include_disclaimer',    'YES');
   setConfigValue_('closing_html',          genericClosing);
   setConfigValue_('include_unit_line',     'NO');
@@ -96,6 +97,7 @@ function fullResetForNextUse() {
   setConfigValue_('sender_display_name',   'Landing Notifications');
   setConfigValue_('disclaimer_html',       genericDisclaimer);
   setConfigValue_('signature_html',        defaultSignature);
+  setConfigValue_('notification_card',       '');
 
   safeAlert_('Full reset complete.');
 }
