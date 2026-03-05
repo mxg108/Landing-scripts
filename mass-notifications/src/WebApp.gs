@@ -245,6 +245,27 @@ function loadTemplateFrontend(templateName) {
   };
 }
 
+// ── Client → Server: attachments ──────────────────────────────────────────────
+
+/**
+ * Resolves a comma-separated string of Drive file IDs to display names.
+ * Used by the Web App Config section to let the operator verify IDs before send.
+ *
+ * Wraps summarizeAttachmentNames_() which does NOT download blobs — it only
+ * fetches file metadata, so it's fast and safe to call from the UI.
+ *
+ * @param  {string} idsStr — comma-separated Drive file IDs
+ * @return {{ names: string[], notes: string[] }}
+ */
+function resolveAttachmentNames(idsStr) {
+  try {
+    const ids = parseIdList_(idsStr || '');
+    return summarizeAttachmentNames_(ids);
+  } catch (e) {
+    return { names: [], notes: ['Error: ' + e.message] };
+  }
+}
+
 // ── Client → Server: preview ──────────────────────────────────────────────────
 
 /**

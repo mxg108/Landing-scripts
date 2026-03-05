@@ -366,7 +366,11 @@ const Send = (() => {
           }
           return;
         }
-        window.location.reload();
+        // Use the URL captured at page load (window.__webAppUrl) to avoid
+        // GAS's internal redirect URLs, which cause a blank page on reload().
+        window.location.assign(
+          typeof __webAppUrl !== 'undefined' ? __webAppUrl : window.location.href
+        );
       })
       .withFailureHandler(function (e) {
         btn.disabled  = false;

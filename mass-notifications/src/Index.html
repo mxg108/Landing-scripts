@@ -33,6 +33,11 @@
   <?!= include('WebApp_Send') ?>
 
   <script>
+    // Capture the Web App URL before any GAS internal redirects alter it.
+    // Used by the Send module to navigate back to this exact URL after a reset,
+    // since window.location.reload() can land on a blank GAS redirect page.
+    var __webAppUrl = window.location.href;
+
     document.addEventListener('DOMContentLoaded', function () {
       google.script.run
         .withSuccessHandler(function (data) {

@@ -347,6 +347,27 @@
     </div>
   </div>
 
+  <!-- Attachments -->
+  <div class="cfg-group">
+    <div class="cfg-group-label">Attachments</div>
+    <div class="cfg-field">
+      <label for="cfg-attachment_file_ids">
+        Drive File IDs
+        <span class="cfg-token-hint">— comma-separated &middot; Google Docs / Sheets / Slides auto-export to PDF at send time</span>
+      </label>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input id="cfg-attachment_file_ids" class="cfg-input" type="text"
+               placeholder="1BxKj_abc123, 2Cy9Z_def456"
+               data-key="attachment_file_ids">
+        <button type="button" id="cfg-attach-validate-btn" class="cfg-chip"
+                style="flex-shrink:0;margin:0;white-space:nowrap;">
+          &#x1F50D; Validate
+        </button>
+      </div>
+      <div id="cfg-attach-result" style="font-size:12px;margin-top:6px;display:none;line-height:1.8;"></div>
+    </div>
+  </div>
+
 </section>
 
 <!--
@@ -397,6 +418,7 @@ const Config = (() => {
     _initSegmentedControls();
     _initBodyEditor();
     _wireAutoSave();
+    _wireAttachmentValidate();
   }
 
   /** Attaches click handlers to every .cfg-segmented group. */
@@ -554,6 +576,46 @@ const Config = (() => {
     toast.style.display = 'block';
   }
 
+  // ── Attachment validation ──────────────────────────────────────────────────
+
+  function _wireAttachmentValidate() {
+    var btn = document.getElementById('cfg-attach-validate-btn');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var input = document.getElementById('cfg-attachment_file_ids');
+      var ids = input ? input.value.trim() : '';
+      if (!ids) { _showAttachResult([], ['No file IDs entered.']); return; }
+      btn.disabled = true;
+      btn.textContent = 'Validating\u2026';
+      google.script.run
+        .withSuccessHandler(function (r) {
+          btn.disabled = false;
+          btn.innerHTML = '&#x1F50D; Validate';
+          _showAttachResult(r.names || [], r.notes || []);
+        })
+        .withFailureHandler(function (e) {
+          btn.disabled = false;
+          btn.innerHTML = '&#x1F50D; Validate';
+          _showAttachResult([], ['Server error: ' + (e && e.message ? e.message : String(e))]);
+        })
+        .resolveAttachmentNames(ids);
+    });
+  }
+
+  function _showAttachResult(names, notes) {
+    var el = document.getElementById('cfg-attach-result');
+    if (!el) return;
+    var lines = [];
+    names.forEach(function (n) {
+      lines.push('<span style="color:#166534;">&#x2705; ' + _esc(n) + '</span>');
+    });
+    notes.forEach(function (n) {
+      lines.push('<span style="color:#991B1B;">&#x26A0;&#xFE0F; ' + _esc(n) + '</span>');
+    });
+    el.innerHTML = lines.length ? lines.join('<br>') : '<span style="color:#888;">No results.</span>';
+    el.style.display = 'block';
+  }
+
   // ── Card picker ────────────────────────────────────────────────────────────
 
   function _buildCardPicker(cards, currentCard) {
@@ -621,6 +683,10 @@ const Config = (() => {
     _setSegmented('include_disclaimer', cfg.includeDisclaimer ? 'YES' : 'NO');
     _setCard((cfg.notificationCard || '').toUpperCase());
     _setBodyContent(cfg.bodyIntroHtml || '');
+    _set('attachment_file_ids', cfg.attachmentFileIds || '');
+    // Clear any previous validation result when new config is loaded.
+    var attachResult = document.getElementById('cfg-attach-result');
+    if (attachResult) attachResult.style.display = 'none';
   }
 
   /** Sets the body editor content — works for both Quill and textarea fallback. */
@@ -661,6 +727,7 @@ const Config = (() => {
       include_unit_line:   _segValues['include_unit_line']  || 'YES',
       include_disclaimer:  _segValues['include_disclaimer'] || 'YES',
       notification_card:   _selectedCard,
+      attachment_file_ids: _val('attachment_file_ids'),
     };
   }
 
