@@ -40,7 +40,7 @@
  */
 function doGet(e) {
   return HtmlService
-    .createTemplateFromFile('Index')
+    .createTemplateFromFile('webapp/Index')
     .evaluate()
     .setTitle('Mass Notifications')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
