@@ -279,11 +279,13 @@ function resolveAttachmentNames(idsStr) {
  */
 function getEmailPreview() {
   try {
-    const cfg    = loadConfig_();
-    const result = buildPreviewHtml_(cfg);
-    return { html: result.html, recipientEmail: result.recipientEmail, error: null };
+    const cfg         = loadConfig_();
+    const result      = buildPreviewHtml_(cfg);
+    const cfgIds      = parseIdList_(cfg.attachmentFileIds || '');
+    const attachments = cfgIds.length ? summarizeAttachmentNames_(cfgIds) : { names: [], notes: [] };
+    return { html: result.html, recipientEmail: result.recipientEmail, attachments, error: null };
   } catch (e) {
-    return { html: '', recipientEmail: null, error: e.message };
+    return { html: '', recipientEmail: null, attachments: { names: [], notes: [] }, error: e.message };
   }
 }
 

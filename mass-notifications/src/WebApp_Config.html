@@ -605,12 +605,15 @@ const Config = (() => {
   function _showAttachResult(names, notes) {
     var el = document.getElementById('cfg-attach-result');
     if (!el) return;
+    function esc(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
     var lines = [];
     names.forEach(function (n) {
-      lines.push('<span style="color:#166534;">&#x2705; ' + _esc(n) + '</span>');
+      lines.push('<span style="color:#166534;">&#x2705; ' + esc(n) + '</span>');
     });
     notes.forEach(function (n) {
-      lines.push('<span style="color:#991B1B;">&#x26A0;&#xFE0F; ' + _esc(n) + '</span>');
+      lines.push('<span style="color:#991B1B;">&#x26A0;&#xFE0F; ' + esc(n) + '</span>');
     });
     el.innerHTML = lines.length ? lines.join('<br>') : '<span style="color:#888;">No results.</span>';
     el.style.display = 'block';
