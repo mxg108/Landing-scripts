@@ -108,7 +108,7 @@ function buildPerRowTokens_(cfg, t) {
 function buildHtmlBody_(cfg, tokens, unitStr) {
   // Fast path: full override
   if (cfg.bodyFullHtml && String(cfg.bodyFullHtml).trim()) {
-    return renderWithTokens_(cfg.bodyFullHtml, tokens) + (cfg.signatureHtml || '');
+    return normalizeTelLinks_(renderWithTokens_(cfg.bodyFullHtml, tokens) + (cfg.signatureHtml || ''));
   }
 
   const parts = [];
@@ -127,14 +127,7 @@ function buildHtmlBody_(cfg, tokens, unitStr) {
     if (cardHtml) parts.push(cardHtml);
   }
 
-  // Quill (the web-app body editor) wraps each paragraph in a bare <p> tag.
-  // Browser-default <p> margins (~16px top + bottom) make multi-paragraph
-  // bodies appear double-spaced in email clients. Apply a compact inline
-  // margin so spacing matches the editor view. This only affects the rendered
-  // email — the stored body_intro_html is left unchanged.
-  const introHtml = renderWithTokens_(cfg.bodyIntroHtml, tokens)
-    .replace(/<p>/gi, '<p style="margin:0 0 0.8em 0;">');
-  parts.push(introHtml);
+  parts.push(renderWithTokens_(cfg.bodyIntroHtml, tokens));
 
   if (cfg.includeUnitLine && unitStr) {
     parts.push(`<p><strong>Your unit number is:</strong> ${sanitize_(unitStr)}</p>`);
@@ -142,9 +135,15 @@ function buildHtmlBody_(cfg, tokens, unitStr) {
 
   parts.push(renderWithTokens_(cfg.closingHtml, tokens));
 
-  if (cfg.signatureHtml) parts.push(cfg.signatureHtml);
+  // Quill wraps each paragraph in a bare <p> tag. Browser-default <p> margins
+  // (~16px top + bottom) make multi-paragraph bodies appear double-spaced in
+  // email clients. Apply a compact inline margin across all template sections
+  // so spacing is consistent. Signature is excluded — it has its own formatting.
+  // Only bare <p> tags are affected; styled <p> tags (e.g. from cards) pass through.
+  const body = parts.filter(Boolean).join('')
+    .replace(/<p>/gi, '<p style="margin:0 0 0.8em 0;">');
 
-  return parts.filter(Boolean).join('');
+  return normalizeTelLinks_(body + (cfg.signatureHtml || ''));
 }
 
 // ── Misc composition helpers ──────────────────────────────────────────────────

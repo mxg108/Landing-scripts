@@ -82,7 +82,7 @@ function deriveNameFromEmail_(email) {
 // ── Preview-safety helpers ────────────────────────────────────────────────────
 
 /**
- * Normalizes tel: anchors for HtmlService preview rendering.
+ * Normalizes tel: anchors for all HTML output (email sends and previews).
  * Fixes self-closing <a .../> and strips formatting characters from tel: URIs.
  */
 function normalizeTelLinks_(html) {

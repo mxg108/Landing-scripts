@@ -281,8 +281,18 @@ function getEmailPreview() {
   try {
     const cfg         = loadConfig_();
     const result      = buildPreviewHtml_(cfg);
+    // Merge config-level and per-row attachment IDs (matches real send pipeline).
     const cfgIds      = parseIdList_(cfg.attachmentFileIds || '');
-    const attachments = cfgIds.length ? summarizeAttachmentNames_(cfgIds) : { names: [], notes: [] };
+    let   rowIds      = [];
+    if (result.recipientEmail) {
+      const sh      = getRecipientsSheet_(cfg);
+      const targets = getTargetRows_(sh, 1);
+      if (targets.length) {
+        rowIds = parseIdList_(String(sh.getRange(targets[0].row, COL.ATTACH_IDS).getValue() || ''));
+      }
+    }
+    const allIds      = [...cfgIds, ...rowIds];
+    const attachments = allIds.length ? summarizeAttachmentNames_(allIds) : { names: [], notes: [] };
     return { html: result.html, recipientEmail: result.recipientEmail, attachments, error: null };
   } catch (e) {
     return { html: '', recipientEmail: null, attachments: { names: [], notes: [] }, error: e.message };
