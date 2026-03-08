@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mass Notifications</title>
+  <style>
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      background: #f5f7fa;
+      color: #15192D;
+      margin: 0;
+      padding: 32px;
+    }
+    h1 { font-size: 22px; margin: 0 0 8px; }
+    p  { color: #4A4A4A; }
+  </style>
+</head>
+<body>
+
+  <h1>Mass Notifications</h1>
+
+  <!-- Section 1: Recipients grid -->
+  <?!= include('webapp/WebApp_Recipients') ?>
+
+  <!-- Section 2: Email configuration -->
+  <?!= include('webapp/WebApp_Config') ?>
+
+  <!-- Section 3: Live preview -->
+  <?!= include('webapp/WebApp_Preview') ?>
+
+  <!-- Section 4: Send -->
+  <?!= include('webapp/WebApp_Send') ?>
+
+  <script>
+    // Capture the Web App URL before any GAS internal redirects alter it.
+    // Used by the Send module to navigate back to this exact URL after a reset,
+    // since window.location.reload() can land on a blank GAS redirect page.
+    var __webAppUrl = window.location.href;
+
+    document.addEventListener('DOMContentLoaded', function () {
+      google.script.run
+        .withSuccessHandler(function (data) {
+          if (!data) {
+            console.error('getInitialData returned null — likely a GAS serialisation error. Check server logs.');
+            return;
+          }
+          // data = { config, recipients, templates, cards }
+          Recipients.init(data.recipients, data.config.maxPerRun);
+          Config.init(data);
+          // Seed the send summary with the loaded values.
+          Send.updateSummary(data.recipients.length, data.config);
+        })
+        .withFailureHandler(function (err) {
+          console.error('Failed to load initial data:', err.message);
+        })
+        .getInitialData();
+    });
+  </script>
+
+</body>
+</html>

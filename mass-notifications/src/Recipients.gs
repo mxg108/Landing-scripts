@@ -43,7 +43,7 @@ function getTargetRows_(sh, limit) {
     const unit   = String(r[COL.UNIT   - 1] || '').trim();
     const status = String(r[COL.STATUS - 1] || '').trim().toUpperCase();
 
-    if (!email) continue;
+    if (!email || !email.includes('@')) continue;
     if (status && status !== 'PENDING' && status !== 'READY') continue;
 
     out.push({ row: i + 2, email, name, unit });
@@ -72,7 +72,7 @@ function collectEmailsForBcc_(sh) {
   data.forEach((r, idx) => {
     const email  = String(r[COL.EMAIL  - 1] || '').trim();
     const status = String(r[COL.STATUS - 1] || '').trim().toUpperCase();
-    if (!email) return;
+    if (!email || !email.includes('@')) return;
     if (status && status !== 'PENDING' && status !== 'READY') return;
 
     const key = email.toLowerCase();
@@ -100,7 +100,7 @@ function collectEmailsForCount_() {
   data.forEach(r => {
     const email  = String(r[COL.EMAIL  - 1] || '').trim();
     const status = String(r[COL.STATUS - 1] || '').trim().toUpperCase();
-    if (!email) return;
+    if (!email || !email.includes('@')) return;
     if (status && status !== 'PENDING' && status !== 'READY') return;
     const key = email.toLowerCase();
     if (!seen.has(key)) { seen.add(key); emails.push(email); }

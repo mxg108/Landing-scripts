@@ -46,7 +46,7 @@ const EMAIL_TEMPLATES = {
     notification_card: 'FIRE_INSPECTION',
     body_intro_html:   '<p>Our property will undergo its <strong>annual fire inspection</strong> during the window shown above. Inspectors will require access to all units — please ensure your unit is accessible and your smoke/CO detectors are unobstructed.</p>',
     include_unit_line: 'YES',
-    closing_html:      '<p>If you have any questions, please contact your General Manager {{manager_name}} or our 24/7 Member Support Line at <a href="tel:+12058528798">(205) 852-8798</a>.</p><p>Warm regards,<br>The Landing Team</p>',
+    closing_html:      '<p>If you have any questions, please contact your General Manager {{manager_name}} or our 24/7 Member Support Line at <a href="tel:' + LANDING_IVR_PHONE + '">' + LANDING_IVR_PHONE_DISPLAY + '</a>.</p><p>Warm regards,<br>The Landing Team</p>',
     send_mode:         'INDIVIDUAL',
   },
 
@@ -59,8 +59,8 @@ const EMAIL_TEMPLATES = {
     notification_card: 'WATER_OUTAGE',
     body_intro_html:   '<p>We want to give you advance notice of a <strong>planned water outage</strong> at {{property_name}}. Our maintenance team will be working to complete this as quickly as possible and minimize disruption.</p><p>We recommend storing some water beforehand for your convenience.</p>',
     include_unit_line: 'NO',
-    closing_html:      '<p>We apologize for any inconvenience. For questions, contact your General Manager {{manager_name}} or Member Support at <a href="tel:+12058528798">(205) 852-8798</a>.</p><p>Warm regards,<br>The Landing Team</p>',
-    send_mode:         'BCC',
+    closing_html:      '<p>We apologize for any inconvenience. For questions, contact your General Manager {{manager_name}} or Member Support at <a href="tel:' + LANDING_IVR_PHONE + '">' + LANDING_IVR_PHONE_DISPLAY + '</a>.</p><p>Warm regards,<br>The Landing Team</p>',
+    send_mode:         'INDIVIDUAL',
   },
 
   'General Maintenance': {
@@ -72,8 +72,8 @@ const EMAIL_TEMPLATES = {
     notification_card: 'MAINTENANCE',
     body_intro_html:   '<p>We will be conducting <strong>scheduled maintenance</strong> at {{property_name}} during the window shown above. Some common areas may be temporarily unavailable, and maintenance staff may be present on the property.</p>',
     include_unit_line: 'NO',
-    closing_html:      '<p>Thank you for your patience. For questions, reach your General Manager {{manager_name}} or call Member Support at <a href="tel:+12058528798">(205) 852-8798</a>.</p><p>Warm regards,<br>The Landing Team</p>',
-    send_mode:         'BCC',
+    closing_html:      '<p>Thank you for your patience. For questions, reach your General Manager {{manager_name}} or call Member Support at <a href="tel:' + LANDING_IVR_PHONE + '">' + LANDING_IVR_PHONE_DISPLAY + '</a>.</p><p>Warm regards,<br>The Landing Team</p>',
+    send_mode:         'INDIVIDUAL',
   },
 
   'Weather Alert': {
@@ -85,8 +85,8 @@ const EMAIL_TEMPLATES = {
     notification_card: 'WEATHER_ALERT',
     body_intro_html:   '<p>A <strong>weather advisory</strong> has been issued for the area surrounding {{property_name}}. Please take appropriate precautions for your safety, secure any outdoor belongings, and follow guidance from local authorities.</p>',
     include_unit_line: 'NO',
-    closing_html:      '<p>Your safety is our priority. For urgent property concerns, contact your General Manager {{manager_name}} or our 24/7 Member Support at <a href="tel:+12058528798">(205) 852-8798</a>.</p><p>Stay safe,<br>The Landing Team</p>',
-    send_mode:         'BCC',
+    closing_html:      '<p>Your safety is our priority. For urgent property concerns, contact your General Manager {{manager_name}} or our 24/7 Member Support at <a href="tel:' + LANDING_IVR_PHONE + '">' + LANDING_IVR_PHONE_DISPLAY + '</a>.</p><p>Stay safe,<br>The Landing Team</p>',
+    send_mode:         'INDIVIDUAL',
   },
 
   'Power Outage': {
@@ -117,10 +117,10 @@ const EMAIL_TEMPLATES = {
       '<p>For the latest updates or if you need immediate assistance, please reach out to ' +
       'your General Manager <strong>{{manager_name}}</strong> directly, or contact our ' +
       '<strong>24/7 Member Support</strong> team at ' +
-      '<a href="tel:+12058528798">(205) 852-8798</a> — we are standing by to help.</p>' +
+      '<a href="tel:' + LANDING_IVR_PHONE + '">' + LANDING_IVR_PHONE_DISPLAY + '</a> — we are standing by to help.</p>' +
       '<p>We sincerely apologize for the inconvenience and thank you for your patience.<br>' +
       'The Landing Team</p>',
-    send_mode: 'BCC',
+    send_mode: 'INDIVIDUAL',
     _hint:
       'Power Outage template loaded.\n\n' +
       'Please fill in:\n  • property_name\n  • manager_email\n\n' +
@@ -156,10 +156,10 @@ const EMAIL_TEMPLATES = {
       '<p>For updates on the status of this outage or if you need any assistance, please ' +
       'reach out to your General Manager <strong>{{manager_name}}</strong>, or contact our ' +
       '<strong>24/7 Member Support</strong> team at ' +
-      '<a href="tel:+12058528798">(205) 852-8798</a>.</p>' +
+      '<a href="tel:' + LANDING_IVR_PHONE + '">' + LANDING_IVR_PHONE_DISPLAY + '</a>.</p>' +
       '<p>We appreciate your patience and apologize for any inconvenience this causes.<br>' +
       'The Landing Team</p>',
-    send_mode: 'BCC',
+    send_mode: 'INDIVIDUAL',
     _hint:
       'WiFi Outage template loaded.\n\n' +
       'Please fill in:\n  • property_name\n  • manager_email\n\n' +

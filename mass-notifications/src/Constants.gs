@@ -7,6 +7,8 @@
  */
 
 const VERSION                    = 'v3.1.1';
+const LANDING_IVR_PHONE          = '+14152311701';
+const LANDING_IVR_PHONE_DISPLAY  = '(415) 231-1701';
 const CONFIG_SHEET               = 'Config';
 const DEFAULT_RECIPIENTS_SHEET   = 'Mass_Notification';
 const RUN_LOG_SHEET              = 'Run_Log';

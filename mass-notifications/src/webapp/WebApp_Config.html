@@ -1,0 +1,773 @@
+<!--
+  WebApp_Config.html — Section 2: Email Configuration
+
+  BUG-FIX NOTES (why the file was restructured):
+
+  1. STATIC UI vs ASYNC DATA
+     Originally, toggle click-handlers and auto-save were wired inside
+     Config.init(data), which only runs after google.script.run returns
+     (1-3 s). Any throw before that line aborted ALL wiring.
+     Fix: wire everything that doesn't need server data (toggles, auto-save,
+     Quill) from DOMContentLoaded — runs immediately, independently of the
+     server call. Config.init() now only populates values.
+
+  2. QUILL CDN BLOCKED BY GAS CSP
+     GAS Web Apps are served from script.googleusercontent.com, which has a
+     strict Content Security Policy that blocks most external CDN scripts.
+     new Quill(...) threw ReferenceError, aborting Config.init() entirely —
+     silently killing chips, toggles, and all other handlers with it.
+     Fix: try-catch around Quill init, fall back to a plain <textarea>.
+     We keep the Quill script tag so it will work if CSP is ever relaxed
+     or the app is self-hosted.
+-->
+
+<style>
+  /* ── Section card ─────────────────────────────────────────────────────── */
+  #section-config {
+    background: #ffffff;
+    border: 1px solid #dce3f0;
+    border-radius: 10px;
+    padding: 24px 28px;
+    margin-bottom: 28px;
+  }
+  #section-config h2 {
+    font-size: 17px;
+    font-weight: 700;
+    color: #15192D;
+    margin: 0 0 20px;
+  }
+
+  /* ── Form groups ────────────────────────────────────────────────────── */
+  .cfg-group {
+    border-top: 1px solid #f0f2f7;
+    padding: 18px 0 4px;
+    margin-bottom: 6px;
+  }
+  .cfg-group-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    color: #1A61D9;
+    margin-bottom: 14px;
+  }
+
+  /* ── Field wrappers ─────────────────────────────────────────────────── */
+  .cfg-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-bottom: 14px;
+  }
+  .cfg-field label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #15192D;
+  }
+  .cfg-token-hint {
+    font-weight: 400;
+    color: #888;
+    font-size: 11px;
+  }
+  .cfg-row-2 { display: grid; grid-template-columns: 1fr 1fr;     gap: 14px; }
+  .cfg-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  @media (max-width: 640px) {
+    .cfg-row-2, .cfg-row-3 { grid-template-columns: 1fr; }
+  }
+
+  /* ── Inputs & textareas ─────────────────────────────────────────────── */
+  .cfg-input, .cfg-textarea {
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 13px;
+    color: #15192D;
+    background: #fafbfd;
+    border: 1px solid #dce3f0;
+    border-radius: 6px;
+    padding: 7px 10px;
+    outline: none;
+    transition: border-color .15s, background .15s;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .cfg-input:focus, .cfg-textarea:focus {
+    border-color: #1A61D9;
+    background: #fff;
+  }
+  .cfg-textarea { resize: vertical; min-height: 80px; }
+
+  /* ── Segmented controls ─────────────────────────────────────────────── */
+  .cfg-segmented {
+    display: inline-flex;
+    border: 1px solid #dce3f0;
+    border-radius: 6px;
+    overflow: hidden;
+    width: fit-content;
+  }
+  .cfg-segmented button {
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 18px;
+    border: none;
+    background: #f5f7fa;
+    color: #4A4A4A;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+  }
+  .cfg-segmented button + button { border-left: 1px solid #dce3f0; }
+  .cfg-segmented button.cfg-active {
+    background: #1A61D9;
+    color: #fff;
+  }
+
+  /* ── Template chips ─────────────────────────────────────────────────── */
+  #cfg-templates {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: 28px;
+  }
+  .cfg-chip {
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 12px;
+    padding: 5px 13px;
+    border: 1px solid #c3d4ef;
+    border-radius: 20px;
+    background: #E7EFFB;
+    color: #15192D;
+    cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s;
+  }
+  .cfg-chip:hover { background: #d0e2f7; }
+  .cfg-chip.cfg-active { background: #1A61D9; color: #fff; border-color: #1A61D9; }
+
+  /* ── Card picker ────────────────────────────────────────────────────── */
+  #cfg-cards { display: flex; flex-wrap: wrap; gap: 8px; min-height: 28px; }
+  .cfg-card-btn {
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 12px;
+    padding: 6px 14px;
+    border: 1px solid #dce3f0;
+    border-radius: 6px;
+    background: #f5f7fa;
+    color: #15192D;
+    cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s;
+  }
+  .cfg-card-btn:hover { background: #E7EFFB; border-color: #c3d4ef; }
+  .cfg-card-btn.cfg-active { background: #15192D; color: #fff; border-color: #15192D; }
+
+  /* ── Body editor (Quill or textarea fallback) ───────────────────────── */
+  #cfg-body-wrap {
+    border: 1px solid #dce3f0;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #fafbfd;
+  }
+  #cfg-body-wrap:focus-within { border-color: #1A61D9; }
+  /* Quill-specific overrides when loaded successfully */
+  #cfg-body-wrap .ql-toolbar.ql-snow {
+    border: none;
+    border-bottom: 1px solid #dce3f0;
+    background: #f5f7fa;
+  }
+  #cfg-body-wrap .ql-container.ql-snow { border: none; }
+  #cfg-body-wrap .ql-editor { min-height: 140px; font-size: 13px; }
+  /* Textarea fallback */
+  #cfg-body-textarea {
+    width: 100%; box-sizing: border-box;
+    min-height: 160px; resize: vertical;
+    border: none; outline: none;
+    padding: 10px 12px;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 13px; color: #15192D;
+    background: #fafbfd;
+  }
+
+  /* ── Token list ─────────────────────────────────────────────────────── */
+  .cfg-token-list {
+    font-size: 11px; color: #888;
+    margin-top: 8px; line-height: 2;
+  }
+  .cfg-token-list code {
+    background: #f0f2f7; border-radius: 3px;
+    padding: 1px 5px; font-size: 11px; color: #1A61D9;
+  }
+
+  /* ── Template hint toast ────────────────────────────────────────────── */
+  #cfg-hint-toast {
+    display: none;
+    background: #E7EFFB; border: 1px solid #c3d4ef;
+    border-radius: 6px; padding: 10px 14px;
+    font-size: 12px; color: #15192D;
+    white-space: pre-line; margin-bottom: 14px;
+  }
+</style>
+
+<section id="section-config">
+  <h2>Email Configuration</h2>
+
+  <div id="cfg-hint-toast"></div>
+
+  <!-- Template selector -->
+  <div class="cfg-group">
+    <div class="cfg-group-label">Load Template</div>
+    <div id="cfg-templates"></div>
+  </div>
+
+  <!-- Campaign basics -->
+  <div class="cfg-group">
+    <div class="cfg-group-label">Campaign</div>
+    <div class="cfg-row-2">
+      <div class="cfg-field">
+        <label for="cfg-property_name">Property Name</label>
+        <input id="cfg-property_name" class="cfg-input" type="text"
+               placeholder="e.g. Skyline Lofts" data-key="property_name">
+      </div>
+      <div class="cfg-field">
+        <label for="cfg-event_name">Event Name</label>
+        <input id="cfg-event_name" class="cfg-input" type="text"
+               placeholder="e.g. Annual Fire Inspection" data-key="event_name">
+      </div>
+    </div>
+    <div class="cfg-row-2">
+      <div class="cfg-field">
+        <label for="cfg-window_start">Window Start</label>
+        <input id="cfg-window_start" class="cfg-input" type="date" data-key="window_start">
+      </div>
+      <div class="cfg-field">
+        <label for="cfg-window_end">Window End</label>
+        <input id="cfg-window_end" class="cfg-input" type="date" data-key="window_end">
+      </div>
+    </div>
+  </div>
+
+  <!-- Card picker -->
+  <div class="cfg-group">
+    <div class="cfg-group-label">Notification Card</div>
+    <div id="cfg-cards"></div>
+  </div>
+
+  <!-- Send settings -->
+  <div class="cfg-group">
+    <div class="cfg-group-label">Send Settings</div>
+    <div class="cfg-row-2">
+      <div class="cfg-field">
+        <label>Send Mode</label>
+        <div class="cfg-segmented" data-key="send_mode">
+          <button class="cfg-active" data-val="INDIVIDUAL">Individual</button>
+          <button data-val="BCC">BCC</button>
+        </div>
+      </div>
+      <div class="cfg-field">
+        <label>Include Unit Line</label>
+        <div class="cfg-segmented" data-key="include_unit_line">
+          <button class="cfg-active" data-val="YES">Yes</button>
+          <button data-val="NO">No</button>
+        </div>
+      </div>
+    </div>
+    <div class="cfg-row-2">
+      <div class="cfg-field">
+        <label for="cfg-manager_email">Manager Email</label>
+        <input id="cfg-manager_email" class="cfg-input" type="email"
+               placeholder="gm@hellolanding.com" data-key="manager_email">
+      </div>
+      <div class="cfg-field">
+        <label for="cfg-manager_name">Manager Name</label>
+        <input id="cfg-manager_name" class="cfg-input" type="text"
+               placeholder="First Last" data-key="manager_name">
+      </div>
+    </div>
+    <div class="cfg-row-3">
+      <div class="cfg-field">
+        <label for="cfg-cc_extra">CC</label>
+        <input id="cfg-cc_extra" class="cfg-input" type="text"
+               placeholder="email, email" data-key="cc_extra">
+      </div>
+      <div class="cfg-field">
+        <label for="cfg-bcc_extra">BCC</label>
+        <input id="cfg-bcc_extra" class="cfg-input" type="text"
+               placeholder="email, email" data-key="bcc_extra">
+      </div>
+      <div class="cfg-field">
+        <label for="cfg-sender_display_name">Sender Display Name</label>
+        <input id="cfg-sender_display_name" class="cfg-input" type="text"
+               placeholder="Landing Notifications" data-key="sender_display_name">
+      </div>
+    </div>
+  </div>
+
+  <!-- Email content -->
+  <div class="cfg-group">
+    <div class="cfg-group-label">Email Content</div>
+    <div class="cfg-field">
+      <label for="cfg-subject_template">Subject <span class="cfg-token-hint">— supports tokens</span></label>
+      <input id="cfg-subject_template" class="cfg-input" type="text"
+             placeholder="Notice: {{event_name}} — {{property_name}} ({{date_range}})"
+             data-key="subject_template">
+    </div>
+    <div class="cfg-field" style="margin-top:6px;">
+      <label>Body <span class="cfg-token-hint">— supports tokens</span></label>
+      <!-- #cfg-body-wrap receives either a Quill editor or a <textarea> fallback -->
+      <div id="cfg-body-wrap">
+        <div id="cfg-body-editor"></div>
+      </div>
+    </div>
+    <div class="cfg-token-list">
+      <strong>Available tokens:</strong>&nbsp;
+      <code>{{property_name}}</code>
+      <code>{{event_name}}</code>
+      <code>{{date_range}}</code>
+      <code>{{today}}</code>
+      <code>{{first_name}}</code>
+      <code>{{member_name}}</code>
+      <code>{{unit}}</code>
+      <code>{{manager_name}}</code>
+    </div>
+  </div>
+
+  <!-- Closing & disclaimer -->
+  <div class="cfg-group">
+    <div class="cfg-group-label">Closing &amp; Disclaimer</div>
+    <div style="margin-bottom:14px;">
+      <div class="cfg-field">
+        <label>Include Disclaimer</label>
+        <div class="cfg-segmented" data-key="include_disclaimer">
+          <button class="cfg-active" data-val="YES">Yes</button>
+          <button data-val="NO">No</button>
+        </div>
+      </div>
+    </div>
+    <div class="cfg-field">
+      <label for="cfg-closing_html">Closing HTML <span class="cfg-token-hint">— supports tokens</span></label>
+      <textarea id="cfg-closing_html" class="cfg-textarea" rows="4"
+                placeholder="<p>Warm regards,&lt;br&gt;The Landing Team</p>"
+                data-key="closing_html"></textarea>
+    </div>
+  </div>
+
+  <!-- Attachments -->
+  <div class="cfg-group">
+    <div class="cfg-group-label">Attachments</div>
+    <div class="cfg-field">
+      <label for="cfg-attachment_file_ids">
+        Drive File IDs
+        <span class="cfg-token-hint">— comma-separated &middot; Google Docs / Sheets / Slides auto-export to PDF at send time</span>
+      </label>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input id="cfg-attachment_file_ids" class="cfg-input" type="text"
+               placeholder="1BxKj_abc123, 2Cy9Z_def456"
+               data-key="attachment_file_ids">
+        <button type="button" id="cfg-attach-validate-btn" class="cfg-chip"
+                style="flex-shrink:0;margin:0;white-space:nowrap;">
+          &#x1F50D; Validate
+        </button>
+      </div>
+      <div id="cfg-attach-result" style="font-size:12px;margin-top:6px;display:none;line-height:1.8;"></div>
+    </div>
+  </div>
+
+</section>
+
+<!--
+  Quill JS — loaded last in the partial so it doesn't block rendering above.
+  If GAS CSP blocks this CDN, the try-catch in _initBodyEditor() falls back
+  to a plain <textarea> automatically.
+-->
+<script src="https://cdn.quilljs.com/1.3.7/quill.min.js"></script>
+<link  href="https://cdn.quilljs.com/1.3.7/quill.snow.css" rel="stylesheet">
+
+<script>
+/**
+ * Config module — manages the email configuration section.
+ *
+ * TWO-PHASE INIT (key design decision):
+ *
+ *   Phase 1 — DOMContentLoaded (runs immediately, no server needed):
+ *     • Wire segmented-control click handlers (toggles)
+ *     • Wire auto-save on all input/textarea blur events
+ *     • Init the body editor (Quill or textarea fallback)
+ *
+ *   Phase 2 — Config.init(data) (runs after getInitialData() returns):
+ *     • Build dynamic elements (template chips, card buttons)
+ *     • Populate all fields with values from the Config sheet
+ *
+ *   This way, toggles and auto-save are always interactive from the first
+ *   render, regardless of how long the server call takes or whether it
+ *   errors. Only value population depends on the server.
+ */
+const Config = (() => {
+
+  let _quill        = null;   // Quill instance, or null if fallback is used
+  let _selectedCard = '';
+  const _segValues  = {};
+
+  const CARD_LABELS = {
+    FIRE_INSPECTION: '&#x1F525; Fire Inspection',
+    WATER_OUTAGE:    '&#x1F6BF; Water Outage',
+    MAINTENANCE:     '&#x1F527; Maintenance',
+    WEATHER_ALERT:   '&#x26C8;&#xFE0F; Weather Alert',
+    POWER_OUTAGE:    '&#x26A1; Power Outage',
+    WIFI_OUTAGE:     '&#x1F4F6; WiFi Outage',
+  };
+
+  // ── Phase 1: static wiring (called from DOMContentLoaded below) ───────────
+
+  function _wireStaticUI() {
+    _initSegmentedControls();
+    _initBodyEditor();
+    _wireAutoSave();
+    _wireAttachmentValidate();
+  }
+
+  /** Attaches click handlers to every .cfg-segmented group. */
+  function _initSegmentedControls() {
+    document.querySelectorAll('.cfg-segmented').forEach(function (group) {
+      var key = group.dataset.key;
+      // Capture the default value from whichever button has cfg-active in the HTML
+      var initial = group.querySelector('button.cfg-active');
+      if (initial) _segValues[key] = initial.dataset.val;
+
+      group.querySelectorAll('button').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          group.querySelectorAll('button').forEach(function (b) {
+            b.classList.remove('cfg-active');
+          });
+          btn.classList.add('cfg-active');
+          _segValues[key] = btn.dataset.val;
+          _save(key, btn.dataset.val);
+        });
+      });
+    });
+  }
+
+  /**
+   * Tries to mount Quill in #cfg-body-editor.
+   * If Quill is not available (CDN blocked by GAS CSP), replaces the editor
+   * div with a plain <textarea> and wires its blur → auto-save instead.
+   */
+  function _initBodyEditor() {
+    try {
+      if (typeof Quill === 'undefined') throw new Error('Quill not loaded');
+
+      _quill = new Quill('#cfg-body-editor', {
+        theme: 'snow',
+        placeholder: 'Write the email body here\u2026 supports {{tokens}}',
+        modules: {
+          toolbar: [
+            ['bold', 'italic', 'underline'],
+            [{ list: 'ordered' }, { list: 'bullet' }],
+            ['link', 'clean'],
+          ],
+        },
+      });
+
+      // Debounced auto-save: waits 800 ms after typing stops
+      var _t;
+      _quill.on('text-change', function () {
+        clearTimeout(_t);
+        _t = setTimeout(function () {
+          _save('body_intro_html', _quill.root.innerHTML);
+        }, 800);
+      });
+
+    } catch (e) {
+      // Quill unavailable — swap the div for a textarea
+      console.warn('[Config] Quill not available, using textarea fallback:', e.message);
+      var wrap  = document.getElementById('cfg-body-wrap');
+      var edDiv = document.getElementById('cfg-body-editor');
+      var ta    = document.createElement('textarea');
+      ta.id          = 'cfg-body-textarea';
+      ta.className   = 'cfg-textarea';  // uses same .cfg-textarea styles
+      ta.style.minHeight = '160px';
+      ta.style.border    = 'none';
+      ta.style.resize    = 'vertical';
+      ta.placeholder = 'Write the email body here\u2026 supports {{tokens}}';
+      ta.dataset.key = 'body_intro_html';
+      wrap.replaceChild(ta, edDiv);
+      // Auto-save on blur (already caught by _wireAutoSave since it has data-key)
+    }
+  }
+
+  /**
+   * Wires blur → saveConfigValue for every input/textarea with a data-key
+   * attribute inside #section-config. Runs on the elements already in the
+   * HTML — dynamic elements (chips, card buttons) save on click instead.
+   */
+  function _wireAutoSave() {
+    document.querySelectorAll(
+      '#section-config .cfg-input[data-key], #section-config .cfg-textarea[data-key]'
+    ).forEach(function (el) {
+      el.addEventListener('blur', function () {
+        _save(el.dataset.key, el.value);
+      });
+    });
+  }
+
+  // ── Phase 2: data population (called from Index.html after server responds) ─
+
+  /**
+   * Receives the full data object from getInitialData() and:
+   *   1. Builds template chips and card picker buttons (dynamic elements)
+   *   2. Populates all form fields with current Config sheet values
+   */
+  function init(data) {
+    console.log('[Config] init() called');
+    console.log('[Config] data.templates:', data.templates);
+    console.log('[Config] data.cards:', data.cards);
+    console.log('[Config] #cfg-templates el:', document.getElementById('cfg-templates'));
+    console.log('[Config] #cfg-cards el:', document.getElementById('cfg-cards'));
+    try {
+      var cfg = data.config;
+      _buildTemplateChips(data.templates || []);
+      _buildCardPicker(data.cards || [], cfg.notificationCard || '');
+      _populateFields(cfg);
+    } catch (e) {
+      console.error('[Config] init() error:', e);
+    }
+  }
+
+  // ── Template chips ─────────────────────────────────────────────────────────
+
+  function _buildTemplateChips(templates) {
+    var container = document.getElementById('cfg-templates');
+    if (!container) return;
+    templates.forEach(function (name) {
+      var btn = document.createElement('button');
+      btn.type        = 'button';   // prevent any default submit behaviour
+      btn.className   = 'cfg-chip';
+      btn.textContent = name;
+      btn.addEventListener('click', function () { _loadTemplate(name, btn); });
+      container.appendChild(btn);
+    });
+  }
+
+  function _loadTemplate(name, btn) {
+    console.log('[Config] chip clicked, loading template:', name);
+    _setChipActive(btn);
+    _showHint('Loading\u2026');
+    google.script.run
+      .withSuccessHandler(function (result) {
+        // result = { hint: string|null, config: Object }
+        console.log('[Config] template loaded OK:', name);
+        _populateFields(result.config);
+        _showHint(result.hint || (name + ' loaded. Fill in property name and dates.'));
+      })
+      .withFailureHandler(function (e) {
+        console.error('[Config] loadTemplateFrontend error:', e);
+        _showHint('\u26A0\uFE0F ' + (e && e.message ? e.message : 'Could not load template.'));
+      })
+      .loadTemplateFrontend(name);
+  }
+
+  function _setChipActive(activeBtn) {
+    document.querySelectorAll('.cfg-chip').forEach(function (b) {
+      b.classList.remove('cfg-active');
+    });
+    activeBtn.classList.add('cfg-active');
+  }
+
+  function _showHint(text) {
+    var toast = document.getElementById('cfg-hint-toast');
+    if (!toast) return;
+    if (!text) { toast.style.display = 'none'; return; }
+    toast.textContent = text;
+    toast.style.display = 'block';
+  }
+
+  // ── Attachment validation ──────────────────────────────────────────────────
+
+  function _wireAttachmentValidate() {
+    var btn = document.getElementById('cfg-attach-validate-btn');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var input = document.getElementById('cfg-attachment_file_ids');
+      var ids = input ? input.value.trim() : '';
+      if (!ids) { _showAttachResult([], ['No file IDs entered.']); return; }
+      btn.disabled = true;
+      btn.textContent = 'Validating\u2026';
+      google.script.run
+        .withSuccessHandler(function (r) {
+          btn.disabled = false;
+          btn.innerHTML = '&#x1F50D; Validate';
+          _showAttachResult(r.names || [], r.notes || []);
+        })
+        .withFailureHandler(function (e) {
+          btn.disabled = false;
+          btn.innerHTML = '&#x1F50D; Validate';
+          _showAttachResult([], ['Server error: ' + (e && e.message ? e.message : String(e))]);
+        })
+        .resolveAttachmentNames(ids);
+    });
+  }
+
+  function _showAttachResult(names, notes) {
+    var el = document.getElementById('cfg-attach-result');
+    if (!el) return;
+    function esc(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    var lines = [];
+    names.forEach(function (n) {
+      lines.push('<span style="color:#166534;">&#x2705; ' + esc(n) + '</span>');
+    });
+    notes.forEach(function (n) {
+      lines.push('<span style="color:#991B1B;">&#x26A0;&#xFE0F; ' + esc(n) + '</span>');
+    });
+    el.innerHTML = lines.length ? lines.join('<br>') : '<span style="color:#888;">No results.</span>';
+    el.style.display = 'block';
+  }
+
+  // ── Card picker ────────────────────────────────────────────────────────────
+
+  function _buildCardPicker(cards, currentCard) {
+    var container = document.getElementById('cfg-cards');
+    if (!container) return;
+    container.appendChild(_makeCardBtn('\u2205 None', ''));
+    cards.forEach(function (key) {
+      container.appendChild(_makeCardBtn(CARD_LABELS[key] || key, key));
+    });
+    _setCard((currentCard || '').toUpperCase());
+  }
+
+  function _makeCardBtn(label, value) {
+    var btn = document.createElement('button');
+    btn.type        = 'button';   // prevent any default submit behaviour
+    btn.className   = 'cfg-card-btn';
+    btn.innerHTML   = label;
+    btn.dataset.val = value;
+    btn.addEventListener('click', function () {
+      console.log('[Config] card selected:', value || '(none)');
+      _setCard(value);
+      _save('notification_card', value);
+    });
+    return btn;
+  }
+
+  function _setCard(value) {
+    _selectedCard = value || '';
+    document.querySelectorAll('.cfg-card-btn').forEach(function (b) {
+      b.classList.toggle('cfg-active', b.dataset.val === _selectedCard);
+    });
+  }
+
+  // ── Segmented: set programmatically from server data ───────────────────────
+
+  function _setSegmented(key, value) {
+    var group = document.querySelector('.cfg-segmented[data-key="' + key + '"]');
+    if (!group) return;
+    var upper = String(value).toUpperCase();
+    group.querySelectorAll('button').forEach(function (btn) {
+      var active = btn.dataset.val === upper;
+      btn.classList.toggle('cfg-active', active);
+      if (active) _segValues[key] = btn.dataset.val;
+    });
+  }
+
+  // ── Field population ───────────────────────────────────────────────────────
+
+  function _populateFields(cfg) {
+    _set('property_name',       cfg.propertyName      || '');
+    _set('event_name',          cfg.eventName         || '');
+    _set('manager_email',       cfg.managerEmail      || '');
+    _set('manager_name',        cfg.managerName       || '');
+    _set('cc_extra',            cfg.ccExtra           || '');
+    _set('bcc_extra',           cfg.bccExtra          || '');
+    _set('sender_display_name', cfg.senderDisplayName || '');
+    _set('subject_template',    cfg.subjectTemplate   || '');
+    _set('closing_html',        cfg.closingHtml       || '');
+    // Pre-formatted date strings from getInitialData() — safe for <input type="date">
+    _set('window_start', cfg.windowStartStr || '');
+    _set('window_end',   cfg.windowEndStr   || '');
+
+    _setSegmented('send_mode',          cfg.sendMode          || 'INDIVIDUAL');
+    _setSegmented('include_unit_line',  cfg.includeUnitLine   ? 'YES' : 'NO');
+    _setSegmented('include_disclaimer', cfg.includeDisclaimer ? 'YES' : 'NO');
+    _setCard((cfg.notificationCard || '').toUpperCase());
+    _setBodyContent(cfg.bodyIntroHtml || '');
+    _set('attachment_file_ids', cfg.attachmentFileIds || '');
+    // Clear any previous validation result when new config is loaded.
+    var attachResult = document.getElementById('cfg-attach-result');
+    if (attachResult) attachResult.style.display = 'none';
+  }
+
+  /** Sets the body editor content — works for both Quill and textarea fallback. */
+  function _setBodyContent(html) {
+    if (_quill) {
+      // dangerouslyPasteHTML is the correct Quill API for setting HTML content.
+      // Directly setting root.innerHTML bypasses Quill's internal delta state.
+      _quill.clipboard.dangerouslyPasteHTML(html || '');
+    } else {
+      var ta = document.getElementById('cfg-body-textarea');
+      if (ta) ta.value = html || '';
+    }
+  }
+
+  // ── Public API ─────────────────────────────────────────────────────────────
+
+  /**
+   * Returns the current form state as a flat snake_case object.
+   * Called by Index.html before triggering a preview or send.
+   */
+  function getValues() {
+    return {
+      property_name:       _val('property_name'),
+      event_name:          _val('event_name'),
+      window_start:        _val('window_start'),
+      window_end:          _val('window_end'),
+      manager_email:       _val('manager_email'),
+      manager_name:        _val('manager_name'),
+      cc_extra:            _val('cc_extra'),
+      bcc_extra:           _val('bcc_extra'),
+      sender_display_name: _val('sender_display_name'),
+      subject_template:    _val('subject_template'),
+      closing_html:        _val('closing_html'),
+      body_intro_html:     _quill
+                             ? _quill.root.innerHTML
+                             : (_val('body_textarea') || ''),
+      send_mode:           _segValues['send_mode']          || 'INDIVIDUAL',
+      include_unit_line:   _segValues['include_unit_line']  || 'YES',
+      include_disclaimer:  _segValues['include_disclaimer'] || 'YES',
+      notification_card:   _selectedCard,
+      attachment_file_ids: _val('attachment_file_ids'),
+    };
+  }
+
+  // ── Utilities ──────────────────────────────────────────────────────────────
+
+  function _save(key, value) {
+    google.script.run
+      .withFailureHandler(_onErr)
+      .saveConfigValue(key, value);
+  }
+
+  function _val(key) {
+    var el = document.getElementById('cfg-' + key);
+    return el ? el.value.trim() : '';
+  }
+
+  function _set(key, val) {
+    var el = document.getElementById('cfg-' + key);
+    if (el) el.value = val;
+  }
+
+  function _onErr(e) {
+    console.error('[Config] Server error:', e && e.message);
+    _showHint('\u26A0\uFE0F Save error: ' + (e && e.message ? e.message : 'unknown'));
+  }
+
+  // ── Phase 1 fires here — immediately when this script is parsed ───────────
+  //
+  // DOMContentLoaded is guaranteed to fire after this <script> block is
+  // executed (all HTML above it is already in the DOM), so getElementById
+  // calls inside _wireStaticUI() will find their elements.
+
+  document.addEventListener('DOMContentLoaded', function () {
+    _wireStaticUI();
+  });
+
+  return { init, getValues };
+
+})();
+</script>

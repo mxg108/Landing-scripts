@@ -76,47 +76,52 @@ function sendModeIndividual_(cfg) {
   const cfgAttachIds = parseIdList_(cfg.attachmentFileIds);
   let   sent = 0;
 
-  for (const t of targets) {
-    const tokens  = buildPerRowTokens_(cfg, t);
-    const subject = renderWithTokens_(cfg.subjectTemplate, tokens);
-    const body    = buildHtmlBody_(cfg, tokens, t.unit);
+  try {
+    for (const t of targets) {
+      const tokens  = buildPerRowTokens_(cfg, t);
+      const subject = renderWithTokens_(cfg.subjectTemplate, tokens);
+      const body    = buildHtmlBody_(cfg, tokens, t.unit);
 
-    // Resolve attachments (config + row)
-    const rowIds     = parseIdList_(String(sh.getRange(t.row, COL.ATTACH_IDS).getValue() || ''));
-    const allIds     = [...cfgAttachIds, ...rowIds];
-    let   attachments = [];
+      // Resolve attachments (config + row)
+      const rowIds     = parseIdList_(String(sh.getRange(t.row, COL.ATTACH_IDS).getValue() || ''));
+      const allIds     = [...cfgAttachIds, ...rowIds];
+      let   attachments = [];
 
-    if (allIds.length) {
-      try {
-        attachments = getBlobsForIds_(allIds, { exportGoogleToPdf: true, maxBytes: MAX_ATTACH_BYTES });
-      } catch (e) {
-        sh.getRange(t.row, COL.STATUS).setValue('REVIEW');
-        sh.getRange(t.row, COL.NOTES).setValue(e.message);
-        run.rowAfter.push({ row: t.row, status: 'REVIEW', lastSent: null });
-        continue;
+      if (allIds.length) {
+        try {
+          attachments = getBlobsForIds_(allIds, { exportGoogleToPdf: true, maxBytes: MAX_ATTACH_BYTES });
+        } catch (e) {
+          sh.getRange(t.row, COL.STATUS).setValue('REVIEW');
+          sh.getRange(t.row, COL.NOTES).setValue(e.message);
+          run.rowAfter.push({ row: t.row, status: 'REVIEW', lastSent: null });
+          continue;
+        }
       }
+
+      GmailApp.sendEmail(t.email, subject, '', {
+        cc:          combineCc_(cfg),
+        bcc:         cfg.bccExtra || '',
+        replyTo:     cfg.replyTo  || '',
+        htmlBody:    body,
+        name:        cfg.senderDisplayName || 'Landing Notifications',
+        attachments,
+      });
+
+      const now = new Date();
+      sh.getRange(t.row, COL.STATUS).setValue('SENT');
+      sh.getRange(t.row, COL.LAST_SENT).setValue(now);
+      run.rowAfter.push({ row: t.row, status: 'SENT', lastSent: now });
+
+      sent++;
+      Utilities.sleep(100); // gentle throttle
     }
 
-    GmailApp.sendEmail(t.email, subject, '', {
-      cc:          combineCc_(cfg),
-      bcc:         cfg.bccExtra || '',
-      replyTo:     cfg.replyTo  || '',
-      htmlBody:    body,
-      name:        cfg.senderDisplayName || 'Landing Notifications',
-      attachments,
-    });
-
-    const now = new Date();
-    sh.getRange(t.row, COL.STATUS).setValue('SENT');
-    sh.getRange(t.row, COL.LAST_SENT).setValue(now);
-    run.rowAfter.push({ row: t.row, status: 'SENT', lastSent: now });
-
-    sent++;
-    Utilities.sleep(100); // gentle throttle
+    logRunComplete_(run, sent, null);
+    safeAlert_(`Sent ${sent} individualised email(s).`);
+  } catch (e) {
+    logRunComplete_(run, sent, String(e && e.message || e));
+    throw e;
   }
-
-  logRunComplete_(run, sent, null);
-  safeAlert_(`Sent ${sent} individualised email(s).`);
 }
 
 // ── BCC mode ──────────────────────────────────────────────────────────────────

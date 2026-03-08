@@ -43,7 +43,7 @@ function dryRunPreview() {
       ? `<div style="color:#a33;margin-top:6px;"><strong>Attachment issues:</strong><br>${notes.map(n => escapeHtml_(n)).join('<br>')}</div>`
       : '';
 
-    const safeBody = makePreviewSafe_(normalizeTelLinks_(htmlBody));
+    const safeBody = makePreviewSafe_(htmlBody);
 
     return `
       <div style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:10px 0;">
@@ -211,7 +211,7 @@ function dryRunPreviewBCC() {
         <hr style="margin:12px 0;">
         <div><strong>Subject:</strong> ${escapeHtml_(subject)}</div>
         <hr style="margin:12px 0;">
-        <div>${body}</div>
+        <div>${makePreviewSafe_(body)}</div>
       </div>
     </div>`, 'Dry Run – BCC Preview');
 }
