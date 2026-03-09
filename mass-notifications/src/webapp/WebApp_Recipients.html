@@ -191,9 +191,106 @@
     font-size: 13px;
     display: none;
   }
+
+  /* ── Looker fetch panel ──────────────────────────────────────────────── */
+  .looker-panel {
+    background: #F5F7FA;
+    border: 1px solid #dce3f0;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 20px;
+  }
+  .looker-panel-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .looker-panel-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: #15192D;
+    white-space: nowrap;
+  }
+  .looker-panel-label span {
+    font-weight: 400;
+    font-size: 11px;
+    color: #888;
+    margin-left: 4px;
+  }
+  #looker-property-input {
+    flex: 1;
+    min-width: 180px;
+    max-width: 320px;
+    box-sizing: border-box;
+    border: 1px solid #c3d4ef;
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 13px;
+    font-family: Arial, Helvetica, sans-serif;
+    color: #15192D;
+    outline: none;
+    transition: border-color .15s;
+  }
+  #looker-property-input:focus { border-color: #1A61D9; }
+  #looker-fetch-btn {
+    font-size: 13px;
+    font-family: Arial, Helvetica, sans-serif;
+    background: #15192D;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 7px 16px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity .15s;
+  }
+  #looker-fetch-btn:hover    { opacity: .85; }
+  #looker-fetch-btn:disabled { opacity: .5; cursor: not-allowed; }
+  #looker-status-line {
+    margin-top: 10px;
+    font-size: 12px;
+    min-height: 18px;
+    display: none;
+  }
+  .looker-status-ok    { color: #1A7F37; }
+  .looker-status-error { color: #D9534F; }
+  .looker-status-info  { color: #555; }
+
+  /* ── Status badges ───────────────────────────────────────────────────── */
+  .rec-col-status { width: 80px; text-align: center; }
+  .rec-status-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .3px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    white-space: nowrap;
+  }
+  .rec-status-pending { background: #E7EFFB; color: #1A61D9; }
+  .rec-status-review  { background: #FDE8E8; color: #D9534F; }
 </style>
 
 <section id="section-recipients">
+
+  <!-- ── Looker fetch panel ─────────────────────────────────────────── -->
+  <div class="looker-panel">
+    <div class="looker-panel-row">
+      <label class="looker-panel-label" for="looker-property-input">
+        Fetch from Looker
+        <span>active occupants by property</span>
+      </label>
+      <input
+        type="text"
+        id="looker-property-input"
+        placeholder="e.g. Florence Villa"
+        autocomplete="off"
+      >
+      <button id="looker-fetch-btn">Fetch recipients</button>
+    </div>
+    <div id="looker-status-line"></div>
+  </div>
 
   <div class="rec-header">
     <div>
@@ -225,6 +322,7 @@
           <th class="rec-col-email">Email<span class="rec-req">*</span></th>
           <th class="rec-col-name">Name</th>
           <th class="rec-col-unit">Unit</th>
+          <th class="rec-col-status">Status</th>
           <th class="rec-col-del"></th>
         </tr>
       </thead>
@@ -333,6 +431,7 @@ const Recipients = (() => {
     // We build the cell structure directly. Each cell holds one <input>.
     // _esc() prevents data values that contain quotes from breaking the
     // value="" attribute (e.g. a name like O'Brien or an email with <).
+    const statusBadge = _statusBadge(data.status || '');
     tr.innerHTML =
       '<td class="rec-col-num"></td>' +
       '<td><input class="rec-input rec-email" type="email"' +
@@ -344,6 +443,7 @@ const Recipients = (() => {
       '<td><input class="rec-input rec-unit" type="text"' +
            ' placeholder="101"' +
            ' value="' + _esc(data.unit  || '') + '"></td>' +
+      '<td class="rec-col-status">' + statusBadge + '</td>' +
       '<td><button class="rec-del-btn" title="Remove row">&#x2715;</button></td>';
 
     // Validate email on blur; also re-validate name/unit for the same row.
@@ -404,6 +504,18 @@ const Recipients = (() => {
    */
   function _esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  }
+
+  /**
+   * Returns a status badge <span> HTML string for a given status value.
+   * Blank status → no badge rendered.
+   */
+  function _statusBadge(status) {
+    if (!status) return '';
+    const s = String(status).toUpperCase();
+    if (s === 'PENDING') return '<span class="rec-status-badge rec-status-pending">PENDING</span>';
+    if (s === 'REVIEW')  return '<span class="rec-status-badge rec-status-review">REVIEW</span>';
+    return '<span class="rec-status-badge" style="background:#eee;color:#555;">' + _esc(status) + '</span>';
   }
 
   // ── CSV import ────────────────────────────────────────────────────────────
@@ -512,6 +624,69 @@ document.getElementById('rec-csv-btn').addEventListener('click', function () {
 document.getElementById('rec-csv-input').addEventListener('change', function (e) {
   Recipients.handleCSV(e);
 });
+
+// ── Looker fetch ─────────────────────────────────────────────────────────────
+
+(function () {
+  const input  = document.getElementById('looker-property-input');
+  const btn    = document.getElementById('looker-fetch-btn');
+  const status = document.getElementById('looker-status-line');
+
+  function setStatus(msg, cls) {
+    status.textContent = msg;
+    status.className   = cls || '';
+    status.style.display = msg ? 'block' : 'none';
+  }
+
+  function setLoading(loading) {
+    btn.disabled       = loading;
+    input.disabled     = loading;
+    btn.textContent    = loading ? 'Fetching…' : 'Fetch recipients';
+  }
+
+  btn.addEventListener('click', function () {
+    const propertyName = input.value.trim();
+    if (!propertyName) {
+      setStatus('Enter a property name first.', 'looker-status-error');
+      input.focus();
+      return;
+    }
+
+    setLoading(true);
+    setStatus('Contacting Looker — this may take a few seconds…', 'looker-status-info');
+
+    google.script.run
+      .withSuccessHandler(function (res) {
+        setLoading(false);
+        if (!res.ok) {
+          setStatus('Error: ' + res.error, 'looker-status-error');
+          return;
+        }
+
+        // Clear the current grid and repopulate with sanitised rows.
+        document.getElementById('rec-tbody').innerHTML = '';
+        res.rows.forEach(function (r) { Recipients.addRow(r); });
+
+        setStatus(
+          'Fetched ' + res.rawCount + ' raw rows → ' +
+          res.pending + ' PENDING, ' +
+          res.review  + ' REVIEW' +
+          (res.review > 0 ? ' — review flagged rows before sending.' : ' — ready to send.'),
+          res.review > 0 ? 'looker-status-error' : 'looker-status-ok'
+        );
+      })
+      .withFailureHandler(function (err) {
+        setLoading(false);
+        setStatus('Unexpected error: ' + (err.message || err), 'looker-status-error');
+      })
+      .lookerSyncForWebApp(propertyName);
+  });
+
+  // Allow Enter key to trigger the fetch.
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') btn.click();
+  });
+})();
 
 // ── Drag & drop CSV onto the toolbar ────────────────────────────────────────
 (function () {

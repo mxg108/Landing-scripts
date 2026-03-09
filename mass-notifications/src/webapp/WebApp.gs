@@ -144,10 +144,52 @@ function getRecipientsForWebApp_(sheetName) {
     .getValues()
     .filter(r => String(r[COL.EMAIL - 1]).trim())
     .map(r => ({
-      email: String(r[COL.EMAIL - 1] || ''),
-      name:  String(r[COL.NAME  - 1] || ''),
-      unit:  _sheetCellToStr_(r[COL.UNIT - 1]),
+      email:  String(r[COL.EMAIL  - 1] || ''),
+      name:   String(r[COL.NAME   - 1] || ''),
+      unit:   _sheetCellToStr_(r[COL.UNIT - 1]),
+      status: String(r[COL.STATUS - 1] || ''),
     }));
+}
+
+// ── Client → Server: Looker sync ──────────────────────────────────────────────
+
+/**
+ * Runs the full Looker sync pipeline from the Web App.
+ * Fetches active occupants for the given property, sanitises them,
+ * archives + clears Mass_Notification, then populates it with results.
+ *
+ * Returns the sanitised rows so the client can refresh the grid without
+ * a second round-trip.
+ *
+ * Called via google.script.run.lookerSyncForWebApp(propertyName).
+ *
+ * @param  {string} propertyName
+ * @return {{ ok: boolean, rows: Array, pending: number, review: number,
+ *            rawCount: number, error: string }}
+ */
+function lookerSyncForWebApp(propertyName) {
+  try {
+    const raw = fetchActiveOccupants_(propertyName);
+    if (!raw.length) {
+      return { ok: false, error: `No active occupants found for "${propertyName}". Check the property name spelling.` };
+    }
+
+    writeLookerDataSheet_(raw);
+    const sanitized = sanitizeOccupants_(raw);
+    archiveAndClearRecipientsQuiet_();
+    const { pending, review } = populateRecipientsSheet_(sanitized);
+
+    const rows = sanitized.map(({ email, name, unit, status }) => ({
+      email,
+      name,
+      unit:   String(unit || ''),
+      status: status || 'PENDING',
+    }));
+
+    return { ok: true, rows, pending, review, rawCount: raw.length };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 }
 
 // ── Client → Server: save form data ───────────────────────────────────────────

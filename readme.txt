@@ -5,7 +5,7 @@
 
   Maintained by: [Maximiliano Pérez / Member Support Management]
   Department:    Operations
-  Last Updated:  February 2026
+  Last Updated:  March 2026
   Status:        Active — both scripts are live and in use
 
 --------------------------------------------------------------------------------
@@ -46,7 +46,18 @@ current production versions.
   │       ├── Cards.gs          Reusable HTML content blocks
   │       ├── Reset.gs          Undo / archive / reset operations
   │       ├── UI.gs             Custom menu and sidebar interface
-  │       └── Utils.gs          Shared utility functions
+  │       ├── Utils.gs          Shared utility functions
+  │       ├── lookerclient/     Looker API integration (v3.2.0+)
+  │       │   ├── LookerAuth.gs    OAuth2 token management + credential setup
+  │       │   ├── LookerQuery.gs   API wrappers (inline query for active occupants)
+  │       │   └── LookerSync.gs    Orchestrator: fetch → sanitise → populate sheet
+  │       └── webapp/           Web App front-end (HtmlService)
+  │           ├── Index.html       Shell page; stitches section partials together
+  │           ├── WebApp.gs        doGet entry point + server-side API
+  │           ├── WebApp_Recipients.html  Recipients grid + Looker fetch panel
+  │           ├── WebApp_Config.html      Config fields + rich-text editor
+  │           ├── WebApp_Preview.html     Live email preview
+  │           └── WebApp_Send.html        Send controls and status
   │
   └── qa-automation/
       └── src/                  Google Apps Script files (.js)
@@ -80,11 +91,16 @@ WHERE IT LIVES
   Associated Looker Board: https://landing.cloud.looker.com/dashboards/4552?Reservation+Platform=&Property+Name=
 
 HOW IT WORKS (HIGH LEVEL)
-  1. The operator opens the Google Sheet and selects a notification template
-     from the "Mass Notify" custom menu (e.g., "Water Outage").
-  2. The Config sheet is pre-filled with subject, body, greeting, and
-     disclaimer. The operator fills in property-specific fields (property name,
-     dates, manager email, etc.).
+  1. The operator types a property name into the Recipients section of the Web
+     App (or uses Mass Notify → Looker Sync → Fetch recipients from Looker…
+     from the sheet menu) to automatically pull active occupants from Looker
+     dashboard 4552. The script sanitises duplicates, resolves shared emails
+     using applicant alt-email columns, and populates the Mass_Notification
+     sheet. Rows that cannot be automatically resolved are flagged REVIEW.
+  2. The operator selects a notification template from the "Mass Notify" custom
+     menu (e.g., "Water Outage"). The Config sheet is pre-filled with subject,
+     body, greeting, and disclaimer. The operator fills in property-specific
+     fields (property name, dates, manager email, etc.).
   3. The operator runs "Dry Run → Preview" to review a sample email.
   4. When ready, the operator runs "Send" to deliver emails to all eligible
      recipients in the Recipients sheet.
@@ -129,12 +145,13 @@ SAFETY FEATURES
   - Recipients are skipped if their status is not blank, PENDING, or READY.
 
 CURRENT LIMITATIONS / KNOWN ISSUES
-  - Manually querying a Looker board and copy-pasting the active occupant table is a cumbersome
-  and time-consuming process.
   - Bandwidth to send time-crucial notifications is ops-dependent. On a busy day critical
-  notifications might not get sent immediately if there are no available Managers
-  - Gmail daily send limits, 
-  - Specific cases where a template may not be useful, i. e. a one-off extraordinary situation
+  notifications might not get sent immediately if there are no available Managers.
+  - Gmail daily send limits apply.
+  - Specific cases where a template may not be useful (e.g. a one-off extraordinary situation)
+  require manually composing the body HTML in the Config sheet.
+  - Looker sync rows flagged REVIEW (triplicate+ emails with no resolvable alt address) require
+  manual resolution before sending.
 
 CONTACTS / OWNERSHIP
   Script maintained by: Maximiliano Pérez García
@@ -295,6 +312,10 @@ KEY PRINCIPLES
     3. For trigger-based scripts (QA Automation), ensure the onFormSubmit trigger
        is registered under Triggers in the Apps Script editor.
     4. Test changes using Dry Run / Draft mode before enabling live sends.
+    5. Looker API credentials (Client ID and Client Secret) are stored in GAS
+       Script Properties — never in the sheet. Run Mass Notify → Looker Sync →
+       Setup credentials once after a fresh deployment. Credentials are provided
+       by the BI Manager and are scoped to the landing.cloud.looker.com instance.
 
  
 
