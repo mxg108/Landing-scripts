@@ -6,7 +6,7 @@
  * here is available project-wide without imports.
  */
 
-const VERSION                    = 'v3.1.1';
+const VERSION                    = 'v3.2.0';
 const LANDING_IVR_PHONE          = '+14152311701';
 const LANDING_IVR_PHONE_DISPLAY  = '(415) 231-1701';
 const CONFIG_SHEET               = 'Config';
@@ -24,3 +24,30 @@ const COL = {
   ATTACH_IDS: 7,
 };
 const COL_MAX = 7;
+
+// ── Looker integration ────────────────────────────────────────────────────────
+
+const LOOKER_BASE_URL    = 'https://landing.cloud.looker.com';
+const LOOKER_API_VERSION = '4.0';
+const LOOKER_MODEL       = 'landing';
+const LOOKER_EXPLORE     = 'dimreservation';
+const LOOKER_DATA_SHEET  = 'Looker_Data';
+
+// Looker field names (model: landing, explore: dimreservation)
+// Source: dashboard 4552 — "Active Occupants" tile
+const LFIELD = {
+  EMAIL:       'dimuser.user_email',
+  MEMBER_NAME: 'dimuser.user_full_name',
+  UNIT:        'dimhome.unit_number',
+  OCC_NAME:    'dimoccupant.occ_name',
+  PHONE:       'dimuser.user_phone',
+  RES_ID:      'dimreservation.reservation_id',
+  CHECK_IN:    'dimreservation.reservation_check_in_date',
+  CHECK_OUT:   'dimreservation.reservation_check_out_at_date',
+  PROPERTY:    'dimproperty.property_name',
+  ALT_EMAIL_1: 'tblapplication.first_applicant_email',
+  ALT_EMAIL_2: 'tblapplication.second_applicant_email',
+  ALT_EMAIL_3: 'tblapplication.third_applicant_email',
+  ALT_EMAIL_4: 'tblapplication.fourth_applicant_email',
+  PLATFORM:    'dimreservation.reservation_platform',
+};

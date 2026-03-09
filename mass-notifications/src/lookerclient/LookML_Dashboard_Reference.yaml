@@ -1,0 +1,150 @@
+# Looker Dashboard LookML — Active Reservations per Property
+# Dashboard ID : 4552
+# URL          : https://landing.cloud.looker.com/dashboards/4552
+# Source       : "Get LookML" export — do not edit manually
+#
+# Key values extracted for GAS integration:
+#   Model   : landing
+#   Explore : dimreservation
+#   Property filter field : dimproperty.property_name
+#   Platform filter field : dimreservation.reservation_platform  (default: Landing)
+
+- dashboard: active_reservations_per_property
+  title: Active Reservations per Property
+  preferred_viewer: dashboards-next
+  description: ''
+  refresh: 1 minute
+  preferred_slug: qRd6yt6j4KgkVMEyf7QwY7
+  layout: newspaper
+  tabs:
+  - name: ''
+    label: ''
+  elements:
+  - title: Active Occupants
+    name: Active Occupants
+    model: landing
+    explore: dimreservation
+    type: looker_grid
+    fields: [dimuser.user_email, dimuser.user_full_name, dimhome.unit_number, dimoccupant.occ_name,
+      dimuser.user_phone, dimreservation.reservation_id, dimreservation.reservation_check_in_date,
+      dimreservation.reservation_check_out_at_date, dimproperty.property_name, tblapplication.first_applicant_email,
+      tblapplication.second_applicant_email, tblapplication.third_applicant_email,
+      tblapplication.fourth_applicant_email]
+    filters:
+      dimreservation.reservation_platform: ''
+      dimreservation.reservation_is_employee: ''
+      dimreservation.reservation_is_free: ''
+      dimreservation.reservation_is_standby_bump: ''
+      dimreservation.reservation_check_in_date: before 0 minutes ago
+      tblapplication.first_applicant_email: ''
+      tblapplication.fourth_applicant_email: ''
+      tblapplication.second_applicant_email: ''
+      tblapplication.third_applicant_email: ''
+    sorts: [dimreservation.reservation_check_in_date desc]
+    limit: 500
+    column_limit: 50
+    filter_expression: "(matches_filter(${dimreservation.reservation_check_out_at_date},\
+      \ `null`) OR matches_filter(${dimreservation.reservation_check_out_at_date},\
+      \ `after 0 minutes ago`)) AND (matches_filter(${dimhome.currently_occupied},\
+      \ `Yes`))"
+    show_view_names: false
+    show_row_numbers: true
+    transpose: false
+    truncate_text: true
+    hide_totals: false
+    hide_row_totals: false
+    size_to_fit: true
+    table_theme: white
+    limit_displayed_rows: false
+    enable_conditional_formatting: false
+    header_text_alignment: left
+    header_font_size: 12
+    rows_font_size: 12
+    conditional_formatting_include_totals: false
+    conditional_formatting_include_nulls: false
+    defaults_version: 1
+    listen:
+      Reservation Platform: dimreservation.reservation_platform
+      Property Name: dimproperty.property_name
+    row: 0
+    col: 0
+    width: 24
+    height: 12
+    tab_name: ''
+  - title: Active Main Occupants
+    name: Active Main Occupants
+    model: landing
+    explore: dimreservation
+    type: looker_grid
+    fields: [dimuser.user_email, dimuser.user_full_name, dimhome.unit_number, dimuser.user_phone,
+      dimreservation.reservation_id, dimreservation.reservation_check_in_date, dimreservation.reservation_check_out_at_date,
+      dimproperty.property_name]
+    filters:
+      dimreservation.reservation_platform: ''
+      dimreservation.reservation_is_employee: ''
+      dimreservation.reservation_is_free: ''
+      dimreservation.reservation_is_standby_bump: ''
+      dimreservation.reservation_check_in_date: before 0 minutes ago
+      dimproperty.property_name: ''
+      dimreservation.reservation_check_out_at_date: null,after 0 minutes ago
+      dimhome.currently_occupied: 'Yes'
+    sorts: [dimreservation.reservation_check_in_date desc]
+    limit: 500
+    column_limit: 50
+    show_view_names: false
+    show_row_numbers: true
+    transpose: false
+    truncate_text: true
+    hide_totals: false
+    hide_row_totals: false
+    size_to_fit: true
+    table_theme: white
+    limit_displayed_rows: false
+    enable_conditional_formatting: false
+    header_text_alignment: left
+    header_font_size: '12'
+    rows_font_size: '12'
+    conditional_formatting_include_totals: false
+    conditional_formatting_include_nulls: false
+    show_sql_query_menu_options: false
+    show_totals: true
+    show_row_totals: true
+    truncate_header: false
+    minimum_column_width: 75
+    defaults_version: 1
+    listen:
+      Reservation Platform: dimreservation.reservation_platform
+      Property Name: dimproperty.property_name
+    row: 12
+    col: 0
+    width: 24
+    height: 16
+    tab_name: ''
+  filters:
+  - name: Reservation Platform
+    title: Reservation Platform
+    type: field_filter
+    default_value: Landing
+    allow_multiple_values: true
+    required: false
+    ui_config:
+      type: advanced
+      display: popover
+    model: landing
+    explore: dimreservation
+    listens_to_filters: []
+    field: dimreservation.reservation_platform
+  - name: Property Name
+    title: Property Name
+    type: field_filter
+    default_value: ''
+    allow_multiple_values: true
+    required: false
+    ui_config:
+      type: advanced
+      display: popover
+      options: []
+    model: landing
+    explore: dimreservation
+    listens_to_filters: []
+    field: dimproperty.property_name

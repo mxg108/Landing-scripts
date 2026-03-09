@@ -10,8 +10,21 @@
 /**
  * Copies the recipients sheet to a timestamped hidden archive tab,
  * then clears all data rows (keeps headers).
+ * Shows a confirmation alert when done.
  */
 function archiveAndClearRecipients() {
+  const archiveName = archiveAndClearRecipientsQuiet_();
+  safeAlert_(`Archived to "${archiveName}" and cleared recipient rows.`);
+}
+
+/**
+ * Same as archiveAndClearRecipients() but shows no alert.
+ * Used by the Looker sync pipeline so it doesn't interrupt the flow
+ * with an intermediate dialog.
+ *
+ * @return {string} The name of the archive sheet that was created.
+ */
+function archiveAndClearRecipientsQuiet_() {
   const cfg  = loadConfig_();
   const ss   = SpreadsheetApp.getActive();
   const sh   = getRecipientsSheet_(cfg);
@@ -31,7 +44,7 @@ function archiveAndClearRecipients() {
   const last = sh.getLastRow();
   if (last >= 2) sh.getRange(2, 1, last - 1, COL_MAX).clearContent();
 
-  safeAlert_(`Archived to "${copy.getName()}" and cleared recipient rows.`);
+  return copy.getName();
 }
 
 /**

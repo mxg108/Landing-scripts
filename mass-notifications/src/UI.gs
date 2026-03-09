@@ -64,6 +64,15 @@ function onOpen() {
   main.addSubMenu(sig);
   main.addSeparator();
 
+  // ── Looker Sync ───────────────────────────────────────────────────────────
+  const looker = ui.createMenu('Looker Sync');
+  looker.addItem('Fetch recipients from Looker…', 'syncFromLooker');
+  looker.addSeparator();
+  looker.addItem('Test Looker connection',  'testLookerConnection');
+  looker.addItem('Setup credentials',       'setupLookerCredentials');
+  main.addSubMenu(looker);
+  main.addSeparator();
+
   // ── Config / Tools ───────────────────────────────────────────────────────
   const cfgMenu = ui.createMenu('Config / Tools');
   cfgMenu.addItem('Ensure Config UI',      'ensureConfigUI');
