@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Landing QA Scoring</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,300;0,400;0,600;1,300&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #f5f4f0;
+      --surface: #ffffff;
+      --border: #e0ddd6;
+      --text: #1a1a18;
+      --muted: #6b6960;
+      --accent: #1a1a18;
+      --success: #2d6a4f;
+      --warning: #b45309;
+      --error: #991b1b;
+      --badge-high: #d1fae5;
+      --badge-medium: #fef3c7;
+      --badge-low: #fee2e2;
+    }
+
+    body {
+      font-family: 'DM Mono', monospace;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 2rem 1rem;
+    }
+
+    header {
+      max-width: 720px;
+      margin: 0 auto 2.5rem;
+    }
+
+    header h1 {
+      font-family: 'Fraunces', serif;
+      font-weight: 300;
+      font-size: 2rem;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.25rem;
+    }
+
+    header p {
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    .card {
+      max-width: 720px;
+      margin: 0 auto 1.5rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.75rem;
+    }
+
+    .card h2 {
+      font-family: 'Fraunces', serif;
+      font-weight: 400;
+      font-size: 1.1rem;
+      margin-bottom: 1.25rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .form-group.full { grid-column: 1 / -1; }
+
+    label {
+      font-size: 0.72rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    input, select {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.85rem;
+      padding: 0.6rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--bg);
+      color: var(--text);
+      width: 100%;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input:focus, select:focus { border-color: var(--accent); }
+
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: 6px;
+      padding: 2rem 1rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .drop-zone:hover, .drop-zone.dragover {
+      border-color: var(--accent);
+      background: var(--bg);
+    }
+
+    .drop-zone p { color: var(--muted); font-size: 0.82rem; }
+    .drop-zone .hint { font-size: 0.72rem; margin-top: 0.35rem; }
+
+    #file-list {
+      margin-top: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .file-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.5rem 0.75rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-size: 0.78rem;
+    }
+
+    .file-item .call-id-input {
+      width: 200px;
+      font-size: 0.75rem;
+      padding: 0.3rem 0.5rem;
+    }
+
+    .file-item button {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 1rem;
+      padding: 0 0.25rem;
+    }
+
+    .btn {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.82rem;
+      padding: 0.7rem 1.5rem;
+      border: 1px solid var(--accent);
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+    }
+
+    .btn-primary:hover { background: #333; }
+    .btn-primary:disabled { background: var(--border); border-color: var(--border); cursor: not-allowed; }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--accent);
+    }
+
+    .btn-secondary:hover { background: var(--bg); }
+
+    .actions {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 1.5rem;
+      align-items: center;
+    }
+
+    /* Status & results */
+    #status-area { display: none; }
+
+    .job-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.6rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8rem;
+    }
+
+    .job-row:last-child { border-bottom: none; }
+
+    .status-badge {
+      padding: 0.2rem 0.6rem;
+      border-radius: 20px;
+      font-size: 0.7rem;
+      font-weight: 500;
+    }
+
+    .status-pending  { background: #e5e7eb; color: #374151; }
+    .status-scoring  { background: #dbeafe; color: #1e40af; }
+    .status-complete { background: var(--badge-high); color: var(--success); }
+    .status-error    { background: var(--badge-low); color: var(--error); }
+
+    .scorecard-panel {
+      margin-top: 1rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .scorecard-header {
+      padding: 0.75rem 1rem;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.82rem;
+    }
+
+    .scorecard-avg {
+      font-family: 'Fraunces', serif;
+      font-size: 1.3rem;
+      font-weight: 300;
+    }
+
+    .long-call-flag {
+      font-size: 0.72rem;
+      padding: 0.2rem 0.6rem;
+      background: #fef3c7;
+      color: #b45309;
+      border-radius: 20px;
+    }
+
+    .section-row {
+      display: grid;
+      grid-template-columns: 1fr 60px 80px;
+      gap: 0.5rem;
+      align-items: start;
+      padding: 0.65rem 1rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.78rem;
+    }
+
+    .section-row:last-child { border-bottom: none; }
+
+    .section-name { font-weight: 500; }
+    .section-reasoning { color: var(--muted); font-size: 0.72rem; margin-top: 0.2rem; }
+    .section-flags { color: var(--warning); font-size: 0.68rem; margin-top: 0.15rem; }
+
+    .score-val { text-align: center; font-weight: 500; }
+    .manual-only { color: var(--muted); font-style: italic; text-align: center; font-size: 0.72rem; }
+
+    .confidence-badge {
+      font-size: 0.65rem;
+      padding: 0.15rem 0.4rem;
+      border-radius: 3px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      text-align: center;
+    }
+
+    .conf-high   { background: var(--badge-high);   color: var(--success); }
+    .conf-medium { background: var(--badge-medium);  color: var(--warning); }
+    .conf-low    { background: var(--badge-low);     color: var(--error); }
+
+    .notes-section {
+      padding: 0.75rem 1rem;
+      background: var(--bg);
+      border-top: 1px solid var(--border);
+      font-size: 0.78rem;
+    }
+
+    .notes-label {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+
+    .sheets-link {
+      font-size: 0.75rem;
+      color: var(--success);
+      text-decoration: none;
+    }
+
+    .sheets-link:hover { text-decoration: underline; }
+
+    @media (max-width: 600px) {
+      .form-grid { grid-template-columns: 1fr; }
+      .form-group.full { grid-column: 1; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Landing QA Scoring</h1>
+  <p>AI-assisted call evaluation — Phase 1. Human review required before scores reach agents.</p>
+</header>
+
+<div class="card">
+  <h2>Submission Details</h2>
+  <form id="score-form">
+    <div class="form-grid">
+      <div class="form-group">
+        <label for="agent-name">Agent Name</label>
+        <input type="text" id="agent-name" placeholder="e.g. Ivan Garcia" required />
+      </div>
+      <div class="form-group">
+        <label for="manager-email">Your Email (Manager)</label>
+        <input type="email" id="manager-email" placeholder="you@hellolanding.com" required />
+      </div>
+      <div class="form-group">
+        <label for="date-start">Date Start</label>
+        <input type="date" id="date-start" required />
+      </div>
+      <div class="form-group">
+        <label for="date-end">Date End</label>
+        <input type="date" id="date-end" required />
+      </div>
+    </div>
+
+    <div style="margin-top: 1.25rem;">
+      <label style="display:block; margin-bottom: 0.5rem; font-size:0.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em;">
+        Call Recordings
+      </label>
+      <div class="drop-zone" id="drop-zone">
+        <p>Drop .mp3 / .mp4 / .m4a files here or click to browse</p>
+        <p class="hint" style="color:var(--muted);">Enter the Dialpad Call ID for each file after uploading</p>
+        <input type="file" id="file-input" accept=".mp3,.mp4,.m4a,.wav,.ogg,.flac,.webm" multiple style="display:none;" />
+      </div>
+      <div id="file-list"></div>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="btn btn-primary" id="submit-btn" disabled>Score Calls</button>
+      <span id="form-hint" style="font-size:0.75rem; color:var(--muted);">Add at least one audio file to continue</span>
+    </div>
+  </form>
+</div>
+
+<div id="status-area" class="card">
+  <h2>Scoring Progress</h2>
+  <div id="job-list"></div>
+</div>
+
+<script>
+  const dropZone = document.getElementById('drop-zone');
+  const fileInput = document.getElementById('file-input');
+  const fileList = document.getElementById('file-list');
+  const submitBtn = document.getElementById('submit-btn');
+  const formHint = document.getElementById('form-hint');
+  const statusArea = document.getElementById('status-area');
+  const jobListEl = document.getElementById('job-list');
+
+  let selectedFiles = [];
+
+  // --- File selection ---
+  dropZone.addEventListener('click', () => fileInput.click());
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    addFiles([...e.dataTransfer.files]);
+  });
+  fileInput.addEventListener('change', () => addFiles([...fileInput.files]));
+
+  function addFiles(files) {
+    files.forEach(f => {
+      if (!selectedFiles.find(x => x.file.name === f.name)) {
+        selectedFiles.push({ file: f, callId: '' });
+      }
+    });
+    renderFileList();
+  }
+
+  function removeFile(index) {
+    selectedFiles.splice(index, 1);
+    renderFileList();
+  }
+
+  function renderFileList() {
+    fileList.innerHTML = '';
+    selectedFiles.forEach((item, i) => {
+      const div = document.createElement('div');
+      div.className = 'file-item';
+      const sizeMB = (item.file.size / 1024 / 1024).toFixed(1);
+      div.innerHTML = `
+        <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${item.file.name} <span style="color:var(--muted)">(${sizeMB} MB)</span></span>
+        <input class="call-id-input" type="text" placeholder="Dialpad Call ID" value="${item.callId}"
+          onchange="selectedFiles[${i}].callId = this.value; updateSubmitState();" />
+        <button type="button" onclick="removeFile(${i})">×</button>
+      `;
+      fileList.appendChild(div);
+    });
+    updateSubmitState();
+  }
+
+  function updateSubmitState() {
+    const hasFiles = selectedFiles.length > 0;
+    const allHaveIds = selectedFiles.every(f => f.callId.trim() !== '');
+    submitBtn.disabled = !(hasFiles && allHaveIds);
+    if (!hasFiles) {
+      formHint.textContent = 'Add at least one audio file to continue';
+    } else if (!allHaveIds) {
+      formHint.textContent = 'Enter a Dialpad Call ID for each file';
+    } else {
+      formHint.textContent = `${selectedFiles.length} call${selectedFiles.length > 1 ? 's' : ''} ready to score`;
+    }
+  }
+
+  // --- Submission ---
+  document.getElementById('score-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitting...';
+
+    const agentName = document.getElementById('agent-name').value.trim();
+    const managerEmail = document.getElementById('manager-email').value.trim();
+
+    const jobIds = [];
+
+    for (const item of selectedFiles) {
+      const formData = new FormData();
+      formData.append('audio_file', item.file);
+      formData.append('call_id', item.callId.trim());
+      formData.append('agent_name', agentName);
+      formData.append('manager_email', managerEmail);
+
+      const res = await fetch('/api/score', { method: 'POST', body: formData });
+      const data = await res.json();
+      jobIds.push({ jobId: data.job_id, filename: item.file.name, callId: item.callId });
+    }
+
+    statusArea.style.display = 'block';
+    statusArea.scrollIntoView({ behavior: 'smooth' });
+    submitBtn.textContent = 'Score Calls';
+    pollJobs(jobIds);
+  });
+
+  // --- Polling ---
+  function pollJobs(jobs) {
+    jobListEl.innerHTML = '';
+    jobs.forEach(({ jobId, filename, callId }) => {
+      const row = document.createElement('div');
+      row.id = `job-${jobId}`;
+      row.className = 'job-row';
+      row.innerHTML = `
+        <span>${filename}</span>
+        <span style="color:var(--muted); font-size:0.72rem;">Call ${callId}</span>
+        <span class="status-badge status-pending">Pending</span>
+      `;
+      jobListEl.appendChild(row);
+    });
+
+    const interval = setInterval(async () => {
+      let allDone = true;
+      for (const { jobId, filename, callId } of jobs) {
+        const res = await fetch(`/api/score/${jobId}`);
+        const data = await res.json();
+        updateJobRow(jobId, filename, callId, data);
+        if (data.status !== 'complete' && data.status !== 'error') allDone = false;
+      }
+      if (allDone) clearInterval(interval);
+    }, 3000);
+  }
+
+  function updateJobRow(jobId, filename, callId, data) {
+    const row = document.getElementById(`job-${jobId}`);
+    if (!row) return;
+
+    const badge = `<span class="status-badge status-${data.status}">${data.status}</span>`;
+    const sheetsNote = data.sheets_row > 0
+      ? `<span style="font-size:0.72rem; color:var(--success);">Saved to Sheets row ${data.sheets_row}</span>`
+      : '';
+    const errorNote = data.error ? `<span style="font-size:0.72rem; color:var(--error);">${data.error}</span>` : '';
+
+    row.innerHTML = `
+      <span>${filename}</span>
+      <span style="color:var(--muted); font-size:0.72rem;">Call ${callId}</span>
+      <div style="text-align:right;">${badge}${sheetsNote}${errorNote}</div>
+    `;
+
+    if (data.status === 'complete' && data.scorecard) {
+      const existing = document.getElementById(`scorecard-${jobId}`);
+      if (!existing) {
+        const panel = buildScorecardPanel(jobId, data.scorecard, filename);
+        row.insertAdjacentElement('afterend', panel);
+      }
+    }
+  }
+
+  function buildScorecardPanel(jobId, sc, filename) {
+    const numericScores = sc.sections
+      .filter(s => s.score_type === 'numeric' && s.score !== null)
+      .map(s => s.score);
+    const avg = numericScores.length
+      ? (numericScores.reduce((a, b) => a + b, 0) / numericScores.length).toFixed(2)
+      : 'N/A';
+
+    const flagged = sc.flagged_long_call;
+    const panel = document.createElement('div');
+    panel.id = `scorecard-${jobId}`;
+    panel.className = 'scorecard-panel';
+
+    const header = `
+      <div class="scorecard-header">
+        <span>${filename}</span>
+        <div style="display:flex; gap:0.5rem; align-items:center;">
+          ${flagged ? '<span class="long-call-flag">Long call — manager review</span>' : ''}
+          <span class="scorecard-avg">${avg}<span style="font-family:'DM Mono'; font-size:0.75rem; color:var(--muted);">/5</span></span>
+        </div>
+      </div>
+    `;
+
+    const sectionRows = sc.sections.map(s => {
+      const scoreDisplay = s.score_type === 'yn'
+        ? (s.yn_value || 'N/A')
+        : (s.score !== null ? `${s.score}/5` : 'N/A');
+      const confClass = `conf-${s.confidence}`;
+      const flags = s.flags && s.flags.length
+        ? `<div class="section-flags">${s.flags.join(', ')}</div>` : '';
+      const audioTag = s.audio_dependent ? ' <span style="color:var(--muted); font-size:0.68rem;">[audio]</span>' : '';
+      return `
+        <div class="section-row">
+          <div>
+            <div class="section-name">${s.name}${audioTag}</div>
+            <div class="section-reasoning">${s.reasoning}</div>
+            ${flags}
+          </div>
+          <div class="score-val">${scoreDisplay}</div>
+          <div><span class="confidence-badge ${confClass}">${s.confidence}</span></div>
+        </div>
+      `;
+    });
+
+    // Insert Documentation row after Efficiency (index 7)
+    sectionRows.splice(8, 0, `
+      <div class="section-row">
+        <div>
+          <div class="section-name">Documentation</div>
+          <div class="section-reasoning">Manual review required — not scored by AI.</div>
+        </div>
+        <div class="manual-only">—</div>
+        <div><span class="confidence-badge" style="background:#e5e7eb; color:#6b7280;">MANUAL</span></div>
+      </div>
+    `);
+
+    const notes = `
+      <div class="notes-section">
+        ${sc.call_summary ? `<div class="notes-label">Call Summary</div><div style="margin-bottom:0.75rem;">${sc.call_summary}</div>` : ''}
+        <div class="notes-label">Key Strengths</div>
+        <div style="margin-bottom:0.75rem;">${sc.key_strengths}</div>
+        <div class="notes-label">Opportunities for Improvement</div>
+        <div>${sc.opportunities}</div>
+      </div>
+    `;
+
+    panel.innerHTML = header + sectionRows.join('') + notes;
+    return panel;
+  }
+</script>
+
+</body>
+</html>
