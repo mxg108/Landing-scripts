@@ -150,9 +150,9 @@ Instead, sample randomly within these strata:
 | Language | English vs. Spanish calls should both be represented |
 
 ### Call Length Cap
-- **Calls over 25 minutes are flagged as "manual QA only"** — never scored by AI
+- **Calls over 25 minutes are flagged as "Manager review required"** — scored by AI with special attention to the "Efficiency" section of the scorecard
 - These are typically the most complex, escalated calls — they warrant direct human review anyway
-- The flag is automatic; the system surfaces them to a manager without attempting AI scoring
+- The flag is automatic; the system surfaces them to a manager after AI scoring
 
 ### CSAT Is a Separate Pipeline
 The current practice of selecting QA calls from low CSAT scores is **selection bias** — it
