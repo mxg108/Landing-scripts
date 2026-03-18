@@ -82,6 +82,16 @@ function onOpen() {
   main.addSubMenu(cfgMenu);
 
   main.addToUi();
+
+  // ── Database menu (separate top-level menu) ────────────────────────────
+  const db = ui.createMenu('Database');
+  db.addItem('Query by date',       'promptFetchByDate');
+  db.addItem('Query by recipient',  'promptFetchByRecipient');
+  db.addItem('Query by property',   'promptFetchByProperty');
+  db.addItem('Query by actor',      'promptFetchByActor');
+  db.addSeparator();
+  db.addItem('Test DB connection',  'testDbConnection');
+  db.addToUi();
 }
 
 // Named shims so GAS menu registration works for the dynamic template items.
@@ -207,4 +217,113 @@ function confirmProceed_(title, msg) {
 function testGmailAdvanced() {
   const resp = Gmail.Users.Settings.SendAs.list('me');
   Logger.log(resp && resp.sendAs ? resp.sendAs.length : 'no sendAs');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DATABASE MENU - prompt functions for the "Database" top-level menu.
+// These handle user input and display. The actual DB queries live in Database.gs.
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Prompts for a date and displays all recipients from campaigns on that date.
+ */
+function promptFetchByDate() {
+  const ui  = SpreadsheetApp.getUi();
+  const res = ui.prompt(
+    'Query DB: by date',
+    'Enter a date (YYYY-MM-DD):',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+
+  var dateStr = res.getResponseText().trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    ui.alert('Invalid date', 'Use YYYY-MM-DD format (e.g., 2026-03-16).', ui.ButtonSet.OK);
+    return;
+  }
+
+  var results = fetchByDate(dateStr);
+  showHtmlOrDraft_(renderQueryResults_(
+    'Recipients on ' + dateStr,
+    ['Run ID', 'Actor', 'Email', 'Name', 'Unit', 'Status', 'Sent At'],
+    results.map(function(r) { return [r.runId, r.actor, r.email, r.name, r.unit, r.status, r.sentAt || '']; })
+  ), 'DB Query: by date');
+}
+
+/**
+ * Prompts for an email and displays the full notification history for that recipient.
+ */
+function promptFetchByRecipient() {
+  const ui  = SpreadsheetApp.getUi();
+  const res = ui.prompt(
+    'Query DB: by recipient',
+    'Enter a recipient email:',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+
+  var email = res.getResponseText().trim();
+  if (!email || !email.includes('@')) {
+    ui.alert('Invalid email', 'Please enter a valid email address.', ui.ButtonSet.OK);
+    return;
+  }
+
+  var results = fetchByRecipient(email);
+  showHtmlOrDraft_(renderQueryResults_(
+    'Notification history for ' + email,
+    ['Date', 'Run ID', 'Property', 'Event', 'Status', 'Actor'],
+    results.map(function(r) { return [r.date, r.runId, r.property || '', r.event || '', r.status, r.actor]; })
+  ), 'DB Query: by recipient');
+}
+
+/**
+ * Prompts for a property name and displays all campaigns for that property.
+ */
+function promptFetchByProperty() {
+  const ui  = SpreadsheetApp.getUi();
+  const res = ui.prompt(
+    'Query DB: by property',
+    'Enter a property name (partial match):',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+
+  var property = res.getResponseText().trim();
+  if (!property) {
+    ui.alert('Empty input', 'Please enter a property name.', ui.ButtonSet.OK);
+    return;
+  }
+
+  var results = fetchByProperty(property);
+  showHtmlOrDraft_(renderQueryResults_(
+    'Campaigns for "' + property + '"',
+    ['Date', 'Run ID', 'Property', 'Event', 'Sent', 'Total', 'Actor'],
+    results.map(function(r) { return [r.date, r.runId, r.property || '', r.event || '', r.emailsSent, r.totalRows, r.actor]; })
+  ), 'DB Query: by property');
+}
+
+/**
+ * Prompts for an actor email and displays all campaigns they triggered.
+ */
+function promptFetchByActor() {
+  const ui  = SpreadsheetApp.getUi();
+  const res = ui.prompt(
+    'Query DB: by actor',
+    'Enter the sender/actor email (partial match):',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+
+  var actor = res.getResponseText().trim();
+  if (!actor) {
+    ui.alert('Empty input', 'Please enter an email or name.', ui.ButtonSet.OK);
+    return;
+  }
+
+  var results = fetchByActor(actor);
+  showHtmlOrDraft_(renderQueryResults_(
+    'Campaigns by "' + actor + '"',
+    ['Date', 'Run ID', 'Property', 'Event', 'Mode', 'Sent', 'Total', 'Actor'],
+    results.map(function(r) { return [r.date, r.runId, r.property || '', r.event || '', r.mode, r.emailsSent, r.totalRows, r.actor]; })
+  ), 'DB Query: by actor');
 }

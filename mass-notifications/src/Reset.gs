@@ -26,25 +26,25 @@ function archiveAndClearRecipients() {
  */
 function archiveAndClearRecipientsQuiet_() {
   const cfg  = loadConfig_();
-  const ss   = SpreadsheetApp.getActive();
   const sh   = getRecipientsSheet_(cfg);
-
-  const ts   = Utilities.formatDate(new Date(), cfg.timezone, 'yyyyMMdd_HHmmss');
-  const base = `Archive_${sh.getName()}_${ts}`;
-
-  const copy = sh.copyTo(ss);
-  const targetName = uniqueSheetName_(base);
-  try {
-    copy.setName(targetName);
-  } catch (_) {
-    copy.setName(uniqueSheetName_(`${base}__FALLBACK`));
-  }
-  copy.hideSheet();
-
   const last = sh.getLastRow();
+
+  // Archive all rows (sent + skipped) to PostgreSQL
+  if (last >= 2) {
+    const data = sh.getRange(2, 1, last - 1, COL_MAX).getValues();
+    try {
+      archiveCampaignToDb_(cfg, sh.getName(), data);
+    } catch (e) {
+      // If DB write fails, log the error but don't block the reset.
+      // The Run_Log still has RowStates as a fallback.
+      Logger.log('DB archive failed (data preserved in Run_Log): ' + e.message);
+    }
+  }
+
+  // Clear all data rows (keep headers)
   if (last >= 2) sh.getRange(2, 1, last - 1, COL_MAX).clearContent();
 
-  return copy.getName();
+  return sh.getName();
 }
 
 /**

@@ -33,20 +33,25 @@ current production versions.
 --------------------------------------------------------------------------------
 
   landing-scripts/
+  ├── database/
+  │   └── migrations/           SQL migration files
+  │       └── 001_mass_notifications_schema.sql
+  │
   ├── mass-notifications/
   │   └── src/                  Google Apps Script files (.gs)
   │       ├── Config.gs         Runtime configuration management
+  │       ├── Database.gs       PostgreSQL JDBC connection, queries, and migration
   │       ├── Mailer.gs         Core email sending logic
   │       ├── Templates.gs      Pre-built notification templates
   │       ├── Tokenizer.gs      Dynamic token substitution in email body
   │       ├── DryRun.gs         Preview and test-send modes
   │       ├── Recipients.gs     Recipient list handling
-  │       ├── RunLog.gs         Audit trail logging
+  │       ├── RunLog.gs         Audit trail logging + config/recipient restore
   │       ├── Attachments.gs    File attachment handling via Drive
   │       ├── Cards.gs          Reusable HTML content blocks
   │       ├── Reset.gs          Undo / archive / reset operations
-  │       ├── UI.gs             Custom menu and sidebar interface
-  │       ├── Utils.gs          Shared utility functions
+  │       ├── UI.gs             Custom menus (Mass Notify + Database) and modals
+  │       ├── Utils.gs          Shared utility functions + archive sheet management
   │       ├── lookerclient/     Looker API integration (v3.2.0+)
   │       │   ├── LookerAuth.gs    OAuth2 token management + credential setup
   │       │   ├── LookerQuery.gs   API wrappers (inline query for active occupants)
@@ -86,9 +91,9 @@ PURPOSE
 
 WHERE IT LIVES
   Google Sheets — deployed as a bound Google Apps Script project.
-  Spreadsheet URL: https://docs.google.com/spreadsheets/d/1YBl8ePRVvtAuRmYO708Gif33iMRXxZyKNhGi9MY--FA/edit?gid=1543620309#gid=1543620309
-  Apps Script project ID: 10uCQwh03sRsBbqb2LsWF9K2q3EwL396xxv4tySnwIsIZRTlaiEb53hpW
-  Associated Looker Board: https://landing.cloud.looker.com/dashboards/4552?Reservation+Platform=&Property+Name=
+  Spreadsheet URL: [REDACTED]
+  Apps Script project ID: [REDACTED]
+  Associated Looker Board: [REDACTED]
 
 HOW IT WORKS (HIGH LEVEL)
   1. The operator types a property name into the Recipients section of the Web
@@ -112,7 +117,24 @@ KEY SHEETS
   - Config          Key-value configuration table. Controls all runtime behavior.
   - Recipients      One row per resident: email, name, unit, status, attachments.
   - Run_Log         Audit trail. Captures every send with before/after state.
-  - Archive         Historical recipients moved here after a run is cleared.
+
+DATABASE (PostgreSQL on Railway)
+  Campaign and recipient data is now archived to a PostgreSQL database instead
+  of hidden Google Sheets tabs. The database serves as the long-term audit trail.
+
+  Schema: mass_notifications
+    - campaigns     One row per send operation (run_id, mode, actor, config snapshot)
+    - recipients    One row per recipient per campaign (sent + skipped, all logged)
+
+  A "Database" custom menu in the spreadsheet provides query access:
+    - Query by date        All recipients from campaigns on a given date
+    - Query by recipient   Full notification history for an email address
+    - Query by property    All campaigns for a property (partial match)
+    - Query by actor       All campaigns triggered by a specific sender
+    - Test DB connection   Verify Railway PostgreSQL connectivity
+
+  DB credentials are stored in Apps Script Script Properties (never in code).
+  Migration SQL lives in database/migrations/ and is version-controlled.
 
 SENDING MODES
   - Individual      One personalized email per recipient (uses first name, unit).
@@ -260,7 +282,7 @@ PLANNED STACK
   - FastAPI                   Backend API
   - Google Sheets API         Write AI-proposed scores back to the QA sheet
   - ChromaDB                  Vector store for SOPs (RAG-based rubric grounding)
-  - PostgreSQL                Persistent database
+  - PostgreSQL                Shared instance with Mass Notifications (Railway)
   - Next.js or Retool         Manager review dashboard (Phase 3)
 
 DEPLOYMENT ROADMAP
@@ -294,8 +316,10 @@ KEY PRINCIPLES
     - Gmail API           (send emails, create drafts)
     - Google Forms        (onFormSubmit trigger)
 
+  Mass Notifications also uses:
+    - PostgreSQL (JDBC)  (archive campaigns and recipients to Railway-hosted DB)
+
   All scripts run under the Google account of the authorized operator.
-  No external servers or third-party services are used in production.
 
 --------------------------------------------------------------------------------
   DEPLOYMENT & SETUP
@@ -331,6 +355,9 @@ KEY PRINCIPLES
   Dialpad       VoIP platform used for call center operations; source of call recordings
   RAG           Retrieval-Augmented Generation — using a knowledge base to ground AI
   Gemini Flash  Google's cost-efficient multimodal AI model used for audio scoring
+  Railway       Cloud hosting platform for the PostgreSQL database
+  JDBC          Java Database Connectivity — used by Apps Script to connect to Postgres
+  JSONB         Binary JSON type in PostgreSQL; supports querying inside JSON fields
 
 --------------------------------------------------------------------------------
   CONTRIBUTING & CHANGE MANAGEMENT
@@ -341,7 +368,9 @@ KEY PRINCIPLES
   issues are managed by Max.
 
   Branch strategy: feature branches → PR → merge to main.
-  Current active branch: feature/ai-scoring (AI-Scoring Phase 0 scaffolding)
+  Active branches:
+    feature/ai-scoring            AI-Scoring Phase 0 scaffolding
+    feature/database-integration  PostgreSQL integration for Mass Notifications
 
 --------------------------------------------------------------------------------
   SUPPORT & CONTACT
