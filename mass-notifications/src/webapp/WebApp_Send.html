@@ -237,7 +237,7 @@ const Send = (() => {
 
     } else if (state === 'warnings') {
       _el('send-warning-list').innerHTML = (data || [])
-        .map(function (w) { return '<li>' + w + '</li>'; }).join('');
+        .map(function (w) { return '<li>' + _esc(w) + '</li>'; }).join('');
       warnBanner.style.display  = 'block';
       btnPrimary.style.display  = 'none';
       btnProceed.style.display  = '';
@@ -245,7 +245,7 @@ const Send = (() => {
 
     } else if (state === 'errors') {
       _el('send-error-list').innerHTML = (data || [])
-        .map(function (e) { return '<li>' + e + '</li>'; }).join('');
+        .map(function (e) { return '<li>' + _esc(e) + '</li>'; }).join('');
       errBanner.style.display = 'block';
 
     } else if (state === 'success') {
@@ -309,6 +309,10 @@ const Send = (() => {
    * Called when the primary "Send" button is clicked.
    */
   function _onSendClick() {
+    if (!Recipients.validate()) {
+      _setState('errors', ['One or more recipient email addresses are invalid. Please fix the highlighted rows.']);
+      return;
+    }
     _setState('saving');
     google.script.run
       .withSuccessHandler(function () { _callSend(false); })
@@ -388,8 +392,8 @@ const Send = (() => {
     if (!summary) return;
     summary.innerHTML =
       '<strong>' + count + '</strong> recipient' + (count !== 1 ? 's' : '') +
-      ' &nbsp;&middot;&nbsp; Mode: <strong>' + mode.toUpperCase() + '</strong>' +
-      ' &nbsp;&middot;&nbsp; Property: <strong>' + (prop || '\u2014') + '</strong><br>' +
+      ' &nbsp;&middot;&nbsp; Mode: <strong>' + _esc(mode.toUpperCase()) + '</strong>' +
+      ' &nbsp;&middot;&nbsp; Property: <strong>' + _esc(prop || '\u2014') + '</strong><br>' +
       '<span style="color:#888;font-size:12px;">Subject: ' + _esc(subject || '(no subject)') + '</span>';
     summary.style.display = 'block';
   }

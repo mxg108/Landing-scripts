@@ -52,9 +52,10 @@ function getDbConnection_() {
  * @param {string}  shName -name of the recipients sheet
  * @param {Array[]} data   -2D array of all data rows (excluding header),
  *                           columns: [email, name, unit, status, lastSent, notes, attachIds]
+ * @param {string|null} [subject=null] -email subject line (optional; null for archive-only calls)
  * @return {number} The campaign ID inserted into the DB
  */
-function archiveCampaignToDb_(cfg, shName, data) {
+function archiveCampaignToDb_(cfg, shName, data, subject) {
   const conn = getDbConnection_();
 
   try {
@@ -82,8 +83,8 @@ function archiveCampaignToDb_(cfg, shName, data) {
 
     const campaignSql =
       'INSERT INTO mass_notifications.campaigns ' +
-      '(run_id, mode, recipients_sheet, emails_sent, total_rows, actor, config_snapshot, completed) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?) RETURNING id';
+      '(run_id, mode, recipients_sheet, emails_sent, total_rows, actor, subject, config_snapshot, completed) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?) RETURNING id';
 
     const campaignStmt = conn.prepareStatement(campaignSql);
     campaignStmt.setString(1, runId);
@@ -92,8 +93,13 @@ function archiveCampaignToDb_(cfg, shName, data) {
     campaignStmt.setInt(4, sentCount);
     campaignStmt.setInt(5, data.length);
     campaignStmt.setString(6, actor);
-    campaignStmt.setString(7, cfgSnapshot);
-    campaignStmt.setBoolean(8, true);
+    if (subject) {
+      campaignStmt.setString(7, subject);
+    } else {
+      campaignStmt.setNull(7, Jdbc.Types.VARCHAR);
+    }
+    campaignStmt.setString(8, cfgSnapshot);
+    campaignStmt.setBoolean(9, true);
 
     const rs = campaignStmt.executeQuery();
     rs.next();
@@ -425,8 +431,6 @@ function migrateArchivesToDb() {
     while (checkRs.next()) existingIds.add(checkRs.getString(1));
     checkRs.close();
     checkStmt.close();
-  } catch (_) {
-    // Table might be empty, that's fine
   } finally {
     checkConn.close();
   }
@@ -639,7 +643,7 @@ function renderQueryResults_(title, headers, rows) {
   const altBg   = 'background:#f8f9fa;';
 
   let html = '<div style="font-family:Arial,Helvetica,sans-serif;padding:12px;">';
-  html += '<h2 style="margin:0 0 12px;">' + title + '</h2>';
+  html += '<h2 style="margin:0 0 12px;">' + escapeHtml_(title) + '</h2>';
 
   if (!rows.length) {
     html += '<p style="color:#666;">No results found.</p></div>';
@@ -648,11 +652,11 @@ function renderQueryResults_(title, headers, rows) {
 
   html += '<p style="color:#666;margin:0 0 8px;">' + rows.length + ' result(s)</p>';
   html += '<table style="border-collapse:collapse;width:100%;">';
-  html += '<tr>' + headers.map(function(h) { return '<th style="' + thStyle + '">' + h + '</th>'; }).join('') + '</tr>';
+  html += '<tr>' + headers.map(function(h) { return '<th style="' + thStyle + '">' + escapeHtml_(h) + '</th>'; }).join('') + '</tr>';
 
   rows.forEach(function(row, i) {
     var bg = i % 2 === 1 ? altBg : '';
-    html += '<tr>' + row.map(function(v) { return '<td style="' + tdStyle + bg + '">' + (v != null ? v : '') + '</td>'; }).join('') + '</tr>';
+    html += '<tr>' + row.map(function(v) { return '<td style="' + tdStyle + bg + '">' + escapeHtml_(v != null ? String(v) : '') + '</td>'; }).join('') + '</tr>';
   });
 
   html += '</table></div>';

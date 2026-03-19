@@ -13,8 +13,8 @@
  * Shows a confirmation alert when done.
  */
 function archiveAndClearRecipients() {
-  const archiveName = archiveAndClearRecipientsQuiet_();
-  safeAlert_(`Archived to "${archiveName}" and cleared recipient rows.`);
+  const sheetName = archiveAndClearRecipientsQuiet_();
+  safeAlert_(`Archived "${sheetName}" to database and cleared recipient rows.`);
 }
 
 /**
@@ -22,7 +22,7 @@ function archiveAndClearRecipients() {
  * Used by the Looker sync pipeline so it doesn't interrupt the flow
  * with an intermediate dialog.
  *
- * @return {string} The name of the archive sheet that was created.
+ * @return {string} The name of the recipients sheet that was archived.
  */
 function archiveAndClearRecipientsQuiet_() {
   const cfg  = loadConfig_();
@@ -110,7 +110,6 @@ function fullResetForNextUse() {
   setConfigValue_('sender_display_name',   'Landing Notifications');
   setConfigValue_('disclaimer_html',       genericDisclaimer);
   setConfigValue_('signature_html',        defaultSignature);
-  setConfigValue_('notification_card',       '');
 
   safeAlert_('Full reset complete.');
 }

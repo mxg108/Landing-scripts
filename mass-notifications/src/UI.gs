@@ -236,17 +236,17 @@ function promptFetchByDate() {
   );
   if (res.getSelectedButton() !== ui.Button.OK) return;
 
-  var dateStr = res.getResponseText().trim();
+  const dateStr = res.getResponseText().trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
     ui.alert('Invalid date', 'Use YYYY-MM-DD format (e.g., 2026-03-16).', ui.ButtonSet.OK);
     return;
   }
 
-  var results = fetchByDate(dateStr);
+  const results = fetchByDate(dateStr);
   showHtmlOrDraft_(renderQueryResults_(
     'Recipients on ' + dateStr,
     ['Run ID', 'Actor', 'Email', 'Name', 'Unit', 'Status', 'Sent At'],
-    results.map(function(r) { return [r.runId, r.actor, r.email, r.name, r.unit, r.status, r.sentAt || '']; })
+    results.map(r => [r.runId, r.actor, r.email, r.name, r.unit, r.status, r.sentAt || ''])
   ), 'DB Query: by date');
 }
 
@@ -262,17 +262,17 @@ function promptFetchByRecipient() {
   );
   if (res.getSelectedButton() !== ui.Button.OK) return;
 
-  var email = res.getResponseText().trim();
+  const email = res.getResponseText().trim();
   if (!email || !email.includes('@')) {
     ui.alert('Invalid email', 'Please enter a valid email address.', ui.ButtonSet.OK);
     return;
   }
 
-  var results = fetchByRecipient(email);
+  const results = fetchByRecipient(email);
   showHtmlOrDraft_(renderQueryResults_(
     'Notification history for ' + email,
     ['Date', 'Run ID', 'Property', 'Event', 'Status', 'Actor'],
-    results.map(function(r) { return [r.date, r.runId, r.property || '', r.event || '', r.status, r.actor]; })
+    results.map(r => [r.date, r.runId, r.property || '', r.event || '', r.status, r.actor])
   ), 'DB Query: by recipient');
 }
 
@@ -288,17 +288,17 @@ function promptFetchByProperty() {
   );
   if (res.getSelectedButton() !== ui.Button.OK) return;
 
-  var property = res.getResponseText().trim();
+  const property = res.getResponseText().trim();
   if (!property) {
     ui.alert('Empty input', 'Please enter a property name.', ui.ButtonSet.OK);
     return;
   }
 
-  var results = fetchByProperty(property);
+  const results = fetchByProperty(property);
   showHtmlOrDraft_(renderQueryResults_(
     'Campaigns for "' + property + '"',
     ['Date', 'Run ID', 'Property', 'Event', 'Sent', 'Total', 'Actor'],
-    results.map(function(r) { return [r.date, r.runId, r.property || '', r.event || '', r.emailsSent, r.totalRows, r.actor]; })
+    results.map(r => [r.date, r.runId, r.property || '', r.event || '', r.emailsSent, r.totalRows, r.actor])
   ), 'DB Query: by property');
 }
 
@@ -314,16 +314,16 @@ function promptFetchByActor() {
   );
   if (res.getSelectedButton() !== ui.Button.OK) return;
 
-  var actor = res.getResponseText().trim();
+  const actor = res.getResponseText().trim();
   if (!actor) {
     ui.alert('Empty input', 'Please enter an email or name.', ui.ButtonSet.OK);
     return;
   }
 
-  var results = fetchByActor(actor);
+  const results = fetchByActor(actor);
   showHtmlOrDraft_(renderQueryResults_(
     'Campaigns by "' + actor + '"',
     ['Date', 'Run ID', 'Property', 'Event', 'Mode', 'Sent', 'Total', 'Actor'],
-    results.map(function(r) { return [r.date, r.runId, r.property || '', r.event || '', r.mode, r.emailsSent, r.totalRows, r.actor]; })
+    results.map(r => [r.date, r.runId, r.property || '', r.event || '', r.mode, r.emailsSent, r.totalRows, r.actor])
   ), 'DB Query: by actor');
 }

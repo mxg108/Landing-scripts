@@ -734,7 +734,7 @@ const Config = (() => {
       closing_html:        _val('closing_html'),
       body_intro_html:     _quill
                              ? _quill.root.innerHTML
-                             : (_val('body_textarea') || ''),
+                             : (_val('body-textarea') || ''),
       send_mode:           _segValues['send_mode']          || 'INDIVIDUAL',
       include_unit_line:   _segValues['include_unit_line']  || 'YES',
       include_disclaimer:  _segValues['include_disclaimer'] || 'YES',
