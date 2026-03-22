@@ -109,7 +109,9 @@ function validateConfig_(cfg) {
   if (!sh) { errors.push('Missing Config sheet.'); return { errors, warnings }; }
 
   // Warn about unrecognised keys (likely typos)
-  const rows = sh.getRange(2, 1, Math.max(0, sh.getLastRow() - 1), 2).getValues();
+  const dataRows = sh.getLastRow() - 1;
+  if (dataRows < 1) return { errors, warnings };
+  const rows = sh.getRange(2, 1, dataRows, 2).getValues();
   rows.forEach(([k]) => {
     if (!k) return;
     if (!KNOWN_CONFIG_KEYS.includes(String(k).trim())) {

@@ -82,6 +82,17 @@ function onOpen() {
   main.addSubMenu(cfgMenu);
 
   main.addToUi();
+
+  // ── Database menu (separate top-level menu) ────────────────────────────
+  const db = ui.createMenu('Database');
+  db.addItem('Query by date',       'promptFetchByDate');
+  db.addItem('Query by recipient',  'promptFetchByRecipient');
+  db.addItem('Query by property',   'promptFetchByProperty');
+  db.addItem('Query by actor',      'promptFetchByActor');
+  db.addSeparator();
+  db.addItem('Push Run_Log row to DB',  'promptPushRunLogRow');
+  db.addItem('Test DB connection',       'testDbConnection');
+  db.addToUi();
 }
 
 // Named shims so GAS menu registration works for the dynamic template items.
@@ -207,4 +218,147 @@ function confirmProceed_(title, msg) {
 function testGmailAdvanced() {
   const resp = Gmail.Users.Settings.SendAs.list('me');
   Logger.log(resp && resp.sendAs ? resp.sendAs.length : 'no sendAs');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DATABASE MENU - prompt functions for the "Database" top-level menu.
+// These handle user input and display. The actual DB queries live in Database.gs.
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Prompts for a date and displays all recipients from campaigns on that date.
+ */
+function promptFetchByDate() {
+  const ui  = SpreadsheetApp.getUi();
+  const res = ui.prompt(
+    'Query DB: by date',
+    'Enter a date (YYYY-MM-DD):',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+
+  const dateStr = res.getResponseText().trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    ui.alert('Invalid date', 'Use YYYY-MM-DD format (e.g., 2026-03-16).', ui.ButtonSet.OK);
+    return;
+  }
+
+  const results = fetchByDate(dateStr);
+  showHtmlOrDraft_(renderQueryResults_(
+    'Recipients on ' + dateStr,
+    ['Run ID', 'Actor', 'Email', 'Name', 'Unit', 'Status', 'Sent At'],
+    results.map(r => [r.runId, r.actor, r.email, r.name, r.unit, r.status, r.sentAt || ''])
+  ), 'DB Query: by date');
+}
+
+/**
+ * Prompts for an email and displays the full notification history for that recipient.
+ */
+function promptFetchByRecipient() {
+  const ui  = SpreadsheetApp.getUi();
+  const res = ui.prompt(
+    'Query DB: by recipient',
+    'Enter a recipient email:',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+
+  const email = res.getResponseText().trim();
+  if (!email || !email.includes('@')) {
+    ui.alert('Invalid email', 'Please enter a valid email address.', ui.ButtonSet.OK);
+    return;
+  }
+
+  const results = fetchByRecipient(email);
+  showHtmlOrDraft_(renderQueryResults_(
+    'Notification history for ' + email,
+    ['Date', 'Run ID', 'Property', 'Event', 'Status', 'Actor'],
+    results.map(r => [r.date, r.runId, r.property || '', r.event || '', r.status, r.actor])
+  ), 'DB Query: by recipient');
+}
+
+/**
+ * Prompts for a property name and displays all campaigns for that property.
+ */
+function promptFetchByProperty() {
+  const ui  = SpreadsheetApp.getUi();
+  const res = ui.prompt(
+    'Query DB: by property',
+    'Enter a property name (partial match):',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+
+  const property = res.getResponseText().trim();
+  if (!property) {
+    ui.alert('Empty input', 'Please enter a property name.', ui.ButtonSet.OK);
+    return;
+  }
+
+  const results = fetchByProperty(property);
+  showHtmlOrDraft_(renderQueryResults_(
+    'Campaigns for "' + property + '"',
+    ['Date', 'Run ID', 'Property', 'Event', 'Sent', 'Total', 'Actor'],
+    results.map(r => [r.date, r.runId, r.property || '', r.event || '', r.emailsSent, r.totalRows, r.actor])
+  ), 'DB Query: by property');
+}
+
+/**
+ * Prompts for an actor email and displays all campaigns they triggered.
+ */
+function promptFetchByActor() {
+  const ui  = SpreadsheetApp.getUi();
+  const res = ui.prompt(
+    'Query DB: by actor',
+    'Enter the sender/actor email (partial match):',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+
+  const actor = res.getResponseText().trim();
+  if (!actor) {
+    ui.alert('Empty input', 'Please enter an email or name.', ui.ButtonSet.OK);
+    return;
+  }
+
+  const results = fetchByActor(actor);
+  showHtmlOrDraft_(renderQueryResults_(
+    'Campaigns by "' + actor + '"',
+    ['Date', 'Run ID', 'Property', 'Event', 'Mode', 'Sent', 'Total', 'Actor'],
+    results.map(r => [r.date, r.runId, r.property || '', r.event || '', r.mode, r.emailsSent, r.totalRows, r.actor])
+  ), 'DB Query: by actor');
+}
+
+/**
+ * Prompts for a Run_Log row number and pushes its data to the DB.
+ * Manual fallback for when the automatic DB archive fails during reset.
+ */
+function promptPushRunLogRow() {
+  const ui  = SpreadsheetApp.getUi();
+  const res = ui.prompt(
+    'Push Run_Log row to DB',
+    'Enter the Run_Log row number to push (data rows start at 2).\n' +
+    'This is safe to re-run — it skips rows already in the DB.',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+
+  const raw    = res.getResponseText().trim();
+  const logRow = parseInt(raw, 10);
+
+  if (!raw || isNaN(logRow) || logRow < 2) {
+    ui.alert('Invalid row', '"' + raw + '" is not a valid row number. Enter a whole number >= 2.', ui.ButtonSet.OK);
+    return;
+  }
+
+  try {
+    const campaignId = pushRunLogRowToDb(logRow);
+    if (campaignId === null) {
+      ui.alert('Already in DB', 'Run_Log row ' + logRow + ' already exists in the database. No action taken.', ui.ButtonSet.OK);
+    } else {
+      ui.alert('Success', 'Run_Log row ' + logRow + ' pushed to DB as campaign #' + campaignId + '.', ui.ButtonSet.OK);
+    }
+  } catch (e) {
+    ui.alert('Push failed', e.message, ui.ButtonSet.OK);
+  }
 }

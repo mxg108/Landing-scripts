@@ -122,6 +122,54 @@ function uniqueSheetName_(base) {
 }
 
 /**
+ * Deletes hidden archive sheets older than a given number of days.
+ * Archive sheets are expected to follow the naming convention:
+ *   Archive_<sheetName>_yyyyMMdd_HHmmss
+ *
+ * @param {number} [maxAgeDays=60] — sheets older than this are deleted
+ * @return {number} The number of sheets deleted
+ */
+function purgeOldArchiveSheets(maxAgeDays) {
+  if (maxAgeDays == null) maxAgeDays = 60;
+  const ss      = SpreadsheetApp.getActive();
+  const cutoff  = new Date();
+  cutoff.setDate(cutoff.getDate() - maxAgeDays);
+
+  const pattern = /^Archive_.+_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/;
+  let deleted   = 0;
+
+  ss.getSheets().forEach(sh => {
+    if (!sh.isSheetHidden()) return;
+    const m = sh.getName().match(pattern);
+    if (!m) return;
+
+    const sheetDate = new Date(
+      parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]),
+      parseInt(m[4]), parseInt(m[5]),      parseInt(m[6])
+    );
+    if (sheetDate < cutoff) {
+      ss.deleteSheet(sh);
+      deleted++;
+    }
+  });
+
+  Logger.log(`Purged ${deleted} archive sheet(s) older than ${maxAgeDays} days.`);
+  return deleted;
+}
+
+/**
+ * Logs total, visible, and hidden sheet counts for the active spreadsheet.
+ * Run from the Apps Script editor to diagnose "Service Spreadsheets failed" errors
+ * caused by hitting Google's per-spreadsheet sheet/cell limits.
+ */
+function countSheets() {
+  const ss     = SpreadsheetApp.getActive();
+  const all    = ss.getSheets();
+  const hidden = all.filter(s => s.isSheetHidden());
+  Logger.log(`Total sheets: ${all.length}, Hidden: ${hidden.length}, Visible: ${all.length - hidden.length}`);
+}
+
+/**
  * Parses a comma/whitespace-separated string of Drive file IDs.
  * Deduplicates and strips empty tokens.
  */

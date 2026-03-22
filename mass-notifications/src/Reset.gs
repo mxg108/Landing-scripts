@@ -13,8 +13,8 @@
  * Shows a confirmation alert when done.
  */
 function archiveAndClearRecipients() {
-  const archiveName = archiveAndClearRecipientsQuiet_();
-  safeAlert_(`Archived to "${archiveName}" and cleared recipient rows.`);
+  const sheetName = archiveAndClearRecipientsQuiet_();
+  safeAlert_(`Archived "${sheetName}" to database and cleared recipient rows.`);
 }
 
 /**
@@ -22,29 +22,29 @@ function archiveAndClearRecipients() {
  * Used by the Looker sync pipeline so it doesn't interrupt the flow
  * with an intermediate dialog.
  *
- * @return {string} The name of the archive sheet that was created.
+ * @return {string} The name of the recipients sheet that was archived.
  */
 function archiveAndClearRecipientsQuiet_() {
   const cfg  = loadConfig_();
-  const ss   = SpreadsheetApp.getActive();
   const sh   = getRecipientsSheet_(cfg);
-
-  const ts   = Utilities.formatDate(new Date(), cfg.timezone, 'yyyyMMdd_HHmmss');
-  const base = `Archive_${sh.getName()}_${ts}`;
-
-  const copy = sh.copyTo(ss);
-  const targetName = uniqueSheetName_(base);
-  try {
-    copy.setName(targetName);
-  } catch (_) {
-    copy.setName(uniqueSheetName_(`${base}__FALLBACK`));
-  }
-  copy.hideSheet();
-
   const last = sh.getLastRow();
+
+  // Archive all rows (sent + skipped) to PostgreSQL
+  if (last >= 2) {
+    const data = sh.getRange(2, 1, last - 1, COL_MAX).getValues();
+    try {
+      archiveCampaignToDb_(cfg, sh.getName(), data);
+    } catch (e) {
+      // If DB write fails, log the error but don't block the reset.
+      // The Run_Log still has RowStates as a fallback.
+      Logger.log('DB archive failed (data preserved in Run_Log): ' + e.message);
+    }
+  }
+
+  // Clear all data rows (keep headers)
   if (last >= 2) sh.getRange(2, 1, last - 1, COL_MAX).clearContent();
 
-  return copy.getName();
+  return sh.getName();
 }
 
 /**
@@ -110,7 +110,6 @@ function fullResetForNextUse() {
   setConfigValue_('sender_display_name',   'Landing Notifications');
   setConfigValue_('disclaimer_html',       genericDisclaimer);
   setConfigValue_('signature_html',        defaultSignature);
-  setConfigValue_('notification_card',       '');
 
   safeAlert_('Full reset complete.');
 }

@@ -276,10 +276,22 @@
       <div class="cfg-field">
         <label for="cfg-manager_name">Manager Name</label>
         <input id="cfg-manager_name" class="cfg-input" type="text"
-               placeholder="First Last" data-key="manager_name">
+               placeholder="Auto populated from Manager email. Type a name to override." data-key="manager_name">
       </div>
     </div>
-    <div class="cfg-row-3">
+    <div class="cfg-row-2">
+      <div class="cfg-field">
+        <label for="cfg-reply_to">Reply To:</label>
+        <input id="cfg-reply_to" class="cfg-input" type="email"
+               placeholder="gm@hellolanding.com" data-key="reply_to">
+      </div>
+      <div class="cfg-field">
+        <label for="cfg-sender_display_name">Sender Display Name</label>
+        <input id="cfg-sender_display_name" class="cfg-input" type="text"
+               placeholder="Landing Notifications" data-key="sender_display_name">
+      </div>
+    </div>
+    <div class="cfg-row-2">
       <div class="cfg-field">
         <label for="cfg-cc_extra">CC</label>
         <input id="cfg-cc_extra" class="cfg-input" type="text"
@@ -289,11 +301,6 @@
         <label for="cfg-bcc_extra">BCC</label>
         <input id="cfg-bcc_extra" class="cfg-input" type="text"
                placeholder="email, email" data-key="bcc_extra">
-      </div>
-      <div class="cfg-field">
-        <label for="cfg-sender_display_name">Sender Display Name</label>
-        <input id="cfg-sender_display_name" class="cfg-input" type="text"
-               placeholder="Landing Notifications" data-key="sender_display_name">
       </div>
     </div>
   </div>
@@ -672,6 +679,7 @@ const Config = (() => {
     _set('event_name',          cfg.eventName         || '');
     _set('manager_email',       cfg.managerEmail      || '');
     _set('manager_name',        cfg.managerName       || '');
+    _set('reply_to',            cfg.replyTo           || '');
     _set('cc_extra',            cfg.ccExtra           || '');
     _set('bcc_extra',           cfg.bccExtra          || '');
     _set('sender_display_name', cfg.senderDisplayName || '');
@@ -718,6 +726,7 @@ const Config = (() => {
       window_end:          _val('window_end'),
       manager_email:       _val('manager_email'),
       manager_name:        _val('manager_name'),
+      reply_to:            _val('reply_to'),
       cc_extra:            _val('cc_extra'),
       bcc_extra:           _val('bcc_extra'),
       sender_display_name: _val('sender_display_name'),
@@ -725,7 +734,7 @@ const Config = (() => {
       closing_html:        _val('closing_html'),
       body_intro_html:     _quill
                              ? _quill.root.innerHTML
-                             : (_val('body_textarea') || ''),
+                             : (_val('body-textarea') || ''),
       send_mode:           _segValues['send_mode']          || 'INDIVIDUAL',
       include_unit_line:   _segValues['include_unit_line']  || 'YES',
       include_disclaimer:  _segValues['include_disclaimer'] || 'YES',

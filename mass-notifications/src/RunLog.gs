@@ -168,6 +168,71 @@ function restoreRecipientsFromRow(logRow, shName) {
   return states.length;
 }
 
+/**
+ * Restores the config snapshot recorded in a Run_Log row back to the Config sheet.
+ *
+ * Reads column H (ConfigSnapshot JSON) from the given log row and writes each
+ * value back using setConfigValue_().
+ *
+ * Snapshot key → Config sheet key mapping:
+ *   sendMode      → send_mode
+ *   managerEmail  → manager_email
+ *   propertyName  → property_name
+ *   eventName     → event_name
+ *   timezone      → timezone
+ *   window[0]     → window_start
+ *   window[1]     → window_end
+ *
+ * @param {number} logRow — 1-based row number in the Run_Log sheet.
+ */
+function restoreConfigFromRow(logRow) {
+  const log = getRunLogSheet_();
+  const raw = log.getRange(logRow, 8).getValue();
+
+  if (!raw) {
+    safeAlert_(`Run_Log row ${logRow}: ConfigSnapshot is empty — nothing to restore.`);
+    return;
+  }
+
+  let snap;
+  try {
+    snap = JSON.parse(raw);
+  } catch (e) {
+    safeAlert_(`Run_Log row ${logRow}: malformed ConfigSnapshot JSON — ${e.message}`);
+    return;
+  }
+
+  const keyMap = {
+    sendMode:     'send_mode',
+    managerEmail: 'manager_email',
+    propertyName: 'property_name',
+    eventName:    'event_name',
+    timezone:     'timezone',
+  };
+
+  const restored = [];
+
+  for (const [snapKey, cfgKey] of Object.entries(keyMap)) {
+    if (snap[snapKey] !== undefined) {
+      setConfigValue_(cfgKey, snap[snapKey]);
+      restored.push(`${cfgKey} = ${snap[snapKey]}`);
+    }
+  }
+
+  if (Array.isArray(snap.window) && snap.window.length >= 2) {
+    setConfigValue_('window_start', snap.window[0]);
+    setConfigValue_('window_end',   snap.window[1]);
+    restored.push(`window_start = ${snap.window[0]}`);
+    restored.push(`window_end = ${snap.window[1]}`);
+  }
+
+  safeAlert_(
+    restored.length
+      ? `Config restored from Run_Log row ${logRow}:\n\n${restored.join('\n')}`
+      : `Run_Log row ${logRow}: ConfigSnapshot contained no recognised keys.`
+  );
+}
+
 // ── Row appending ─────────────────────────────────────────────────────────────
 
 /**
