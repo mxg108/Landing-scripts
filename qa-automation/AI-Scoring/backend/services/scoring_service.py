@@ -62,4 +62,6 @@ async def score_call(
         duration_ms=duration_ms,
         flagged_long_call=flagged_long,
         sop_used=sop_data["sop_title"] or None,
+        transcript_display=transcript_data.get("transcript_display", []),
+        moments_display=transcript_data.get("moments_display", []),
     )
