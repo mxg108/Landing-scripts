@@ -29,6 +29,9 @@ def _headers() -> Optional[dict]:
     token = os.getenv("DIALPAD_API_KEY")
     if not token:
         return None  # caller checks for None and skips
+    # DEBUG: remove after confirming auth works
+    print(f"[dialpad_client] Token length: {len(token)}, starts: {token[:20]}..., ends: ...{token[-10:]}")
+    print(f"[dialpad_client] Token repr (check for quotes/whitespace): {repr(token[:30])}")
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -150,27 +153,70 @@ async def get_transcript(call_id: str) -> dict:
         }
 
     lines = data.get("lines", [])
-    transcript_lines = []
-    moments = []
+    transcript_lines = []        # flat text for the prompt
+    transcript_display = []      # structured list for the frontend
+    moments = []                 # flat text for the prompt
+    moments_display = []         # structured list for the frontend
+    call_start = None            # first timestamp, used to compute relative mm:ss
 
     for line in lines:
         line_type = line.get("type", "")
+        ts_raw = line.get("time", "")
 
         if line_type == "transcript":
             name = line.get("name", "Unknown")
             content = line.get("content", "").strip()
-            if content:
-                transcript_lines.append(f"{name}: {content}")
+            if not content:
+                continue
+
+            # Parse timestamp to compute mm:ss offset from call start
+            ts_display = ""
+            if ts_raw:
+                try:
+                    from datetime import datetime as dt
+                    ts_dt = dt.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                    if call_start is None:
+                        call_start = ts_dt
+                    elapsed = (ts_dt - call_start).total_seconds()
+                    mins, secs = divmod(int(elapsed), 60)
+                    ts_display = f"{mins}:{secs:02d}"
+                except (ValueError, TypeError):
+                    ts_display = ""
+
+            transcript_lines.append(f"{name}: {content}")
+            transcript_display.append({
+                "timestamp": ts_display,
+                "speaker": name,
+                "text": content,
+            })
 
         elif line_type in ("moment", "real_time_moment", "custom_moment"):
             moment_type = line.get("moment_type") or line.get("name", "")
-            if moment_type and moment_type not in FILTERED_MOMENT_TYPES:
-                ts = line.get("time", "")
-                moments.append(f"[{moment_type}] at {ts}")
+            if not moment_type or moment_type in FILTERED_MOMENT_TYPES:
+                continue
+
+            ts_display = ""
+            if ts_raw and call_start is not None:
+                try:
+                    from datetime import datetime as dt
+                    ts_dt = dt.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                    elapsed = (ts_dt - call_start).total_seconds()
+                    mins, secs = divmod(int(elapsed), 60)
+                    ts_display = f"{mins}:{secs:02d}"
+                except (ValueError, TypeError):
+                    ts_display = ""
+
+            moments.append(f"[{moment_type}] at {ts_raw}")
+            moments_display.append({
+                "timestamp": ts_display,
+                "type": moment_type,
+            })
 
     return {
         "transcript_text": "\n".join(transcript_lines),
         "moments_text": "\n".join(moments) if moments else "No relevant moments detected.",
+        "transcript_display": transcript_display,
+        "moments_display": moments_display,
     }
 
 

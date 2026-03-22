@@ -4,10 +4,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from pathlib import Path
 from dotenv import load_dotenv
 import os
 
-load_dotenv()
+# Load .env from the AI-Scoring directory regardless of where uvicorn is launched
+_env_path = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(_env_path)
+
+# Diagnostic: confirm Dialpad key is loaded (remove after confirming)
+_dp_key = os.getenv("DIALPAD_API_KEY", "")
+print(f"[main] DIALPAD_API_KEY loaded: {'Yes (' + _dp_key[:8] + '...)' if _dp_key else 'NO — check .env path'}")
 
 from backend.routes.scoring import router
 

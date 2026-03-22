@@ -14,7 +14,7 @@ SCORING_RUBRIC = """
 === SCORING RUBRIC ===
 
 SECTION 1 — Greeting (score: 1–5)
-Did the agent use the institutional greeting and answer immediately?
+Did the agent use the institutional greeting, their name and answer immediately?
 1: Not ready, no script, noisy headset
 2: Used script but poor tone, didn't pick up promptly
 3: Used script, answered within 5 seconds
@@ -196,7 +196,7 @@ Return exactly this JSON structure and nothing else:
       "score_type": "numeric",
       "yn_value": null,
       "confidence": "<high or medium or low>",
-      "reasoning": "<one or two sentences>",
+      "reasoning": "<one or two sentences, ALWAYS include time stamps if holds longer than 3 minutes or significant dead air were detected>",
       "audio_dependent": true,
       "flags": []
     },

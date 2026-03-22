@@ -11,12 +11,13 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg: #f5f4f0;
+      --bg: #E7EFFB;
       --surface: #ffffff;
-      --border: #e0ddd6;
-      --text: #1a1a18;
-      --muted: #6b6960;
-      --accent: #1a1a18;
+      --border: #c9d5e8;
+      --text: #15192D;
+      --muted: #5a6478;
+      --accent: #1A61D9;
+      --navy: #15192D;
       --success: #2d6a4f;
       --warning: #b45309;
       --error: #991b1b;
@@ -30,12 +31,15 @@
       background: var(--bg);
       color: var(--text);
       min-height: 100vh;
-      padding: 2rem 1rem;
+      padding: 0;
     }
 
+    /* Navy banner header */
     header {
-      max-width: 720px;
-      margin: 0 auto 2.5rem;
+      background: var(--navy);
+      color: #ffffff;
+      padding: 1.5rem 2rem;
+      margin-bottom: 2rem;
     }
 
     header h1 {
@@ -44,10 +48,11 @@
       font-size: 2rem;
       letter-spacing: -0.02em;
       margin-bottom: 0.25rem;
+      color: #ffffff;
     }
 
     header p {
-      color: var(--muted);
+      color: rgba(255, 255, 255, 0.7);
       font-size: 0.8rem;
     }
 
@@ -57,16 +62,21 @@
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 1.75rem;
+      overflow: hidden;
     }
 
     .card h2 {
       font-family: 'Fraunces', serif;
       font-weight: 400;
       font-size: 1.1rem;
-      margin-bottom: 1.25rem;
-      padding-bottom: 0.75rem;
-      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 1.25rem;
+      margin: 0;
+      background: var(--navy);
+      color: #ffffff;
+    }
+
+    .card-body {
+      padding: 1.75rem;
     }
 
     .form-grid {
@@ -170,7 +180,7 @@
       color: white;
     }
 
-    .btn-primary:hover { background: #333; }
+    .btn-primary:hover { background: #1550b5; }
     .btn-primary:disabled { background: var(--border); border-color: var(--border); cursor: not-allowed; }
 
     .btn-secondary {
@@ -194,7 +204,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0.6rem 0.75rem;
+      padding: 0.6rem 1.25rem;
       border-bottom: 1px solid var(--border);
       font-size: 0.8rem;
     }
@@ -222,8 +232,8 @@
 
     .scorecard-header {
       padding: 0.75rem 1rem;
-      background: var(--bg);
-      border-bottom: 1px solid var(--border);
+      background: var(--navy);
+      color: #ffffff;
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -234,6 +244,7 @@
       font-family: 'Fraunces', serif;
       font-size: 1.3rem;
       font-weight: 300;
+      color: #ffffff;
     }
 
     .long-call-flag {
@@ -299,6 +310,89 @@
 
     .sheets-link:hover { text-decoration: underline; }
 
+    /* Transcript & Moments panel */
+    .transcript-panel {
+      border-top: 1px solid var(--border);
+    }
+
+    .transcript-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.65rem 1rem;
+      cursor: pointer;
+      font-size: 0.78rem;
+      font-weight: 500;
+      background: var(--navy);
+      color: #ffffff;
+      user-select: none;
+    }
+
+    .transcript-toggle:hover { background: #1e2340; }
+
+    .transcript-toggle .arrow {
+      transition: transform 0.2s;
+      font-size: 0.7rem;
+      color: rgba(255, 255, 255, 0.7);
+    }
+
+    .transcript-toggle.open .arrow { transform: rotate(90deg); }
+
+    .transcript-body {
+      display: none;
+      max-height: 400px;
+      overflow-y: auto;
+      padding: 0.5rem 1rem;
+      font-size: 0.75rem;
+      line-height: 1.6;
+    }
+
+    .transcript-body.open { display: block; }
+
+    .transcript-line {
+      display: grid;
+      grid-template-columns: 48px 1fr;
+      gap: 0.5rem;
+      padding: 0.3rem 0;
+      border-bottom: 1px solid #edf2fa;
+    }
+
+    .transcript-line:last-child { border-bottom: none; }
+
+    .transcript-ts {
+      color: var(--muted);
+      font-size: 0.7rem;
+      font-variant-numeric: tabular-nums;
+      padding-top: 0.1rem;
+    }
+
+    .transcript-speaker {
+      font-weight: 500;
+      margin-right: 0.3rem;
+    }
+
+    .moments-list {
+      padding: 0.5rem 1rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .moment-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.2rem 0.55rem;
+      margin: 0.2rem 0.2rem;
+      background: #d0ddf0;
+      border-radius: 12px;
+      font-size: 0.68rem;
+      color: var(--text);
+    }
+
+    .moment-ts {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
     @media (max-width: 600px) {
       .form-grid { grid-template-columns: 1fr; }
       .form-group.full { grid-column: 1; }
@@ -314,43 +408,37 @@
 
 <div class="card">
   <h2>Submission Details</h2>
-  <form id="score-form">
-    <div class="form-grid">
-      <div class="form-group">
-        <label for="agent-name">Agent Name</label>
-        <input type="text" id="agent-name" placeholder="e.g. Ivan Garcia" required />
+  <div class="card-body">
+    <form id="score-form">
+      <div class="form-grid">
+        <div class="form-group">
+          <label for="agent-name">Agent Name</label>
+          <input type="text" id="agent-name" placeholder="e.g. Ivan Garcia" required />
+        </div>
+        <div class="form-group">
+          <label for="manager-email">Your Email (Manager)</label>
+          <input type="email" id="manager-email" placeholder="you@hellolanding.com" required />
+        </div>
       </div>
-      <div class="form-group">
-        <label for="manager-email">Your Email (Manager)</label>
-        <input type="email" id="manager-email" placeholder="you@hellolanding.com" required />
-      </div>
-      <div class="form-group">
-        <label for="date-start">Date Start</label>
-        <input type="date" id="date-start" required />
-      </div>
-      <div class="form-group">
-        <label for="date-end">Date End</label>
-        <input type="date" id="date-end" required />
-      </div>
-    </div>
 
-    <div style="margin-top: 1.25rem;">
-      <label style="display:block; margin-bottom: 0.5rem; font-size:0.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em;">
-        Call Recordings
-      </label>
-      <div class="drop-zone" id="drop-zone">
-        <p>Drop .mp3 / .mp4 / .m4a files here or click to browse</p>
-        <p class="hint" style="color:var(--muted);">Enter the Dialpad Call ID for each file after uploading</p>
-        <input type="file" id="file-input" accept=".mp3,.mp4,.m4a,.wav,.ogg,.flac,.webm" multiple style="display:none;" />
+      <div style="margin-top: 1.25rem;">
+        <label style="display:block; margin-bottom: 0.5rem; font-size:0.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em;">
+          Call Recordings
+        </label>
+        <div class="drop-zone" id="drop-zone">
+          <p>Drop .mp3 / .mp4 / .m4a files here or click to browse</p>
+          <p class="hint" style="color:var(--muted);">Enter the Dialpad Call ID for each file after uploading</p>
+          <input type="file" id="file-input" accept=".mp3,.mp4,.m4a,.wav,.ogg,.flac,.webm" multiple style="display:none;" />
+        </div>
+        <div id="file-list"></div>
       </div>
-      <div id="file-list"></div>
-    </div>
 
-    <div class="actions">
-      <button type="submit" class="btn btn-primary" id="submit-btn" disabled>Score Calls</button>
-      <span id="form-hint" style="font-size:0.75rem; color:var(--muted);">Add at least one audio file to continue</span>
-    </div>
-  </form>
+      <div class="actions">
+        <button type="submit" class="btn btn-primary" id="submit-btn" disabled>Score Calls</button>
+        <span id="form-hint" style="font-size:0.75rem; color:var(--muted);">Add at least one audio file to continue</span>
+      </div>
+    </form>
+  </div>
 </div>
 
 <div id="status-area" class="card">
@@ -404,7 +492,7 @@
         <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${item.file.name} <span style="color:var(--muted)">(${sizeMB} MB)</span></span>
         <input class="call-id-input" type="text" placeholder="Dialpad Call ID" value="${item.callId}"
           onchange="selectedFiles[${i}].callId = this.value; updateSubmitState();" />
-        <button type="button" onclick="removeFile(${i})">×</button>
+        <button type="button" onclick="removeFile(${i})">x</button>
       `;
       fileList.appendChild(div);
     });
@@ -523,7 +611,7 @@
         <span>${filename}</span>
         <div style="display:flex; gap:0.5rem; align-items:center;">
           ${flagged ? '<span class="long-call-flag">Long call — manager review</span>' : ''}
-          <span class="scorecard-avg">${avg}<span style="font-family:'DM Mono'; font-size:0.75rem; color:var(--muted);">/5</span></span>
+          <span class="scorecard-avg">${avg}<span style="font-family:'DM Mono'; font-size:0.75rem; color:rgba(255,255,255,0.7);">/5</span></span>
         </div>
       </div>
     `;
@@ -571,7 +659,45 @@
       </div>
     `;
 
-    panel.innerHTML = header + sectionRows.join('') + notes;
+    // Transcript + Moments panel
+    const transcriptId = `transcript-${jobId}`;
+    let transcriptPanel = '';
+
+    if (sc.transcript_display && sc.transcript_display.length > 0) {
+      const transcriptLines = sc.transcript_display.map(line => `
+        <div class="transcript-line">
+          <div class="transcript-ts">${line.timestamp || ''}</div>
+          <div><span class="transcript-speaker">${line.speaker}:</span> ${line.text}</div>
+        </div>
+      `).join('');
+
+      const momentsHtml = sc.moments_display && sc.moments_display.length > 0
+        ? `<div class="moments-list">
+            <div class="notes-label" style="margin-bottom:0.4rem;">Signal Moments</div>
+            ${sc.moments_display.map(m => `
+              <span class="moment-item"><span class="moment-ts">${m.timestamp || ''}</span> ${m.type}</span>
+            `).join('')}
+          </div>`
+        : '';
+
+      transcriptPanel = `
+        <div class="transcript-panel">
+          <div class="transcript-toggle" onclick="
+            this.classList.toggle('open');
+            document.getElementById('${transcriptId}').classList.toggle('open');
+          ">
+            <span>Transcript (${sc.transcript_display.length} lines)</span>
+            <span class="arrow">&#9654;</span>
+          </div>
+          <div class="transcript-body" id="${transcriptId}">
+            ${transcriptLines}
+          </div>
+          ${momentsHtml}
+        </div>
+      `;
+    }
+
+    panel.innerHTML = header + sectionRows.join('') + notes + transcriptPanel;
     return panel;
   }
 </script>

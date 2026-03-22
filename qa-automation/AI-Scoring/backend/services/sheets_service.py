@@ -40,19 +40,38 @@ from backend.models.scorecard import ScorecardWithMeta
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-# Section id → column letter mapping (D through M)
-SECTION_COLUMN_ORDER = [
-    "greeting",
-    "caller_identity_validation",
-    "purpose_of_call",
-    "matching_the_moment",
-    "process_adherence",
-    "call_resolution",
-    "communication",
-    "efficiency_call_handling",
-    # documentation is column L — always manual
-    "customer_resolution_indicator",
-]
+# Explicit column letter → content mapping (must match existing sheet)
+COLUMN_MAP = {
+    "A": "timestamp",
+    "B": "manager_email",
+    "C": "agent_name",
+    "D": "greeting",
+    "E": "caller_identity_validation",
+    "F": "purpose_of_call",
+    "G": "matching_the_moment",
+    "H": "process_adherence",
+    "I": "call_resolution",
+    "J": "communication",
+    "K": "efficiency_call_handling",
+    "L": "documentation",              # always manual
+    "M": "customer_resolution_indicator",
+    "N": "key_strengths",
+    "O": "opportunities",
+    "P": "dialpad_link",
+}
+
+# Scored section columns (D–K, M) — used for insert_note with reasoning
+SCORED_SECTION_COLUMNS = {
+    "D": "greeting",
+    "E": "caller_identity_validation",
+    "F": "purpose_of_call",
+    "G": "matching_the_moment",
+    "H": "process_adherence",
+    "I": "call_resolution",
+    "J": "communication",
+    "K": "efficiency_call_handling",
+    "M": "customer_resolution_indicator",
+}
 
 
 def _get_sheet():
@@ -90,8 +109,8 @@ def _format_score(section: dict) -> str:
 def append_scorecard_row(scorecard: ScorecardWithMeta) -> int:
     """
     Append one draft row to the QA Google Sheet.
+    Inserts a cell note (comment) with AI reasoning on each scored section.
     Returns the row number written, or -1 if Sheets is not configured.
-    Documentation column (L) is always 'Pending manual review'.
     """
     if not os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON") or not os.getenv("GOOGLE_SHEETS_ID"):
         print("[sheets_service] Sheets not configured — skipping write.")
@@ -102,42 +121,53 @@ def append_scorecard_row(scorecard: ScorecardWithMeta) -> int:
     # Build section lookup by id
     sections_by_id = {s.id: s.model_dump() for s in scorecard.sections}
 
-    # Columns D–K (sections 1–8)
-    scored_columns = []
-    for section_id in SECTION_COLUMN_ORDER[:8]:  # D through K
-        section = sections_by_id.get(section_id, {})
-        scored_columns.append(_format_score(section))
-
-    # Column L — Documentation (always manual, pass 1 as placeholder)
-    documentation = 1
-
-    # Column M — Customer Resolution Indicator (section 10)
-    cri = sections_by_id.get("customer_resolution_indicator", {})
-    cri_value = _format_score(cri)
-
     # Dialpad link — append long-call flag if applicable
     dialpad_link = scorecard.dialpad_link or ""
     if scorecard.flagged_long_call:
         dialpad_link += " [LONG CALL — Manager review recommended]"
 
+    # Build row in explicit column order A–P
     row = [
-        datetime.now(timezone.utc).strftime("%m/%d/%Y %H:%M:%S"),  # A: Timestamp
-        scorecard.manager_email or "",                                   # B: Manager Email
-        scorecard.agent_name or "",                                      # C: Agent
-        *scored_columns,                                                 # D–K: sections 1–8
-        documentation,                                                   # L: Documentation
-        cri_value,                                                       # M: CRI
-        scorecard.key_strengths or "",                                   # N: Key Strengths
-        scorecard.opportunities or "",                                   # O: Opportunities
-        dialpad_link,                                                    # P: Dialpad Link
+        datetime.now(timezone.utc).strftime("%m/%d/%Y %H:%M:%S"),   # A: Timestamp
+        scorecard.manager_email or "",                                # B: Manager Email
+        scorecard.agent_name or "",                                   # C: Agent
+        _format_score(sections_by_id.get("greeting", {})),            # D: Greeting
+        _format_score(sections_by_id.get("caller_identity_validation", {})),  # E: CIV
+        _format_score(sections_by_id.get("purpose_of_call", {})),     # F: Purpose
+        _format_score(sections_by_id.get("matching_the_moment", {})), # G: Matching
+        _format_score(sections_by_id.get("process_adherence", {})),   # H: Process
+        _format_score(sections_by_id.get("call_resolution", {})),     # I: Resolution
+        _format_score(sections_by_id.get("communication", {})),       # J: Communication
+        _format_score(sections_by_id.get("efficiency_call_handling", {})),  # K: Efficiency
+        1,                                                            # L: Documentation (manual)
+        _format_score(sections_by_id.get("customer_resolution_indicator", {})),  # M: CRI
+        scorecard.key_strengths or "",                                # N: Key Strengths
+        scorecard.opportunities or "",                                # O: Opportunities
+        dialpad_link,                                                 # P: Dialpad Link
     ]
 
     result = sheet.append_row(row, value_input_option="USER_ENTERED")
-    # gspread returns the update response; extract row number from range
+    # Extract the row number from the update response
     updated_range = result.get("updates", {}).get("updatedRange", "")
     try:
         row_num = int(updated_range.split("!")[1].split(":")[0][1:])
     except (IndexError, ValueError):
         row_num = -1
+
+    # Insert cell notes with AI reasoning on each scored section
+    if row_num > 0:
+        for col_letter, section_id in SCORED_SECTION_COLUMNS.items():
+            section = sections_by_id.get(section_id, {})
+            reasoning = section.get("reasoning", "")
+            confidence = section.get("confidence", "")
+            flags = section.get("flags", [])
+            if reasoning:
+                note = f"[{confidence.upper()}] {reasoning}"
+                if flags:
+                    note += f"\nFlags: {', '.join(flags)}"
+                try:
+                    sheet.insert_note(f"{col_letter}{row_num}", note)
+                except Exception as e:
+                    print(f"[sheets_service] Failed to insert note at {col_letter}{row_num}: {e}")
 
     return row_num
