@@ -90,7 +90,8 @@ function onOpen() {
   db.addItem('Query by property',   'promptFetchByProperty');
   db.addItem('Query by actor',      'promptFetchByActor');
   db.addSeparator();
-  db.addItem('Test DB connection',  'testDbConnection');
+  db.addItem('Push Run_Log row to DB',  'promptPushRunLogRow');
+  db.addItem('Test DB connection',       'testDbConnection');
   db.addToUi();
 }
 
@@ -326,4 +327,38 @@ function promptFetchByActor() {
     ['Date', 'Run ID', 'Property', 'Event', 'Mode', 'Sent', 'Total', 'Actor'],
     results.map(r => [r.date, r.runId, r.property || '', r.event || '', r.mode, r.emailsSent, r.totalRows, r.actor])
   ), 'DB Query: by actor');
+}
+
+/**
+ * Prompts for a Run_Log row number and pushes its data to the DB.
+ * Manual fallback for when the automatic DB archive fails during reset.
+ */
+function promptPushRunLogRow() {
+  const ui  = SpreadsheetApp.getUi();
+  const res = ui.prompt(
+    'Push Run_Log row to DB',
+    'Enter the Run_Log row number to push (data rows start at 2).\n' +
+    'This is safe to re-run — it skips rows already in the DB.',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+
+  const raw    = res.getResponseText().trim();
+  const logRow = parseInt(raw, 10);
+
+  if (!raw || isNaN(logRow) || logRow < 2) {
+    ui.alert('Invalid row', '"' + raw + '" is not a valid row number. Enter a whole number >= 2.', ui.ButtonSet.OK);
+    return;
+  }
+
+  try {
+    const campaignId = pushRunLogRowToDb(logRow);
+    if (campaignId === null) {
+      ui.alert('Already in DB', 'Run_Log row ' + logRow + ' already exists in the database. No action taken.', ui.ButtonSet.OK);
+    } else {
+      ui.alert('Success', 'Run_Log row ' + logRow + ' pushed to DB as campaign #' + campaignId + '.', ui.ButtonSet.OK);
+    }
+  } catch (e) {
+    ui.alert('Push failed', e.message, ui.ButtonSet.OK);
+  }
 }

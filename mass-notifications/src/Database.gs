@@ -26,16 +26,25 @@ function getDbConnection_() {
   const pass  = props.getProperty('DB_PASS');
 
   if (!url || !user || !pass) {
-    throw new Error('DB credentials not set in Script Properties.');
+    throw new Error('DB credentials not set in Script Properties. URL=' + !!url + ' USER=' + !!user + ' PASS=' + !!pass);
   }
 
-  // Railway free tier can cold-start the DB. Retry once after a brief pause.
-  try {
-    return Jdbc.getConnection(url, user, pass);
-  } catch (e) {
-    Logger.log('DB connection attempt 1 failed, retrying in 3s: ' + e.message);
-    Utilities.sleep(3000);
-    return Jdbc.getConnection(url, user, pass);
+  // Railway free tier can cold-start the DB. Retry with increasing delays.
+  const MAX_ATTEMPTS = 3;
+  const DELAYS = [0, 5000, 10000];
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      if (DELAYS[attempt - 1] > 0) Utilities.sleep(DELAYS[attempt - 1]);
+      const conn = Jdbc.getConnection(url, user, pass);
+      if (attempt > 1) Logger.log('DB connected on attempt ' + attempt);
+      return conn;
+    } catch (e) {
+      Logger.log('DB attempt ' + attempt + '/' + MAX_ATTEMPTS + ' failed: ' + e.message);
+      if (attempt === MAX_ATTEMPTS) {
+        throw new Error('DB connection failed after ' + MAX_ATTEMPTS + ' attempts. Last error: ' + e.message);
+      }
+    }
   }
 }
 
@@ -349,6 +358,177 @@ function fetchByActor(actor) {
     Logger.log('fetchByActor("' + actor + '"): ' + results.length + ' campaign(s) found');
     results.forEach(r => Logger.log('  ' + r.date + ' | ' + r.property + ' | ' + r.event + ' | ' + r.mode + ' | sent: ' + r.emailsSent + '/' + r.totalRows));
     return results;
+  } finally {
+    conn.close();
+  }
+}
+
+// ── Manual DB push from Run_Log ───────────────────────────────────────────────
+
+/**
+ * Reads a Run_Log row and pushes its data to the PostgreSQL database.
+ * Use this as a manual fallback when the automatic DB archive fails during
+ * a full reset (e.g., Railway connection timeout).
+ *
+ * Reads columns A-K from the given row and reconstructs a campaign +
+ * recipients payload from the RowStates JSON (column I).
+ *
+ * Safe to re-run: skips if a campaign with the same run_id already exists.
+ *
+ * @param {number} logRow - 1-based row number in the Run_Log sheet
+ * @return {number|null} The campaign ID inserted, or null if skipped
+ */
+function pushRunLogRowToDb(logRow) {
+  const log = getRunLogSheet_();
+  if (!log || logRow < 2 || logRow > log.getLastRow()) {
+    throw new Error('Invalid Run_Log row: ' + logRow);
+  }
+
+  const vals = log.getRange(logRow, 1, 1, 11).getValues()[0];
+  const timestamp    = vals[0];
+  const runId        = String(vals[1] || '').trim();
+  const mode         = String(vals[2] || '').trim();
+  const shName       = String(vals[3] || '').trim();
+  const count        = Number(vals[4] || 0);
+  const actor        = String(vals[5] || '').trim();
+  const subject      = String(vals[6] || '').trim() || null;
+  const cfgSnapshot  = String(vals[7] || '').trim();
+  const rowStatesRaw = String(vals[8] || '').trim();
+  const notes        = String(vals[9] || '').trim();
+  const completed    = String(vals[10]).toUpperCase() === 'TRUE';
+
+  if (!runId) throw new Error('Run_Log row ' + logRow + ' has no RunID.');
+
+  // Parse RowStates JSON for recipient data
+  let rowStates = [];
+  if (rowStatesRaw) {
+    try {
+      rowStates = JSON.parse(rowStatesRaw);
+      if (!Array.isArray(rowStates)) rowStates = [];
+    } catch (e) {
+      Logger.log('Warning: could not parse RowStates JSON for row ' + logRow + ': ' + e.message);
+    }
+  }
+
+  const conn = getDbConnection_();
+  try {
+    // Check if this run_id already exists
+    const checkStmt = conn.prepareStatement(
+      'SELECT id FROM mass_notifications.campaigns WHERE run_id = ?'
+    );
+    checkStmt.setString(1, runId);
+    const checkRs = checkStmt.executeQuery();
+    if (checkRs.next()) {
+      checkRs.close();
+      checkStmt.close();
+      Logger.log('Run_Log row ' + logRow + ' (run_id: ' + runId + ') already exists in DB. Skipped.');
+      return null;
+    }
+    checkRs.close();
+    checkStmt.close();
+
+    // Count sent recipients from RowStates
+    const sentCount = rowStates.filter(s =>
+      s && String(s.newStatus || '').toUpperCase() === 'SENT'
+    ).length;
+
+    // Insert campaign
+    const cSql =
+      'INSERT INTO mass_notifications.campaigns ' +
+      '(run_id, mode, recipients_sheet, emails_sent, total_rows, actor, ' +
+      ' subject, config_snapshot, notes, completed, created_at) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?) RETURNING id';
+
+    const cStmt = conn.prepareStatement(cSql);
+    cStmt.setString(1, runId);
+    cStmt.setString(2, mode || 'UNKNOWN');
+    cStmt.setString(3, shName || 'Mass_Notification');
+    cStmt.setInt(4, sentCount || count);
+    cStmt.setInt(5, rowStates.length || count);
+    cStmt.setString(6, actor || 'unknown');
+
+    if (subject) {
+      cStmt.setString(7, subject);
+    } else {
+      cStmt.setNull(7, Jdbc.Types.VARCHAR);
+    }
+
+    if (cfgSnapshot) {
+      cStmt.setString(8, cfgSnapshot);
+    } else {
+      cStmt.setNull(8, Jdbc.Types.VARCHAR);
+    }
+
+    cStmt.setString(9, notes || 'Manually pushed from Run_Log row ' + logRow);
+    cStmt.setBoolean(10, completed);
+
+    if (timestamp instanceof Date && !isNaN(timestamp)) {
+      cStmt.setTimestamp(11, Jdbc.newTimestamp(timestamp.getTime()));
+    } else {
+      cStmt.setTimestamp(11, Jdbc.newTimestamp(new Date().getTime()));
+    }
+
+    const cRs = cStmt.executeQuery();
+    cRs.next();
+    const campaignId = cRs.getInt(1);
+    cRs.close();
+    cStmt.close();
+
+    // Insert recipients from RowStates
+    if (rowStates.length > 0) {
+      const rSql =
+        'INSERT INTO mass_notifications.recipients ' +
+        '(campaign_id, sheet_row, email, name, unit, ' +
+        ' status_before, status_after, last_sent_before, last_sent_after) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
+
+      const rStmt = conn.prepareStatement(rSql);
+
+      for (let i = 0; i < rowStates.length; i++) {
+        const s = rowStates[i];
+        if (!s) continue;
+
+        rStmt.setInt(1, campaignId);
+        rStmt.setInt(2, s.row || (i + 2));
+        rStmt.setString(3, s.email || '(empty)');
+        rStmt.setString(4, s.name || '');
+        rStmt.setString(5, s.unit || '');
+        rStmt.setString(6, String(s.prevStatus || ''));
+        rStmt.setString(7, String(s.newStatus || ''));
+
+        if (s.prevLastSent) {
+          const prev = new Date(s.prevLastSent);
+          if (!isNaN(prev)) {
+            rStmt.setTimestamp(8, Jdbc.newTimestamp(prev.getTime()));
+          } else {
+            rStmt.setNull(8, Jdbc.Types.TIMESTAMP);
+          }
+        } else {
+          rStmt.setNull(8, Jdbc.Types.TIMESTAMP);
+        }
+
+        if (s.newLastSent) {
+          const nls = new Date(s.newLastSent);
+          if (!isNaN(nls)) {
+            rStmt.setTimestamp(9, Jdbc.newTimestamp(nls.getTime()));
+          } else {
+            rStmt.setNull(9, Jdbc.Types.TIMESTAMP);
+          }
+        } else {
+          rStmt.setNull(9, Jdbc.Types.TIMESTAMP);
+        }
+
+        rStmt.addBatch();
+      }
+
+      rStmt.executeBatch();
+      rStmt.close();
+    }
+
+    Logger.log('Pushed Run_Log row ' + logRow + ' to DB: campaign ' + campaignId +
+               ' (' + rowStates.length + ' recipients)');
+    return campaignId;
+
   } finally {
     conn.close();
   }
