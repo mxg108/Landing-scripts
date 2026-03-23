@@ -17,6 +17,7 @@ _dp_key = os.getenv("DIALPAD_API_KEY", "")
 print(f"[main] DIALPAD_API_KEY loaded: {'Yes (' + _dp_key[:8] + '...)' if _dp_key else 'NO — check .env path'}")
 
 from backend.routes.scoring import router
+from backend.routes.dashboard import router as dashboard_router
 
 app = FastAPI(
     title="Landing QA Scoring API",
@@ -32,11 +33,19 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(dashboard_router)
 
 # Serve the frontend HTML at the root
+_frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
+
 @app.get("/", include_in_schema=False)
 async def serve_frontend():
-    return FileResponse("frontend/index.html")
+    return FileResponse(_frontend_dir / "index.html")
+
+
+@app.get("/dashboard", include_in_schema=False)
+async def serve_dashboard():
+    return FileResponse(_frontend_dir / "dashboard.html")
 
 
 if __name__ == "__main__":

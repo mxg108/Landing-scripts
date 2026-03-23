@@ -11,6 +11,7 @@ const CONFIG = {
   QA_SHEET_NAME:       'Form Responses 1',   // default name Google gives the linked sheet
   HISTORY_SHEET_NAME:  'Analyst_History',
   MAILS_SHEET_NAME:    'Mails',              // source of truth for agent name → email mapping
+  FORM_AI_SHEET_NAME:  'Form Responses AI',
 
   // ── QA goal (0-100 scale) ─────────────────────────────────────
   QA_GOAL: 85,
@@ -106,5 +107,51 @@ const CONFIG = {
     IDENTITY_VAL:   12,  // M  (Y/N)
     CUSTOMER_RES:   13,  // N  (Y/N)
     MANAGER_EMAIL:  14,  // O
+    DIALPAD_LINK:       15,  // P
+    KEY_STRENGTHS:      16,  // Q
+    IMPROVEMENTS:       17,  // R
+    SOURCE:             18,  // S
+    GREETING_CONF:      19,  // T
+    GREETING_REASON:    20,  // U
+    IDENTITY_CONF:      21,  // V
+    IDENTITY_REASON:    22,  // W
+    PURPOSE_CONF:       23,  // X
+    PURPOSE_REASON:     24,  // Y
+    MATCHING_CONF:      25,  // Z
+    MATCHING_REASON:    26,  // AA
+    PROCESS_CONF:       27,  // AB
+    PROCESS_REASON:     28,  // AC
+    RESOLUTION_CONF:    29,  // AD
+    RESOLUTION_REASON:  30,  // AE
+    COMMUNICATION_CONF: 31,  // AF
+    COMMUNICATION_REASON: 32, // AG
+    EFFICIENCY_CONF:    33,  // AH
+    EFFICIENCY_REASON:  34,  // AI
+    CUSTOMER_RES_CONF:  35,  // AJ
+    CUSTOMER_RES_REASON: 36, // AK
+  },
+
+  // ── Form Responses AI extended columns (0-based) ──────────────────
+  FORM_AI_COL: {
+    DIALPAD_LINK:       15,  // P — match key for lookup
+    SOURCE:             16,  // Q
+    GREETING_CONF:      17,  // R
+    GREETING_REASON:    18,  // S
+    IDENTITY_CONF:      19,  // T
+    IDENTITY_REASON:    20,  // U
+    PURPOSE_CONF:       21,  // V
+    PURPOSE_REASON:     22,  // W
+    MATCHING_CONF:      23,  // X
+    MATCHING_REASON:    24,  // Y
+    PROCESS_CONF:       25,  // Z
+    PROCESS_REASON:     26,  // AA
+    RESOLUTION_CONF:    27,  // AB
+    RESOLUTION_REASON:  28,  // AC
+    COMMUNICATION_CONF: 29,  // AD
+    COMMUNICATION_REASON: 30, // AE
+    EFFICIENCY_CONF:    31,  // AF
+    EFFICIENCY_REASON:  32,  // AG
+    CUSTOMER_RES_CONF:  33,  // AH
+    CUSTOMER_RES_REASON: 34, // AI
   },
 };

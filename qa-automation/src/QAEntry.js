@@ -70,6 +70,7 @@ class QAEntry {
       this.binaryChecks.identityValidation  ? 'Y' : 'N',
       this.binaryChecks.customerResolution  ? 'Y' : 'N',
       this.managerEmail,
+      this.dialpadLink,     // P  (Dialpad link — used as lookup key for AI reasoning)
     ];
   }
 
