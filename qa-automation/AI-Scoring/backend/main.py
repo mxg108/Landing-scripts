@@ -22,7 +22,7 @@ from backend.routes.dashboard import router as dashboard_router
 app = FastAPI(
     title="Landing QA Scoring API",
     description="AI-powered call center QA scoring pipeline",
-    version="1.0.0",
+    version="1.1.0",
 )
 
 app.add_middleware(
