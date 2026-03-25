@@ -18,6 +18,7 @@ print(f"[main] DIALPAD_API_KEY loaded: {'Yes (' + _dp_key[:8] + '...)' if _dp_ke
 
 from backend.routes.scoring import router
 from backend.routes.dashboard import router as dashboard_router
+from backend.routes.team import router as team_router
 
 app = FastAPI(
     title="Landing QA Scoring API",
@@ -34,6 +35,7 @@ app.add_middleware(
 
 app.include_router(router)
 app.include_router(dashboard_router)
+app.include_router(team_router)
 
 # Serve the frontend HTML at the root
 _frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
@@ -43,9 +45,15 @@ async def serve_frontend():
     return FileResponse(_frontend_dir / "index.html")
 
 
-@app.get("/dashboard", include_in_schema=False)
-async def serve_dashboard():
+# Agent drill-down — must be registered before /dashboard to avoid path conflicts
+@app.get("/dashboard/agent/{name:path}", include_in_schema=False)
+async def serve_agent_dashboard(name: str):
     return FileResponse(_frontend_dir / "dashboard.html")
+
+
+@app.get("/dashboard", include_in_schema=False)
+async def serve_team_dashboard():
+    return FileResponse(_frontend_dir / "team_dashboard.html")
 
 
 if __name__ == "__main__":

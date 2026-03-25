@@ -235,11 +235,11 @@
 </head>
 <body>
   <div class="header">
-    <h1>Agent Progression Dashboard</h1>
+    <div style="display:flex;align-items:center;gap:16px;">
+      <a href="/dashboard" style="color:rgba(255,255,255,0.7);text-decoration:none;font-size:0.8rem;border:1px solid rgba(255,255,255,0.3);padding:4px 12px;border-radius:6px;">Team View</a>
+      <h1 id="headerTitle">Agent Dashboard</h1>
+    </div>
     <div class="header-controls">
-      <select id="agentSelect">
-        <option value="">-- Select Agent --</option>
-      </select>
       <div class="time-buttons">
         <button data-days="7">7d</button>
         <button data-days="14">14d</button>
@@ -289,10 +289,16 @@
       </div>
     </div>
 
-    <div id="assessmentCard" class="card hidden">
+    <div id="assessmentCard" class="card">
       <h2>AI Progression Assessment</h2>
-      <div id="assessmentOverall" class="assessment-overall"></div>
-      <div id="sectionGrid" class="section-grid"></div>
+      <div id="assessmentPlaceholder" style="text-align:center;padding:20px;">
+        <button id="aiBtn" onclick="loadAIAssessment()" style="font-family:'DM Mono',monospace;font-size:0.85rem;padding:10px 24px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;">Get AI Assessment</button>
+        <p style="font-size:0.75rem;color:var(--muted);margin-top:8px;">Generates a Gemini coaching assessment (~$0.15 per API call)</p>
+      </div>
+      <div id="assessmentContent" class="hidden">
+        <div id="assessmentOverall" class="assessment-overall"></div>
+        <div id="sectionGrid" class="section-grid"></div>
+      </div>
     </div>
   </div>
 
@@ -307,7 +313,8 @@
     // Numeric sections for the bar chart (1-5 scale)
     const SECTION_KEYS = [
       'greeting', 'purpose_of_call', 'matching_the_moment',
-      'process_adherence', 'call_resolution', 'communication', 'efficiency'
+      'process_adherence', 'call_resolution', 'communication',
+      'efficiency', 'documentation'
     ];
     const SECTION_LABELS = {
       greeting: 'Greeting',
@@ -318,6 +325,7 @@
       call_resolution: 'Call Resolution',
       communication: 'Communication',
       efficiency: 'Efficiency',
+      documentation: 'Documentation',
       customer_resolution_indicator: 'Customer Resolution'
     };
 
@@ -359,32 +367,34 @@
       }
     }
 
-    async function loadAgents() {
-      const agents = await fetchJSON(`${API_BASE}/api/agents`);
-      const sel = document.getElementById('agentSelect');
-      if (!agents || agents.length === 0) return;
-      agents.forEach(name => {
-        const opt = document.createElement('option');
-        opt.value = name;
-        opt.textContent = name;
-        sel.appendChild(opt);
-      });
+    // Extract agent name from URL: /dashboard/agent/{name}
+    function getAgentFromURL() {
+      const path = window.location.pathname;
+      const prefix = '/dashboard/agent/';
+      if (path.startsWith(prefix)) {
+        return decodeURIComponent(path.substring(prefix.length));
+      }
+      return null;
     }
+
+    const currentAgent = getAgentFromURL();
 
     async function loadDashboard(agentName) {
       if (!agentName) return;
 
       document.getElementById('placeholder').textContent = 'Loading...';
       document.getElementById('placeholder').classList.remove('hidden');
-      ['statsCard', 'trendCard', 'sectionCard', 'assessmentCard'].forEach(id =>
+      ['statsCard', 'trendCard', 'sectionCard'].forEach(id =>
         document.getElementById(id).classList.add('hidden')
       );
+      // Reset AI assessment to button state
+      document.getElementById('assessmentPlaceholder').classList.remove('hidden');
+      document.getElementById('assessmentContent').classList.add('hidden');
       document.getElementById('footer').textContent = '';
 
-      const [history, progression] = await Promise.all([
-        fetchJSON(`${API_BASE}/api/agents/${encodeURIComponent(agentName)}/history?days=${selectedDays}`),
-        fetchJSON(`${API_BASE}/api/agents/${encodeURIComponent(agentName)}/progression?days=${selectedDays}`)
-      ]);
+      const history = await fetchJSON(
+        `${API_BASE}/api/agents/${encodeURIComponent(agentName)}/history?days=${selectedDays}`
+      );
 
       if (!history) {
         document.getElementById('placeholder').textContent = `No evaluations found for "${agentName}" in the last ${selectedDays} days.`;
@@ -395,11 +405,29 @@
       renderStats(history);
       renderTrendChart(history);
       renderSectionChart(history);
-      if (progression) renderAssessment(progression);
 
-      const source = progression && progression.data_source ? progression.data_source : 'API';
       document.getElementById('footer').textContent =
-        `Data source: ${source} | ${history.length} evaluations | Last ${selectedDays} days`;
+        `Data source: Google Sheets | ${history.length} evaluations | Last ${selectedDays} days`;
+    }
+
+    async function loadAIAssessment() {
+      if (!currentAgent) return;
+      const btn = document.getElementById('aiBtn');
+      btn.disabled = true;
+      btn.textContent = 'Generating...';
+
+      const progression = await fetchJSON(
+        `${API_BASE}/api/agents/${encodeURIComponent(currentAgent)}/progression?days=${selectedDays}`
+      );
+
+      if (progression) {
+        renderAssessment(progression);
+        document.getElementById('assessmentPlaceholder').classList.add('hidden');
+        document.getElementById('assessmentContent').classList.remove('hidden');
+      } else {
+        btn.textContent = 'Failed — retry';
+        btn.disabled = false;
+      }
     }
 
     function renderStats(history) {
@@ -586,26 +614,25 @@
         grid.appendChild(card);
       });
 
-      document.getElementById('assessmentCard').classList.remove('hidden');
     }
 
     // Event listeners
-    document.getElementById('agentSelect').addEventListener('change', function () {
-      if (this.value) loadDashboard(this.value);
-    });
-
     document.querySelectorAll('.time-buttons button').forEach(btn => {
       btn.addEventListener('click', function () {
         document.querySelectorAll('.time-buttons button').forEach(b => b.classList.remove('active'));
         this.classList.add('active');
         selectedDays = parseInt(this.dataset.days);
-        const agent = document.getElementById('agentSelect').value;
-        if (agent) loadDashboard(agent);
+        if (currentAgent) loadDashboard(currentAgent);
       });
     });
 
-    // Init
-    loadAgents();
+    // Init — load from URL
+    if (currentAgent) {
+      document.getElementById('headerTitle').textContent = currentAgent;
+      loadDashboard(currentAgent);
+    } else {
+      document.getElementById('placeholder').textContent = 'No agent specified in URL.';
+    }
   </script>
 </body>
 </html>

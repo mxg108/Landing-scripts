@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Team Analytics Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    :root {
+      --navy: #15192D; --accent: #1A61D9; --bg: #E7EFFB; --surface: #ffffff;
+      --border: #c9d5e8; --text: #15192D; --muted: #5a6478;
+      --green: #28A745; --amber: #E8A317; --red: #D9534F;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'DM Mono', monospace; background: var(--bg); color: var(--text); min-height: 100vh; }
+    h1, h2, h3 { font-family: 'Fraunces', serif; }
+
+    /* Header */
+    .header {
+      background: var(--navy); color: #fff; padding: 16px 24px;
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+    }
+    .header h1 { font-size: 1.25rem; font-weight: 600; }
+    .header-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .header select, .header .toggle-btn {
+      font-family: 'DM Mono', monospace; padding: 6px 12px; border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.3); font-size: 0.85rem; background: transparent; color: #fff; cursor: pointer;
+    }
+    .header select option { background: var(--navy); color: #fff; }
+    .toggle-btn.active { background: var(--accent); border-color: var(--accent); }
+    .time-buttons { display: flex; gap: 4px; }
+    .time-buttons button {
+      font-family: 'DM Mono', monospace; padding: 6px 12px; border: 1px solid rgba(255,255,255,0.3);
+      background: transparent; color: #fff; border-radius: 6px; cursor: pointer; font-size: 0.8rem; transition: background 0.2s;
+    }
+    .time-buttons button:hover { background: rgba(255,255,255,0.1); }
+    .time-buttons button.active { background: var(--accent); border-color: var(--accent); }
+
+    /* Tabs */
+    .tab-bar {
+      background: var(--navy); display: flex; gap: 0; padding: 0 24px; overflow-x: auto;
+    }
+    .tab-btn {
+      font-family: 'DM Mono', monospace; padding: 10px 20px; border: none; background: transparent;
+      color: rgba(255,255,255,0.6); cursor: pointer; font-size: 0.85rem; border-bottom: 3px solid transparent;
+      white-space: nowrap; transition: color 0.2s, border-color 0.2s;
+    }
+    .tab-btn:hover { color: #fff; }
+    .tab-btn.active { color: #fff; border-bottom-color: var(--accent); }
+
+    /* Layout */
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: flex; flex-direction: column; gap: 20px; }
+
+    /* Cards */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+    .card h3 { font-size: 1rem; margin-bottom: 12px; color: var(--text); }
+
+    /* KPI row */
+    .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+    .kpi-box {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; text-align: center;
+    }
+    .kpi-box .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .kpi-box .value { font-family: 'Fraunces', serif; font-size: 2rem; font-weight: 700; margin: 4px 0; }
+    .kpi-box .sub { font-size: 0.75rem; color: var(--muted); }
+
+    /* Charts grid */
+    .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+
+    /* Tables */
+    table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+    th {
+      font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted);
+      cursor: pointer; user-select: none; position: sticky; top: 0; background: var(--surface);
+    }
+    th:hover { color: var(--text); }
+    tr:hover { background: var(--bg); }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* Badges */
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 0.7rem; font-weight: 500;
+    }
+    .badge-excellent { background: #dcfce7; color: #166534; }
+    .badge-good { background: #dbeafe; color: #1e40af; }
+    .badge-watch { background: #fef3c7; color: #92400e; }
+    .badge-at_risk, .badge-at-risk { background: #fee2e2; color: #991b1b; }
+    .badge-exceptional { background: #dcfce7; color: #166534; }
+    .badge-concerning { background: #fee2e2; color: #991b1b; }
+    .badge-high { background: #fee2e2; color: #991b1b; }
+    .badge-medium { background: #fef3c7; color: #92400e; }
+    .badge-low { background: #dbeafe; color: #1e40af; }
+
+    /* Trend arrows */
+    .trend-up { color: var(--green); }
+    .trend-down { color: var(--red); }
+    .trend-flat { color: var(--muted); }
+
+    /* Loading */
+    .loading { text-align: center; padding: 60px; color: var(--muted); font-size: 0.9rem; }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+      .kpi-row { grid-template-columns: repeat(2, 1fr); }
+      .charts-grid { grid-template-columns: 1fr; }
+      .header { padding: 12px 16px; }
+      .container { padding: 16px; }
+      .tab-btn { padding: 8px 12px; font-size: 0.75rem; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div style="display:flex;align-items:center;gap:16px;">
+    <a href="/" style="font-family:'DM Mono',monospace;font-size:0.82rem;padding:6px 14px;border:1px solid rgba(255,255,255,0.3);border-radius:6px;color:#fff;text-decoration:none;transition:background 0.2s;">Scoring</a>
+    <h1>Team Analytics Dashboard</h1>
+  </div>
+  <div class="header-controls">
+    <button class="toggle-btn active" id="activeToggle" onclick="toggleActive()">Active Only</button>
+    <select id="supervisorSelect" onchange="changeSupervisor(this.value)">
+      <option value="">All Supervisors</option>
+    </select>
+    <div class="time-buttons">
+      <button onclick="setDays(0)">All</button>
+      <button onclick="setDays(180)">6mo</button>
+      <button onclick="setDays(90)" class="active">3mo</button>
+      <button onclick="setDays(30)">1mo</button>
+    </div>
+  </div>
+</div>
+
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="switchTab('overview')">Overview</button>
+  <button class="tab-btn" onclick="switchTab('roster')">Agent Roster</button>
+  <button class="tab-btn" onclick="switchTab('outliers')">Outliers</button>
+  <button class="tab-btn" onclick="switchTab('sections')">Section Analysis</button>
+  <button class="tab-btn" onclick="switchTab('supervisors')">Supervisors</button>
+</div>
+
+<div class="container">
+  <!-- Overview Tab -->
+  <div class="tab-panel active" id="panel-overview">
+    <div class="kpi-row" id="kpiRow"></div>
+    <div class="charts-grid">
+      <div class="card"><h3>SPC Control Chart</h3><canvas id="spcCanvas"></canvas></div>
+      <div class="card"><h3>Score Distribution</h3><canvas id="distCanvas"></canvas></div>
+    </div>
+    <div class="card"><h3>EWMA by Agent</h3><canvas id="ewmaCanvas"></canvas></div>
+  </div>
+
+  <!-- Agent Roster Tab -->
+  <div class="tab-panel" id="panel-roster">
+    <div class="card">
+      <h3>Agent Roster</h3>
+      <div style="overflow-x:auto"><table id="rosterTable"><thead><tr>
+        <th data-col="agent">Agent</th><th data-col="n">Evals</th>
+        <th data-col="mean">Mean</th><th data-col="std">Std</th>
+        <th data-col="ewma">EWMA</th><th data-col="trend">Trend</th>
+        <th data-col="id_val_pct">ID Val %</th><th data-col="cust_res_pct">Cust Res %</th>
+        <th data-col="status">Status</th><th>Weak Sections</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+
+  <!-- Outliers Tab -->
+  <div class="tab-panel" id="panel-outliers">
+    <div class="card">
+      <h3>Outliers</h3>
+      <div style="overflow-x:auto"><table id="outliersTable"><thead><tr>
+        <th data-col="agent">Agent</th><th data-col="date">Date</th>
+        <th data-col="score">Score</th><th data-col="agent_median">Agent Median</th>
+        <th data-col="modified_z">Modified Z</th><th data-col="classification">Type</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+
+  <!-- Section Analysis Tab -->
+  <div class="tab-panel" id="panel-sections">
+    <div class="charts-grid">
+      <div class="card"><h3>Section Averages</h3><canvas id="sectionAvgCanvas"></canvas></div>
+      <div class="card"><h3>Section Variability</h3><canvas id="sectionVarCanvas"></canvas></div>
+    </div>
+    <div class="kpi-row" style="grid-template-columns: repeat(2, 1fr);" id="binaryStats"></div>
+    <div class="card">
+      <h3>Training Opportunities</h3>
+      <div style="overflow-x:auto"><table id="trainingTable"><thead><tr>
+        <th data-col="agent">Agent</th><th data-col="section">Section</th>
+        <th data-col="agent_avg">Agent Avg</th><th data-col="team_avg">Team Avg</th>
+        <th data-col="gap">Gap</th><th data-col="priority">Priority</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+
+  <!-- Supervisors Tab -->
+  <div class="tab-panel" id="panel-supervisors">
+    <div class="card"><h3>Supervisor Comparison</h3><canvas id="supervisorCanvas"></canvas></div>
+    <div class="card">
+      <h3>Supervisor Summary</h3>
+      <div style="overflow-x:auto"><table id="supervisorTable"><thead><tr>
+        <th data-col="supervisor">Supervisor</th><th data-col="avg_score">Avg Score</th>
+        <th data-col="std_score">Std</th><th data-col="eval_count">Eval Count</th>
+        <th data-col="agent_count">Agent Count</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_BASE = window.location.origin;
+let selectedDays = 90;
+let activeOnly = true;
+let selectedSupervisor = '';
+let teamData = null;
+let currentTab = 'overview';
+let sortState = {};
+
+let spcChart = null, distChart = null, ewmaChart = null;
+let sectionAvgChart = null, sectionVarChart = null, supervisorChart = null;
+
+// --- Fetch ---
+async function fetchTeamStats() {
+  const params = new URLSearchParams({ days: selectedDays, active_only: activeOnly });
+  if (selectedSupervisor) params.set('supervisor', selectedSupervisor);
+  try {
+    const r = await fetch(`${API_BASE}/api/team/stats?${params}`);
+    if (!r.ok) throw new Error(r.statusText);
+    teamData = await r.json();
+    renderTab(currentTab);
+  } catch (e) {
+    console.error('Failed to fetch team stats:', e);
+  }
+}
+
+async function fetchMails() {
+  try {
+    const r = await fetch(`${API_BASE}/api/team/mails`);
+    if (!r.ok) return;
+    const mails = await r.json();
+    const sel = document.getElementById('supervisorSelect');
+    const supervisors = [...new Set(mails.map(m => m.supervisor).filter(Boolean))].sort();
+    supervisors.forEach(s => {
+      const o = document.createElement('option');
+      o.value = s; o.textContent = s;
+      sel.appendChild(o);
+    });
+  } catch (e) { console.error('Failed to fetch mails:', e); }
+}
+
+// --- Controls ---
+function toggleActive() {
+  activeOnly = !activeOnly;
+  document.getElementById('activeToggle').classList.toggle('active', activeOnly);
+  document.getElementById('activeToggle').textContent = activeOnly ? 'Active Only' : 'All Agents';
+  fetchTeamStats();
+}
+
+function changeSupervisor(v) { selectedSupervisor = v; fetchTeamStats(); }
+
+function setDays(d) {
+  selectedDays = d;
+  document.querySelectorAll('.time-buttons button').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  fetchTeamStats();
+}
+
+// --- Tabs ---
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + tab).classList.add('active');
+  if (teamData) renderTab(tab);
+}
+
+function renderTab(tab) {
+  if (!teamData) return;
+  const renderers = {
+    overview: renderOverview, roster: renderRoster, outliers: renderOutliers,
+    sections: renderSections, supervisors: renderSupervisors
+  };
+  renderers[tab]?.();
+}
+
+// --- Helpers ---
+function scoreColor(v) { return v >= 85 ? '#28A745' : v >= 70 ? '#E8A317' : '#D9534F'; }
+function sectionScoreColor(v) { return v >= 4.25 ? '#28A745' : v >= 3.5 ? '#E8A317' : '#D9534F'; }
+function varColor(v) { return v > 1.1 ? '#D9534F' : v > 0.9 ? '#E8A317' : '#28A745'; }
+function destroyChart(c) { if (c) c.destroy(); return null; }
+function fmt(v, d = 1) { return v != null ? Number(v).toFixed(d) : '--'; }
+function pctFmt(v) { return v != null ? Number(v).toFixed(1) + '%' : '--'; }
+function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+function trendHtml(t) {
+  if (t === 'improving') return '<span class="trend-up">&#9650;</span>';
+  if (t === 'declining') return '<span class="trend-down">&#9660;</span>';
+  return '<span class="trend-flat">&#9679;</span>';
+}
+
+function statusBadge(s) {
+  if (!s) return '';
+  return `<span class="badge badge-${s}">${s.replace('_', ' ')}</span>`;
+}
+
+function priorityBadge(p) {
+  if (!p) return '';
+  return `<span class="badge badge-${p}">${p}</span>`;
+}
+
+// --- Sort ---
+function attachSort(tableId, data, renderFn) {
+  const table = document.getElementById(tableId);
+  if (!table) return;
+  table.querySelectorAll('th[data-col]').forEach(th => {
+    th.onclick = () => {
+      const col = th.dataset.col;
+      const key = tableId + '.' + col;
+      const asc = sortState[key] === 'asc' ? 'desc' : 'asc';
+      sortState[key] = asc;
+      data.sort((a, b) => {
+        let va = a[col], vb = b[col];
+        if (va == null) return 1; if (vb == null) return -1;
+        if (typeof va === 'string') return asc === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+        return asc === 'asc' ? va - vb : vb - va;
+      });
+      renderFn(data);
+    };
+  });
+}
+
+// --- Overview ---
+function renderOverview() {
+  const k = teamData.kpis || {};
+  document.getElementById('kpiRow').innerHTML = [
+    { label: 'Total Evals', value: k.total_evals ?? '--' },
+    { label: 'Avg Score', value: fmt(k.avg_score), color: scoreColor(k.avg_score) },
+    { label: 'Std Dev', value: fmt(k.std_score) },
+    { label: 'Active Analysts', value: k.analyst_count ?? '--' }
+  ].map(kpi => `<div class="kpi-box">
+    <div class="label">${kpi.label}</div>
+    <div class="value" ${kpi.color ? `style="color:${kpi.color}"` : ''}>${kpi.value}</div>
+  </div>`).join('');
+
+  renderSpcChart();
+  renderDistChart();
+  renderEwmaChart();
+}
+
+function renderSpcChart() {
+  spcChart = destroyChart(spcChart);
+  const spc = teamData.spc;
+  if (!spc || !spc.months || !spc.months.length) return;
+  const labels = spc.months.map(m => m.month);
+  const means = spc.months.map(m => m.mean);
+  const pointColors = means.map(m => (m > spc.ucl || m < spc.lcl) ? '#D9534F' : '#1A61D9');
+  spcChart = new Chart(document.getElementById('spcCanvas'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Monthly Mean', data: means, borderColor: '#1A61D9', fill: false, tension: 0.2, pointBackgroundColor: pointColors, pointRadius: 5 },
+        { label: 'UCL', data: labels.map(() => spc.ucl), borderColor: '#D9534F', borderDash: [6, 4], pointRadius: 0, borderWidth: 1.5 },
+        { label: 'LCL', data: labels.map(() => spc.lcl), borderColor: '#D9534F', borderDash: [6, 4], pointRadius: 0, borderWidth: 1.5 },
+        { label: 'Center', data: labels.map(() => spc.center), borderColor: '#5a6478', borderDash: [4, 4], pointRadius: 0, borderWidth: 1.5 }
+      ]
+    },
+    options: { responsive: true, scales: { y: { min: 60, max: 100, ticks: { stepSize: 5 } } }, plugins: { legend: { position: 'bottom' } } }
+  });
+}
+
+function renderDistChart() {
+  distChart = destroyChart(distChart);
+  const bins = teamData.distribution;
+  if (!bins?.length) return;
+  const colors = bins.map(b => {
+    const lo = parseInt(b.bin);
+    if (lo >= 91) return '#28A745';
+    if (lo >= 81) return '#1A61D9';
+    if (lo >= 71) return '#E8A317';
+    return '#D9534F';
+  });
+  distChart = new Chart(document.getElementById('distCanvas'), {
+    type: 'bar',
+    data: { labels: bins.map(b => b.bin), datasets: [{ label: 'Count', data: bins.map(b => b.count), backgroundColor: colors, borderColor: colors, borderWidth: 1 }] },
+    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+  });
+}
+
+function renderEwmaChart() {
+  ewmaChart = destroyChart(ewmaChart);
+  const data = teamData.ewma;
+  if (!data?.length) return;
+  const colors = data.map(d => d.current_ewma >= 90 ? '#28A745' : d.current_ewma >= 80 ? '#1A61D9' : d.current_ewma >= 70 ? '#E8A317' : '#D9534F');
+  ewmaChart = new Chart(document.getElementById('ewmaCanvas'), {
+    type: 'bar',
+    data: { labels: data.map(d => d.agent), datasets: [{ label: 'EWMA', data: data.map(d => d.current_ewma), backgroundColor: colors, borderColor: colors, borderWidth: 1 }] },
+    options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false } }, scales: { x: { min: 0, max: 100 } } }
+  });
+}
+
+// --- Roster ---
+function renderRoster() {
+  const roster = teamData.roster || [];
+  attachSort('rosterTable', roster, fillRoster);
+  fillRoster(roster);
+}
+
+function fillRoster(data) {
+  document.querySelector('#rosterTable tbody').innerHTML = data.map(r => `<tr>
+    <td><a href="/dashboard/agent/${encodeURIComponent(r.agent)}">${escapeHtml(r.agent)}</a></td>
+    <td>${r.n ?? ''}</td><td style="color:${scoreColor(r.mean)}">${fmt(r.mean)}</td><td>${fmt(r.std)}</td>
+    <td style="color:${scoreColor(r.ewma)}">${fmt(r.ewma)}</td><td>${trendHtml(r.trend)}</td>
+    <td>${pctFmt(r.id_val_pct)}</td><td>${pctFmt(r.cust_res_pct)}</td>
+    <td>${statusBadge(r.status)}</td><td>${(r.weak_sections || []).join(', ')}</td>
+  </tr>`).join('');
+}
+
+// --- Outliers ---
+function renderOutliers() {
+  const outliers = teamData.outliers || [];
+  attachSort('outliersTable', outliers, fillOutliers);
+  fillOutliers(outliers);
+}
+
+function fillOutliers(data) {
+  document.querySelector('#outliersTable tbody').innerHTML = data.map(o => `<tr>
+    <td><a href="/dashboard/agent/${encodeURIComponent(o.agent)}">${escapeHtml(o.agent)}</a></td>
+    <td>${o.date || ''}</td><td style="color:${scoreColor(o.score)}">${fmt(o.score, 0)}</td>
+    <td>${fmt(o.agent_median)}</td><td>${fmt(o.modified_z, 2)}</td>
+    <td><span class="badge badge-${o.classification}">${o.classification}</span></td>
+  </tr>`).join('');
+}
+
+// --- Section Analysis ---
+function renderSections() {
+  renderSectionAvgChart();
+  renderSectionVarChart();
+  renderBinaryStats();
+  renderTraining();
+}
+
+function renderSectionAvgChart() {
+  sectionAvgChart = destroyChart(sectionAvgChart);
+  const sa = teamData.section_analysis;
+  if (!sa || !sa.team_means) return;
+  const sections = Object.keys(sa.team_means);
+  const data = sections.map(s => sa.team_means[s]);
+  const colors = data.map(v => sectionScoreColor(v));
+  sectionAvgChart = new Chart(document.getElementById('sectionAvgCanvas'), {
+    type: 'bar',
+    data: { labels: sections, datasets: [{ label: 'Avg', data: data, backgroundColor: colors, borderColor: colors, borderWidth: 1 }] },
+    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { min: 3, max: 5, ticks: { stepSize: 0.25 } } } }
+  });
+}
+
+function renderSectionVarChart() {
+  sectionVarChart = destroyChart(sectionVarChart);
+  const sa = teamData.section_analysis;
+  if (!sa || !sa.team_stds) return;
+  const sections = Object.keys(sa.team_stds);
+  const data = sections.map(s => sa.team_stds[s]);
+  const colors = data.map(v => varColor(v));
+  sectionVarChart = new Chart(document.getElementById('sectionVarCanvas'), {
+    type: 'bar',
+    data: { labels: sections, datasets: [{ label: 'Std Dev', data: data, backgroundColor: colors, borderColor: colors, borderWidth: 1 }] },
+    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+  });
+}
+
+function renderBinaryStats() {
+  const bs = teamData.binary_stats || {};
+  const idPct = bs.identity_validation ? bs.identity_validation.team_pct : null;
+  const crPct = bs.customer_resolution ? bs.customer_resolution.team_pct : null;
+  document.getElementById('binaryStats').innerHTML = [
+    { label: 'Identity Validation %', value: pctFmt(idPct), color: scoreColor(idPct || 0) },
+    { label: 'Customer Resolution %', value: pctFmt(crPct), color: scoreColor(crPct || 0) }
+  ].map(kpi => `<div class="kpi-box">
+    <div class="label">${kpi.label}</div>
+    <div class="value" style="color:${kpi.color}">${kpi.value}</div>
+  </div>`).join('');
+}
+
+function renderTraining() {
+  const sa = teamData.section_analysis || {};
+  const t = sa.training_opportunities || [];
+  attachSort('trainingTable', t, fillTraining);
+  fillTraining(t);
+}
+
+function fillTraining(data) {
+  document.querySelector('#trainingTable tbody').innerHTML = data.map(r => `<tr>
+    <td>${escapeHtml(r.agent)}</td><td>${escapeHtml(r.section)}</td><td>${fmt(r.agent_avg)}</td>
+    <td>${fmt(r.team_avg)}</td><td>${fmt(r.gap)}</td><td>${priorityBadge(r.priority)}</td>
+  </tr>`).join('');
+}
+
+// --- Supervisors ---
+function renderSupervisors() {
+  renderSupervisorChart();
+  renderSupervisorTable();
+}
+
+function renderSupervisorChart() {
+  supervisorChart = destroyChart(supervisorChart);
+  const data = teamData.supervisor_stats || [];
+  if (!data.length) return;
+  const colors = data.map(d => scoreColor(d.avg_score));
+  supervisorChart = new Chart(document.getElementById('supervisorCanvas'), {
+    type: 'bar',
+    data: { labels: data.map(d => d.supervisor), datasets: [{ label: 'Avg Score', data: data.map(d => d.avg_score), backgroundColor: colors, borderColor: colors, borderWidth: 1 }] },
+    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { min: 60, max: 100 } } }
+  });
+}
+
+function renderSupervisorTable() {
+  const data = teamData.supervisor_stats || [];
+  attachSort('supervisorTable', data, fillSupervisorTable);
+  fillSupervisorTable(data);
+}
+
+function fillSupervisorTable(data) {
+  document.querySelector('#supervisorTable tbody').innerHTML = data.map(s => `<tr>
+    <td>${escapeHtml(s.supervisor)}</td><td style="color:${scoreColor(s.avg_score)}">${fmt(s.avg_score)}</td><td>${fmt(s.std_score)}</td>
+    <td>${s.eval_count ?? ''}</td><td>${s.agent_count ?? ''}</td>
+  </tr>`).join('');
+}
+
+// --- Init ---
+fetchMails();
+fetchTeamStats();
+</script>
+</body>
+</html>

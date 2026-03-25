@@ -5,11 +5,35 @@ from __future__ import annotations
 import os
 from datetime import datetime, timedelta
 
+import time as _time
+
 import gspread
 from google.oauth2.service_account import Credentials
 
 from backend.models.dashboard import EvaluationRecord, SectionScore
 from backend.services.data_provider import DataProvider
+
+# ---------------------------------------------------------------------------
+# Raw sheet data cache with 5-minute TTL
+# ---------------------------------------------------------------------------
+_sheet_cache: dict[str, tuple[float, list[list[str]]]] = {}
+_CACHE_TTL = 300  # 5 minutes
+
+
+def _get_cached_raw(key: str) -> list[list[str]] | None:
+    """Return cached raw sheet data if fresh, else None."""
+    entry = _sheet_cache.get(key)
+    if entry is None:
+        return None
+    cached_at, data = entry
+    if _time.time() - cached_at > _CACHE_TTL:
+        del _sheet_cache[key]
+        return None
+    return data
+
+
+def _set_cached_raw(key: str, data: list[list[str]]) -> None:
+    _sheet_cache[key] = (_time.time(), data)
 
 # ---------------------------------------------------------------------------
 # Google Sheets authentication
@@ -177,7 +201,11 @@ class SheetsProvider(DataProvider):
     # ------------------------------------------------------------------
     async def list_agents(self) -> list[str]:
         """Return sorted, deduplicated agent names from column A."""
-        values = self._ws.col_values(1)  # 1-indexed in gspread
+        cached = _get_cached_raw("history")
+        if cached is not None:
+            values = [row[0] if row else "" for row in cached]
+        else:
+            values = self._ws.col_values(1)  # 1-indexed in gspread
         # Skip header row
         names = sorted(set(v.strip() for v in values[1:] if v.strip()))
         return names
@@ -188,7 +216,12 @@ class SheetsProvider(DataProvider):
     ) -> list[EvaluationRecord]:
         """Return evaluations for *agent_name* within the last *days* days."""
         cutoff = datetime.now() - timedelta(days=days)
-        all_rows = self._ws.get_all_values()
+        cached = _get_cached_raw("history")
+        if cached is not None:
+            all_rows = cached
+        else:
+            all_rows = self._ws.get_all_values()
+            _set_cached_raw("history", all_rows)
 
         records: list[EvaluationRecord] = []
         for row in all_rows[1:]:  # skip header
@@ -203,5 +236,43 @@ class SheetsProvider(DataProvider):
                 continue
             records.append(rec)
 
+        records.sort(key=lambda r: r.timestamp)
+        return records
+
+    # ------------------------------------------------------------------
+    def _get_mails_sheet(self) -> list[list[str]]:
+        """Read the Mails tab (agent roster with supervisors and canonical names).
+        Returns raw rows including header. Cached for 5 minutes."""
+        cached = _get_cached_raw("mails")
+        if cached is not None:
+            return cached
+        mails_ws = self._gc.open_by_key(
+            os.environ.get("GOOGLE_SHEETS_ID", "")
+        ).worksheet("Mails")
+        data = mails_ws.get_all_values()
+        _set_cached_raw("mails", data)
+        return data
+
+    # ------------------------------------------------------------------
+    async def get_all_history(self, days: int = 90) -> list[EvaluationRecord]:
+        """Return ALL evaluation records within the time window (no agent filter)."""
+        cached = _get_cached_raw("history")
+        if cached is not None:
+            all_rows = cached
+        else:
+            all_rows = self._ws.get_all_values()
+            _set_cached_raw("history", all_rows)
+
+        cutoff = datetime.now() - timedelta(days=days)
+        records: list[EvaluationRecord] = []
+        for row in all_rows[1:]:  # skip header
+            if not row:
+                continue
+            rec = _parse_row(row)
+            if rec is None:
+                continue
+            if rec.timestamp < cutoff:
+                continue
+            records.append(rec)
         records.sort(key=lambda r: r.timestamp)
         return records
