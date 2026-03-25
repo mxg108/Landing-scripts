@@ -1,6 +1,6 @@
 /**
  * QA Automation — Main
- * Landing QA System v1.0.0
+ * Landing QA System v1.1.0
  *
  * Entry points:
  *   • onFormSubmit(e)  — installable trigger, fires on each QA form submission

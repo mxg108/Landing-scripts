@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Progression Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    :root {
+      --navy: #15192D;
+      --accent: #1A61D9;
+      --bg: #E7EFFB;
+      --surface: #ffffff;
+      --border: #c9d5e8;
+      --text: #15192D;
+      --muted: #5a6478;
+      --green: #28A745;
+      --amber: #E8A317;
+      --red: #D9534F;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'DM Mono', monospace;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    h1, h2, h3 { font-family: 'Fraunces', serif; }
+
+    /* Header */
+    .header {
+      background: var(--navy);
+      color: #fff;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .header h1 { font-size: 1.25rem; font-weight: 600; }
+    .header-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .header select {
+      font-family: 'DM Mono', monospace;
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      font-size: 0.85rem;
+      background: var(--surface);
+      color: var(--text);
+    }
+    .time-buttons {
+      display: flex;
+      gap: 4px;
+    }
+    .time-buttons button {
+      font-family: 'DM Mono', monospace;
+      padding: 6px 12px;
+      border: 1px solid rgba(255,255,255,0.3);
+      background: transparent;
+      color: #fff;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .time-buttons button:hover { background: rgba(255,255,255,0.1); }
+    .time-buttons button.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    /* Layout */
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .card h2 {
+      font-size: 1.1rem;
+      margin-bottom: 16px;
+      color: var(--navy);
+    }
+    .card.hidden { display: none; }
+
+    /* Placeholder */
+    .placeholder {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    /* Stats row */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+    .stat-box {
+      text-align: center;
+      padding: 16px 8px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg);
+    }
+    .stat-box .stat-value {
+      font-family: 'Fraunces', serif;
+      font-size: 1.8rem;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+    .stat-box .stat-label {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* Charts */
+    .chart-wrapper {
+      position: relative;
+      height: 320px;
+    }
+
+    /* Assessment */
+    .assessment-overall {
+      background: var(--bg);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 20px;
+      font-size: 0.9rem;
+      line-height: 1.6;
+    }
+    .section-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px;
+    }
+    .section-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      background: var(--bg);
+    }
+    .section-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .section-card-header .section-name {
+      font-weight: 700;
+      text-transform: capitalize;
+      font-size: 0.9rem;
+    }
+    .trend-badge {
+      font-size: 0.7rem;
+      font-weight: 500;
+      padding: 2px 10px;
+      border-radius: 999px;
+      color: #fff;
+    }
+    .trend-badge.improving { background: var(--green); }
+    .trend-badge.stable { background: var(--amber); }
+    .trend-badge.declining { background: var(--red); }
+    .section-card .summary {
+      font-size: 0.82rem;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-bottom: 8px;
+    }
+    .coaching-toggle {
+      font-size: 0.8rem;
+      color: var(--accent);
+      cursor: pointer;
+      font-weight: 500;
+      user-select: none;
+    }
+    .coaching-tip {
+      display: none;
+      margin-top: 8px;
+      font-size: 0.82rem;
+      line-height: 1.5;
+      padding: 10px;
+      background: var(--surface);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+    .coaching-tip.visible { display: block; }
+
+    /* Footer */
+    .footer {
+      text-align: center;
+      padding: 16px;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    /* Score colors */
+    .score-green { color: var(--green); }
+    .score-amber { color: var(--amber); }
+    .score-red { color: var(--red); }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+      .stats-row { grid-template-columns: repeat(2, 1fr); }
+      .section-grid { grid-template-columns: 1fr; }
+      .chart-wrapper { height: 240px; }
+      .header { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div style="display:flex;align-items:center;gap:16px;">
+      <a href="/dashboard" style="color:rgba(255,255,255,0.7);text-decoration:none;font-size:0.8rem;border:1px solid rgba(255,255,255,0.3);padding:4px 12px;border-radius:6px;">Team View</a>
+      <h1 id="headerTitle">Agent Dashboard</h1>
+    </div>
+    <div class="header-controls">
+      <div class="time-buttons">
+        <button data-days="7">7d</button>
+        <button data-days="14">14d</button>
+        <button data-days="30" class="active">30d</button>
+        <button data-days="60">60d</button>
+        <button data-days="90">90d</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="container">
+    <div id="placeholder" class="placeholder">Select an agent to view their progression.</div>
+
+    <div id="statsCard" class="card hidden">
+      <h2>Summary</h2>
+      <div class="stats-row">
+        <div class="stat-box">
+          <div class="stat-value" id="statCount">--</div>
+          <div class="stat-label">Evaluations</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-value" id="statAvg">--</div>
+          <div class="stat-label">Average Score</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-value" id="statLatest">--</div>
+          <div class="stat-label">Latest Score</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-value" id="statHighest">--</div>
+          <div class="stat-label">Highest Score</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="trendCard" class="card hidden">
+      <h2>Overall Score Trend</h2>
+      <div class="chart-wrapper">
+        <canvas id="trendChart"></canvas>
+      </div>
+    </div>
+
+    <div id="sectionCard" class="card hidden">
+      <h2>Per-Section Averages</h2>
+      <div class="chart-wrapper">
+        <canvas id="sectionChart"></canvas>
+      </div>
+    </div>
+
+    <div id="assessmentCard" class="card">
+      <h2>AI Progression Assessment</h2>
+      <div id="assessmentPlaceholder" style="text-align:center;padding:20px;">
+        <button id="aiBtn" onclick="loadAIAssessment()" style="font-family:'DM Mono',monospace;font-size:0.85rem;padding:10px 24px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;">Get AI Assessment</button>
+        <p style="font-size:0.75rem;color:var(--muted);margin-top:8px;">Generates a Gemini coaching assessment (~$0.15 per API call)</p>
+      </div>
+      <div id="assessmentContent" class="hidden">
+        <div id="assessmentOverall" class="assessment-overall"></div>
+        <div id="sectionGrid" class="section-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="footer" class="footer"></div>
+
+  <script>
+    const API_BASE = window.location.origin;
+    let selectedDays = 30;
+    let trendChartInstance = null;
+    let sectionChartInstance = null;
+
+    // Numeric sections for the bar chart (1-5 scale)
+    const SECTION_KEYS = [
+      'greeting', 'purpose_of_call', 'matching_the_moment',
+      'process_adherence', 'call_resolution', 'communication',
+      'efficiency', 'documentation'
+    ];
+    const SECTION_LABELS = {
+      greeting: 'Greeting',
+      identity_validation: 'Identity Validation',
+      purpose_of_call: 'Purpose of Call',
+      matching_the_moment: 'Matching the Moment',
+      process_adherence: 'Process Adherence',
+      call_resolution: 'Call Resolution',
+      communication: 'Communication',
+      efficiency: 'Efficiency',
+      documentation: 'Documentation',
+      customer_resolution_indicator: 'Customer Resolution'
+    };
+
+    // Overall score is 0-100 scale
+    function overallColor(score) {
+      if (score >= 85) return '#28A745';
+      if (score >= 70) return '#E8A317';
+      return '#D9534F';
+    }
+    function overallClass(score) {
+      if (score >= 85) return 'score-green';
+      if (score >= 70) return 'score-amber';
+      return 'score-red';
+    }
+    // Section scores are 1-5 scale
+    function sectionColor(score) {
+      if (score >= 4.25) return '#28A745';
+      if (score >= 3.5) return '#E8A317';
+      return '#D9534F';
+    }
+
+    // Extract a numeric score from a section object (handles string "4", "Yes", etc.)
+    function parseSectionScore(section) {
+      if (!section) return null;
+      const val = section.score != null ? section.score : section;
+      const num = parseFloat(val);
+      return isNaN(num) ? null : num;
+    }
+
+    async function fetchJSON(url) {
+      try {
+        const res = await fetch(url);
+        if (res.status === 404) return null;
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.json();
+      } catch (e) {
+        console.error('Fetch error:', e);
+        return null;
+      }
+    }
+
+    // Extract agent name from URL: /dashboard/agent/{name}
+    function getAgentFromURL() {
+      const path = window.location.pathname;
+      const prefix = '/dashboard/agent/';
+      if (path.startsWith(prefix)) {
+        return decodeURIComponent(path.substring(prefix.length));
+      }
+      return null;
+    }
+
+    const currentAgent = getAgentFromURL();
+
+    async function loadDashboard(agentName) {
+      if (!agentName) return;
+
+      document.getElementById('placeholder').textContent = 'Loading...';
+      document.getElementById('placeholder').classList.remove('hidden');
+      ['statsCard', 'trendCard', 'sectionCard'].forEach(id =>
+        document.getElementById(id).classList.add('hidden')
+      );
+      // Reset AI assessment to button state
+      document.getElementById('assessmentPlaceholder').classList.remove('hidden');
+      document.getElementById('assessmentContent').classList.add('hidden');
+      document.getElementById('footer').textContent = '';
+
+      const history = await fetchJSON(
+        `${API_BASE}/api/agents/${encodeURIComponent(agentName)}/history?days=${selectedDays}`
+      );
+
+      if (!history) {
+        document.getElementById('placeholder').textContent = `No evaluations found for "${agentName}" in the last ${selectedDays} days.`;
+        return;
+      }
+
+      document.getElementById('placeholder').classList.add('hidden');
+      renderStats(history);
+      renderTrendChart(history);
+      renderSectionChart(history);
+
+      document.getElementById('footer').textContent =
+        `Data source: Google Sheets | ${history.length} evaluations | Last ${selectedDays} days`;
+    }
+
+    async function loadAIAssessment() {
+      if (!currentAgent) return;
+      const btn = document.getElementById('aiBtn');
+      btn.disabled = true;
+      btn.textContent = 'Generating...';
+
+      const progression = await fetchJSON(
+        `${API_BASE}/api/agents/${encodeURIComponent(currentAgent)}/progression?days=${selectedDays}`
+      );
+
+      if (progression) {
+        renderAssessment(progression);
+        document.getElementById('assessmentPlaceholder').classList.add('hidden');
+        document.getElementById('assessmentContent').classList.remove('hidden');
+      } else {
+        btn.textContent = 'Failed — retry';
+        btn.disabled = false;
+      }
+    }
+
+    function renderStats(history) {
+      const scores = history.map(r => r.overall_score).filter(s => s != null);
+      const count = history.length;
+      const avg = scores.length ? (scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+      const latest = scores.length ? scores[scores.length - 1] : 0;
+      const highest = scores.length ? Math.max(...scores) : 0;
+
+      document.getElementById('statCount').textContent = count;
+      document.getElementById('statCount').className = 'stat-value';
+
+      document.getElementById('statAvg').textContent = avg.toFixed(1);
+      document.getElementById('statAvg').className = 'stat-value ' + overallClass(avg);
+
+      document.getElementById('statLatest').textContent = latest.toFixed(1);
+      document.getElementById('statLatest').className = 'stat-value ' + overallClass(latest);
+
+      document.getElementById('statHighest').textContent = highest.toFixed(1);
+      document.getElementById('statHighest').className = 'stat-value ' + overallClass(highest);
+
+      document.getElementById('statsCard').classList.remove('hidden');
+    }
+
+    function renderTrendChart(history) {
+      const ctx = document.getElementById('trendChart').getContext('2d');
+      if (trendChartInstance) { trendChartInstance.destroy(); trendChartInstance = null; }
+
+      const labels = history.map(r => {
+        const d = new Date(r.timestamp);
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      });
+      const data = history.map(r => r.overall_score);
+      const pointColors = data.map(s => overallColor(s));
+
+      trendChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Overall Score',
+            data,
+            borderColor: '#1A61D9',
+            backgroundColor: 'rgba(26, 97, 217, 0.1)',
+            fill: true,
+            tension: 0.3,
+            pointBackgroundColor: pointColors,
+            pointBorderColor: pointColors,
+            pointRadius: 5,
+            pointHoverRadius: 7
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            y: { min: 0, max: 100, ticks: { stepSize: 10 } }
+          },
+          plugins: {
+            tooltip: {
+              callbacks: {
+                afterBody(items) {
+                  const idx = items[0].dataIndex;
+                  const rec = history[idx];
+                  let lines = [];
+                  if (rec.key_strengths) {
+                    const str = typeof rec.key_strengths === 'string' ? rec.key_strengths : '';
+                    lines.push('Strengths: ' + str.substring(0, 80) + (str.length > 80 ? '...' : ''));
+                  }
+                  if (rec.improvements) {
+                    const imp = typeof rec.improvements === 'string' ? rec.improvements : '';
+                    lines.push('Improve: ' + imp.substring(0, 80) + (imp.length > 80 ? '...' : ''));
+                  }
+                  return lines;
+                }
+              }
+            }
+          }
+        },
+        plugins: [{
+          id: 'goalLine',
+          afterDraw(chart) {
+            const yScale = chart.scales.y;
+            const goalY = yScale.getPixelForValue(85);
+            const ctx2 = chart.ctx;
+            ctx2.save();
+            ctx2.setLineDash([6, 4]);
+            ctx2.strokeStyle = '#28A745';
+            ctx2.lineWidth = 1.5;
+            ctx2.beginPath();
+            ctx2.moveTo(chart.chartArea.left, goalY);
+            ctx2.lineTo(chart.chartArea.right, goalY);
+            ctx2.stroke();
+            ctx2.setLineDash([]);
+            ctx2.fillStyle = '#28A745';
+            ctx2.font = '11px DM Mono';
+            ctx2.fillText('Goal: 85', chart.chartArea.right - 60, goalY - 6);
+            ctx2.restore();
+          }
+        }]
+      });
+
+      document.getElementById('trendCard').classList.remove('hidden');
+    }
+
+    function renderSectionChart(history) {
+      const ctx = document.getElementById('sectionChart').getContext('2d');
+      if (sectionChartInstance) { sectionChartInstance.destroy(); sectionChartInstance = null; }
+
+      // Extract numeric scores from sections dict: r.sections[key].score
+      const avgs = SECTION_KEYS.map(key => {
+        const vals = history
+          .map(r => r.sections ? parseSectionScore(r.sections[key]) : null)
+          .filter(v => v != null);
+        return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+      });
+
+      const bgColors = avgs.map(s => {
+        if (s >= 4.25) return 'rgba(40, 167, 69, 0.2)';
+        if (s >= 3.5) return 'rgba(232, 163, 23, 0.2)';
+        return 'rgba(217, 83, 79, 0.2)';
+      });
+      const borderColors = avgs.map(s => {
+        if (s >= 4.25) return '#28A745';
+        if (s >= 3.5) return '#E8A317';
+        return '#D9534F';
+      });
+
+      sectionChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: SECTION_KEYS.map(k => SECTION_LABELS[k]),
+          datasets: [{
+            label: 'Average Score',
+            data: avgs,
+            backgroundColor: bgColors,
+            borderColor: borderColors,
+            borderWidth: 2,
+            borderRadius: 4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            y: { min: 0, max: 5, ticks: { stepSize: 1 } }
+          },
+          plugins: {
+            legend: { display: false }
+          }
+        }
+      });
+
+      document.getElementById('sectionCard').classList.remove('hidden');
+    }
+
+    function renderAssessment(progression) {
+      const overall = document.getElementById('assessmentOverall');
+      overall.textContent = progression.overall_assessment || 'No overall assessment available.';
+
+      const grid = document.getElementById('sectionGrid');
+      grid.innerHTML = '';
+
+      // section_assessments is a dict: { "greeting": { trend, summary, coaching_tip }, ... }
+      const assessments = progression.section_assessments || {};
+      Object.entries(assessments).forEach(([key, sec]) => {
+        const card = document.createElement('div');
+        card.className = 'section-card';
+
+        const trendClass = (sec.trend || 'stable').toLowerCase();
+        const trendLabel = trendClass.charAt(0).toUpperCase() + trendClass.slice(1);
+
+        card.innerHTML = `
+          <div class="section-card-header">
+            <span class="section-name">${SECTION_LABELS[key] || key}</span>
+            <span class="trend-badge ${trendClass}">${trendLabel}</span>
+          </div>
+          <div class="summary">${sec.summary || ''}</div>
+          <div class="coaching-toggle" onclick="this.nextElementSibling.classList.toggle('visible')">
+            Coaching Tip
+          </div>
+          <div class="coaching-tip">${sec.coaching_tip || 'No tip available.'}</div>
+        `;
+        grid.appendChild(card);
+      });
+
+    }
+
+    // Event listeners
+    document.querySelectorAll('.time-buttons button').forEach(btn => {
+      btn.addEventListener('click', function () {
+        document.querySelectorAll('.time-buttons button').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+        selectedDays = parseInt(this.dataset.days);
+        if (currentAgent) loadDashboard(currentAgent);
+      });
+    });
+
+    // Init — load from URL
+    if (currentAgent) {
+      document.getElementById('headerTitle').textContent = currentAgent;
+      loadDashboard(currentAgent);
+    } else {
+      document.getElementById('placeholder').textContent = 'No agent specified in URL.';
+    }
+  </script>
+</body>
+</html>

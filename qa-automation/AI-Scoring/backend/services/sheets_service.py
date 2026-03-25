@@ -146,6 +146,16 @@ def append_scorecard_row(scorecard: ScorecardWithMeta) -> int:
         dialpad_link,                                                 # P: Dialpad Link
     ]
 
+    # Append AI reasoning columns Q–AI (19 values):
+    # Q: Source (always "ai")
+    # Then for each scored section (same order as SCORED_SECTION_COLUMNS: D–K, M),
+    # append 2 values: confidence, reasoning
+    row.append("ai")                                                      # Q: Source
+    for section_id in SCORED_SECTION_COLUMNS.values():
+        section = sections_by_id.get(section_id, {})
+        row.append(section.get("confidence", ""))                         # confidence
+        row.append(section.get("reasoning", ""))                          # reasoning
+
     result = sheet.append_row(row, value_input_option="USER_ENTERED")
     # Extract the row number from the update response
     updated_range = result.get("updates", {}).get("updatedRange", "")

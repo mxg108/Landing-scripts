@@ -25,6 +25,17 @@ class AnalystHistory {
    */
   append(entry) {
     this.sheet.appendRow(entry.toHistoryRow());
+
+    // Enrich with AI reasoning from Form Responses AI (if available)
+    var dialpadLink = entry.dialpadLink || '';
+    Logger.log('[AnalystHistory] append — dialpadLink: "' + dialpadLink + '"');
+    if (dialpadLink) {
+      var lastRow = this.sheet.getLastRow();
+      Logger.log('[AnalystHistory] calling _enrichFromFormResponsesAI for row ' + lastRow);
+      this._enrichFromFormResponsesAI(lastRow, dialpadLink);
+    } else {
+      Logger.log('[AnalystHistory] no dialpadLink — skipping enrichment');
+    }
   }
 
   /**
@@ -61,6 +72,10 @@ class AnalystHistory {
           identityValidation: (row[HC.IDENTITY_VAL]  || '').toString().trim().toUpperCase().charAt(0) === 'Y',
           customerResolution: (row[HC.CUSTOMER_RES]  || '').toString().trim().toUpperCase().charAt(0) === 'Y',
           managerEmail:       row[HC.MANAGER_EMAIL],
+          dialpadLink:        (row[HC.DIALPAD_LINK]  || '').toString().trim(),
+          keyStrengths:       (row[HC.KEY_STRENGTHS]  || '').toString().trim(),
+          improvements:       (row[HC.IMPROVEMENTS]   || '').toString().trim(),
+          source:             (row[HC.SOURCE]          || '').toString().trim(),
         });
       }
     }
@@ -96,6 +111,28 @@ class AnalystHistory {
       'Identity Validation',
       'Customer Resolution',
       'Manager Email',
+      'Dialpad Link',                    // P
+      'Key Strengths',                   // Q
+      'Opportunities for Improvement',   // R
+      'Source',                          // S
+      'Greeting Confidence',             // T
+      'Greeting Reasoning',              // U
+      'Identity Validation Confidence',  // V
+      'Identity Validation Reasoning',   // W
+      'Purpose of Call Confidence',      // X
+      'Purpose of Call Reasoning',       // Y
+      'Matching the Moment Confidence',  // Z
+      'Matching the Moment Reasoning',   // AA
+      'Process Adherence Confidence',    // AB
+      'Process Adherence Reasoning',     // AC
+      'Call Resolution Confidence',      // AD
+      'Call Resolution Reasoning',       // AE
+      'Communication Confidence',        // AF
+      'Communication Reasoning',         // AG
+      'Efficiency Confidence',           // AH
+      'Efficiency Reasoning',            // AI
+      'Customer Resolution Confidence',  // AJ
+      'Customer Resolution Reasoning',   // AK
     ];
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
     sheet.getRange(1, 1, 1, headers.length)
@@ -104,5 +141,79 @@ class AnalystHistory {
       .setFontColor(CONFIG.COLORS.WHITE);
     sheet.setFrozenRows(1);
     return sheet;
+  }
+
+  /**
+   * Looks up the matching row in Form Responses AI by Dialpad link
+   * and copies AI reasoning data (strengths, improvements, confidence,
+   * reasoning per section) into the extended columns (Q-AK) of the
+   * given Analyst_History row.
+   *
+   * @private
+   * @param {number} historyRowNum — the row number in Analyst_History to enrich
+   * @param {string} dialpadLink — the Dialpad link to match on
+   */
+  _enrichFromFormResponsesAI(historyRowNum, dialpadLink) {
+    try {
+      var formSheet = this.spreadsheet.getSheetByName(CONFIG.FORM_AI_SHEET_NAME);
+      if (!formSheet) return;  // Form Responses AI tab doesn't exist — skip silently
+
+      var formData = formSheet.getDataRange().getValues();
+      var FAC = CONFIG.FORM_AI_COL;
+
+      // Search for matching Dialpad link in Form Responses AI col P
+      var matchedRow = null;
+      for (var i = 1; i < formData.length; i++) {
+        var formLink = (formData[i][FAC.DIALPAD_LINK] || '').toString().trim();
+        // Strip any "[LONG CALL]" suffix for comparison
+        var cleanFormLink = formLink.replace(/\s*\[LONG CALL.*?\]/, '').trim();
+        var cleanHistLink = dialpadLink.replace(/\s*\[LONG CALL.*?\]/, '').trim();
+        if (cleanFormLink && cleanFormLink === cleanHistLink) {
+          matchedRow = formData[i];
+          break;
+        }
+      }
+
+      if (!matchedRow) {
+        Logger.log('[AnalystHistory] _enrich: no match found for link "' + dialpadLink + '" in ' + formData.length + ' Form AI rows');
+        return;
+      }
+      Logger.log('[AnalystHistory] _enrich: matched! Writing extended cols to row ' + historyRowNum);
+
+      var HC = CONFIG.HISTORY_COL;
+
+      // Build the extended values array for cols Q-AK (indices 16-36)
+      var extendedValues = [
+        (matchedRow[13] || '').toString(),  // Q: Key Strengths (Form col N)
+        (matchedRow[14] || '').toString(),  // R: Improvements (Form col O)
+        (matchedRow[FAC.SOURCE] || '').toString(),                  // S: Source
+        (matchedRow[FAC.GREETING_CONF] || '').toString(),           // T
+        (matchedRow[FAC.GREETING_REASON] || '').toString(),         // U
+        (matchedRow[FAC.IDENTITY_CONF] || '').toString(),           // V
+        (matchedRow[FAC.IDENTITY_REASON] || '').toString(),         // W
+        (matchedRow[FAC.PURPOSE_CONF] || '').toString(),            // X
+        (matchedRow[FAC.PURPOSE_REASON] || '').toString(),          // Y
+        (matchedRow[FAC.MATCHING_CONF] || '').toString(),           // Z
+        (matchedRow[FAC.MATCHING_REASON] || '').toString(),         // AA
+        (matchedRow[FAC.PROCESS_CONF] || '').toString(),            // AB
+        (matchedRow[FAC.PROCESS_REASON] || '').toString(),          // AC
+        (matchedRow[FAC.RESOLUTION_CONF] || '').toString(),         // AD
+        (matchedRow[FAC.RESOLUTION_REASON] || '').toString(),       // AE
+        (matchedRow[FAC.COMMUNICATION_CONF] || '').toString(),      // AF
+        (matchedRow[FAC.COMMUNICATION_REASON] || '').toString(),    // AG
+        (matchedRow[FAC.EFFICIENCY_CONF] || '').toString(),         // AH
+        (matchedRow[FAC.EFFICIENCY_REASON] || '').toString(),       // AI
+        (matchedRow[FAC.CUSTOMER_RES_CONF] || '').toString(),       // AJ
+        (matchedRow[FAC.CUSTOMER_RES_REASON] || '').toString(),     // AK
+      ];
+
+      // Write to Analyst_History cols Q-AK (columns 17-37 in 1-indexed)
+      this.sheet.getRange(historyRowNum, HC.KEY_STRENGTHS + 1, 1, extendedValues.length)
+        .setValues([extendedValues]);
+
+    } catch (err) {
+      // Non-fatal — log but don't block the append
+      Logger.log('[AnalystHistory] _enrichFromFormResponsesAI failed: ' + err.message);
+    }
   }
 }

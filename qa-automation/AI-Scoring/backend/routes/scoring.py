@@ -1,5 +1,7 @@
 """FastAPI routes for the QA scoring pipeline."""
 
+from __future__ import annotations
+
 import asyncio
 from typing import Optional
 

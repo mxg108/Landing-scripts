@@ -16,17 +16,19 @@ This repository contains two internal automation tools built on Google Apps
 Script and hosted inside Google Workspace. Both tools are designed to reduce
 manual effort for operations and quality assurance workflows at Landing.
 
-  1. Mass Notifications  — Bulk email system for member communications and updates 
+  1. Mass Notifications  — Bulk email system for member communications and updates
   once their reservation has started
   2. QA Automation       — Automated QA feedback and scoring emails for agents
+  2.1 AI-Scoring          — AI-powered call scoring pipeline + agent progression dashboard
 
-A third component, AI-Scoring, is currently in early development (Phase 0)
-and will eventually extend the QA Automation system with AI-powered call
-scoring. It is documented separately in qa-automation/AI-Scoring/CLAUDE.md.
+The QA Automation Apps Script and AI-Scoring Python backend work together:
+AI-Scoring grades calls via Gemini and writes to Form Responses AI, while
+the Apps Script enriches Analyst_History with AI reasoning when a manager
+approves and sends the email. The agent progression dashboard reads from
+Analyst_History to show trends and Gemini-generated coaching assessments.
 
-Both live scripts run inside Google Sheets as custom menus (Mass Notifications)
-or form triggers (QA Automation). No external servers are required for the
-current production versions.
+Mass Notifications and QA Automation run inside Google Sheets as custom menus
+or form triggers. AI-Scoring runs as a FastAPI server (local or Railway).
 
 --------------------------------------------------------------------------------
   REPOSITORY STRUCTURE
@@ -65,19 +67,44 @@ current production versions.
   │           └── WebApp_Send.html        Send controls and status
   │
   └── qa-automation/
-      └── src/                  Google Apps Script files (.js)
-          ├── Main.js           Entry points and processing pipeline
-          ├── Config.js         Column mappings and scoring thresholds
-          ├── QAEntry.js        Data model for a single QA row
-          ├── AnalystHistory.js Agent history tracking
-          ├── ScoreCard.js      HTML score breakdown visualization
-          ├── FeedbackCard.js   HTML strengths/improvements visualization
-          ├── ProgressionCard.js HTML trend and progression visualization
-          ├── HtmlRenderer.js   Full email template assembly
-          └── EmailSender.js    Gmail integration (send or draft)
-
-  qa-automation/AI-Scoring/     Python backend (Phase 0 — in development)
-  └── See CLAUDE.md inside for detailed spec and roadmap
+      ├── src/                  Google Apps Script files (.js)
+      │   ├── Main.js           Entry points and processing pipeline
+      │   ├── Config.js         Column mappings, scoring thresholds, sheet names
+      │   ├── QAEntry.js        Data model for a single QA row
+      │   ├── AnalystHistory.js Agent history tracking + Form AI enrichment
+      │   ├── ScoreCard.js      HTML score breakdown visualization
+      │   ├── FeedbackCard.js   HTML strengths/improvements visualization
+      │   ├── ProgressionCard.js HTML trend and progression visualization
+      │   ├── HtmlRenderer.js   Full email template assembly
+      │   └── EmailSender.js    Gmail integration (send or draft)
+      │
+      └── AI-Scoring/           Python backend (v1.1.0 — Phase 1 live)
+          ├── CLAUDE.md         Full project spec and roadmap
+          ├── AgentProgressionDashboard.md  Dashboard design doc
+          ├── backend/
+          │   ├── main.py           FastAPI app entry point
+          │   ├── models/
+          │   │   ├── scorecard.py  Scoring pipeline models
+          │   │   └── dashboard.py  Dashboard / progression models
+          │   ├── prompts/
+          │   │   ├── qa_scoring_prompt.py   Call scoring prompt
+          │   │   └── progression_prompt.py  Agent coaching prompt
+          │   ├── routes/
+          │   │   ├── scoring.py    /api/score endpoints
+          │   │   └── dashboard.py  /api/agents + /api/agents/{name}/*
+          │   └── services/
+          │       ├── scoring_service.py     Gemini call scoring
+          │       ├── sheets_service.py      Write to Form Responses AI
+          │       ├── dialpad_client.py      Dialpad API integration
+          │       ├── data_provider.py       Abstract data provider
+          │       ├── history_service.py     SheetsProvider (Analyst_History)
+          │       ├── db_provider.py         PostgresProvider (stub)
+          │       └── progression_service.py Gemini coaching assessments
+          ├── frontend/
+          │   ├── index.html        Call scoring upload UI
+          │   └── dashboard.html    Agent progression dashboard
+          └── scripts/
+              └── score_call.py     Phase 0 CLI scoring script
 
 --------------------------------------------------------------------------------
   1. MASS NOTIFICATIONS
@@ -198,25 +225,38 @@ WHERE IT LIVES
   Google Form URL: https://docs.google.com/forms/d/e/1FAIpQLSchilaGKHW2fwD-IeslNq20NiWoQmsBHFcxSycEj2-ElljYng/viewform
 
 HOW IT WORKS (HIGH LEVEL)
-  1. A QA Analyst submits a completed evaluation via the Google Form.
-  2. Google Forms appends the response as a new row in "Form Responses 1" sheet.
-  3. QA Analyst reviews row entry, and manually selects the option they want from the custom 
-  UI Menu.
-  4. The script parses the row into a structured QA entry.
-  5. It retrieves the agent's past evaluations from the Analyst_History sheet.
-  6. It builds three HTML components:
-       - ScoreCard      — color-coded breakdown of all scored categories
-       - FeedbackCard   — key strengths, areas to improve, Dialpad call link
-       - ProgressionCard — trend table showing last N evaluations with score deltas
-  7. The full HTML email is sent to the agent's email address.
-  8. The new entry is appended to Analyst_History for use in future emails.
+  Manual flow (Google Form):
+    1. A QA Analyst submits a completed evaluation via the Google Form.
+    2. Google Forms appends the response as a new row in "Form Responses 1" sheet.
+    3. QA Analyst reviews the row and selects an action from the custom UI Menu.
+    4. The script parses the row into a structured QA entry.
+    5. It retrieves the agent's past evaluations from the Analyst_History sheet.
+    6. It builds three HTML components:
+         - ScoreCard      — color-coded breakdown of all scored categories
+         - FeedbackCard   — key strengths, areas to improve, Dialpad call link
+         - ProgressionCard — trend table showing last N evaluations with score deltas
+    7. The full HTML email is sent to the agent's email address.
+    8. The new entry is appended to Analyst_History (cols A-O).
+    9. If the call was AI-scored, AnalystHistory enriches cols P-AK by looking
+       up the matching Dialpad link in Form Responses AI and copying reasoning,
+       confidence, key strengths, and improvements.
+
+  AI-assisted flow (Gemini):
+    1. Manager uploads audio to localhost:8000 (AI-Scoring frontend).
+    2. Gemini 2.5 Flash scores all sections with confidence + reasoning.
+    3. Results are written to Form Responses AI (cols A-P + reasoning cols Q-AI).
+    4. Manager copy-pastes to Form Responses 1 and triggers the UI button.
+    5. The Apps Script enrichment in step 9 above pulls the AI reasoning
+       into Analyst_History automatically.
 
 KEY SHEETS
-  - Form Responses 1   Raw QA form submissions (auto-populated by Google Forms).
-  - Analyst_History    Running log of all past evaluations per agent.
-                       Used to generate trend data in the ProgressionCard.
-  - Mails              Contains the list of current analysts and their emails in Columns
-                        A and B respectively
+  - Form Responses 1    QA form submissions (auto-populated by Google Forms).
+  - Form Responses AI   AI-scored calls from the Gemini pipeline. Cols A-P mirror
+                        Form Responses 1; cols Q-AI contain per-section reasoning.
+  - Analyst_History     Running log of all past evaluations per agent (cols A-O
+                        from Apps Script + cols P-AK enriched from Form AI).
+                        Source of truth for the agent progression dashboard.
+  - Mails              Agent name-to-email mapping (cols A and B).
 
 QA SCORECARD CATEGORIES
   Numeric (scored 1–5):
@@ -253,10 +293,11 @@ DRY RUN / MANUAL TRIGGERS
     - Rebuild History      — reconstructs Analyst_History from scratch from form data
 
 CURRENT LIMITATIONS / KNOWN ISSUES
-    - onFormSubmit runs automatically, there is no way for a score to be logged without 
-    an email being sent.
-    - Columns with ARRAYFORMULAs might not resolve some triggers/function calls
-    - QA Anallysts still need to manually pick and score every call
+    - Columns with ARRAYFORMULAs (Overall Score, Agent Email) may not resolve
+      before the trigger fires; a 3-second sleep + Mails sheet lookup mitigates this.
+    - QA Analysts still manually pick and score calls unless using AI-Scoring.
+    - AI-scored calls require a copy-paste from Form Responses AI to Form
+      Responses 1 before the email can be triggered.
 
 CONTACTS / OWNERSHIP
   Script maintained by: Maximiliano Pérez García
@@ -264,40 +305,48 @@ CONTACTS / OWNERSHIP
   For issues: Message Max Pérez via Slack or create a post in #ert-member-support
 
 --------------------------------------------------------------------------------
-  3. AI-SCORING (IN DEVELOPMENT — PHASE 0)
+  3. AI-SCORING (v1.1.0 — PHASE 1 LIVE + AGENT DASHBOARD)
 --------------------------------------------------------------------------------
 
 PURPOSE
-  A planned Python-based backend that will use AI (Google Gemini 2.5 Flash or newer) to
-  automatically score agent calls from audio recordings. This is intended to
-  reduce the manual workload of QA analysts and increase scoring throughput.
+  Python-based backend that uses Gemini 2.5 Flash to score agent calls from
+  audio recordings. Reduces QA analyst workload and provides AI-generated
+  coaching assessments via an agent progression dashboard.
 
 STATUS
-  Phase 0 — validation. All backend files are scaffolded but not yet implemented.
-  Phase 0 goal: validate AI scoring quality against 20–25 real calls before
-  committing to full buildout.
+  Phase 0 — complete. Validated against real calls.
+  Phase 1 — live. FastAPI scoring pipeline + agent progression dashboard.
 
-PLANNED STACK
+  Scoring: Managers upload audio at localhost:8000, Gemini scores all sections,
+  results land in Form Responses AI with per-section reasoning.
+
+  Dashboard: localhost:8000/dashboard shows per-agent score trends (7-90 days),
+  per-section averages, and Gemini-generated coaching assessments. Reads from
+  Analyst_History (enriched by Apps Script on email send).
+
+CURRENT STACK
   - Google Gemini 2.5 Flash   AI audio analysis and scoring
-  - FastAPI                   Backend API
-  - Google Sheets API         Write AI-proposed scores back to the QA sheet
-  - ChromaDB                  Vector store for SOPs (RAG-based rubric grounding)
-  - PostgreSQL                Shared instance with Mass Notifications (Railway)
-  - Next.js or Retool         Manager review dashboard (Phase 3)
+  - FastAPI (Python 3.9+)     Backend API (uvicorn)
+  - gspread + Sheets API      Read/write Google Sheets
+  - Chart.js                  Dashboard visualizations (CDN, no build step)
+  - Dialpad API               Agent lookup and call list retrieval
+  - PostgreSQL                Stub ready for future use (Railway free tier)
 
 DEPLOYMENT ROADMAP
-  Phase 0 (Weeks  1–3)  Validate AI scoring with real calls (score_call.py)
-  Phase 1 (Weeks  4–7)  FastAPI backend; AI writes draft scores to Sheets
-  Phase 2 (Weeks  8–12) Notion SOP sync + ChromaDB RAG integration
-  Phase 3 (Weeks 13–18) Manager review dashboard (Next.js or Retool)
-  Phase 4 (Weeks 19–24) Dialpad webhook automation (fully hands-free)
+  Phase 0 (complete)     Validated AI scoring with real calls (score_call.py)
+  Phase 1 (live)         FastAPI backend + Sheets integration + dashboard
+  Phase 1.1 (current)    Agent progression dashboard with Gemini coaching
+  Phase 2 (planned)      Notion SOP sync + ChromaDB RAG integration
+  Phase 3 (planned)      Full manager dashboard (Next.js or Retool)
+  Phase 4 (planned)      Dialpad webhook automation (fully hands-free)
 
 KEY PRINCIPLES
-  - Human review is mandatory at launch. AI proposes; managers approve.
+  - Human review is mandatory. AI proposes; managers approve via UI button.
   - Documentation (Section 9 of scorecard) is never automated.
-  - The existing Apps Script email flow is preserved until Phase 3.
+  - The existing Apps Script email flow is preserved.
 
   Full specification: qa-automation/AI-Scoring/CLAUDE.md
+  Dashboard design doc: qa-automation/AI-Scoring/AgentProgressionDashboard.md
 
 --------------------------------------------------------------------------------
   GOOGLE APIS & PERMISSIONS USED
@@ -311,15 +360,21 @@ KEY PRINCIPLES
     - Google Drive API    (retrieve and export attachments)
     - Looker API          (retrieve occupants list)
 
-  QA Automation:
+  QA Automation (Apps Script):
     - Google Sheets API   (read form responses; read/write Analyst_History)
     - Gmail API           (send emails, create drafts)
     - Google Forms        (onFormSubmit trigger)
 
+  AI-Scoring (Python backend):
+    - Google Gemini API   (audio scoring + progression assessments)
+    - Google Sheets API   (read/write Form Responses AI and Analyst_History)
+    - Dialpad API         (agent lookup, call list retrieval)
+
   Mass Notifications also uses:
     - PostgreSQL (JDBC)  (archive campaigns and recipients to Railway-hosted DB)
 
-  All scripts run under the Google account of the authorized operator.
+  All Apps Scripts run under the Google account of the authorized operator.
+  AI-Scoring uses a Google service account for Sheets access and a Gemini API key.
 
 --------------------------------------------------------------------------------
   DEPLOYMENT & SETUP
@@ -369,8 +424,9 @@ KEY PRINCIPLES
 
   Branch strategy: feature branches → PR → merge to main.
   Active branches:
-    feature/ai-scoring            AI-Scoring Phase 0 scaffolding
-    feature/database-integration  PostgreSQL integration for Mass Notifications
+    feature/agent-progression-dashboard  Agent dashboard + Analyst_History enrichment
+    feature/ai-scoring                   AI-Scoring Phase 1 pipeline (merged)
+    feature/database-integration         PostgreSQL for Mass Notifications (merged)
 
 --------------------------------------------------------------------------------
   SUPPORT & CONTACT
