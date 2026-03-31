@@ -203,13 +203,18 @@
     .job-row {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      padding: 0.6rem 1.25rem;
-      border-bottom: 1px solid var(--border);
+      justify-content: center;
+      gap: 0.75rem;
+      padding: 1rem 1.25rem;
       font-size: 0.8rem;
+      color: var(--muted);
     }
 
-    .job-row:last-child { border-bottom: none; }
+    .eval-spacer {
+      height: 2rem;
+      background: var(--bg);
+      border: none;
+    }
 
     .status-badge {
       padding: 0.2rem 0.6rem;
@@ -224,20 +229,32 @@
     .status-error    { background: var(--badge-low); color: var(--error); }
 
     .scorecard-panel {
-      margin-top: 1rem;
+      margin-top: 0.5rem;
+      margin-bottom: 3rem;
       border: 1px solid var(--border);
       border-radius: 6px;
       overflow: hidden;
+      border-top: 4px solid var(--navy);
+      border-bottom: 4px solid var(--navy);
     }
 
     .scorecard-header {
-      padding: 0.75rem 1rem;
+      padding: 1rem 1.25rem;
       background: var(--navy);
       color: #ffffff;
       display: flex;
       justify-content: space-between;
       align-items: center;
       font-size: 0.82rem;
+    }
+
+    .scorecard-header .header-meta {
+      font-size: 0.7rem;
+      color: rgba(255,255,255,0.6);
+      margin-top: 2px;
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
     }
 
     .scorecard-avg {
@@ -260,7 +277,7 @@
       grid-template-columns: 1fr 60px 80px;
       gap: 0.5rem;
       align-items: start;
-      padding: 0.65rem 1rem;
+      padding: 0.85rem 1rem;
       border-bottom: 1px solid var(--border);
       font-size: 0.78rem;
     }
@@ -288,9 +305,9 @@
     .conf-low    { background: var(--badge-low);     color: var(--error); }
 
     .notes-section {
-      padding: 0.75rem 1rem;
-      background: var(--bg);
-      border-top: 1px solid var(--border);
+      padding: 1rem 1.25rem;
+      background: #f9fafe;
+      border-top: 2px solid var(--border);
       font-size: 0.78rem;
     }
 
@@ -312,7 +329,8 @@
 
     /* Transcript & Moments panel */
     .transcript-panel {
-      border-top: 1px solid var(--border);
+      border-top: 2px solid var(--navy);
+      margin-top: 0.5rem;
     }
 
     .transcript-toggle {
@@ -547,15 +565,18 @@
   });
 
   // --- Polling ---
+  // Store callId per job so buildScorecardPanel can access it
+  const _jobMeta = {};
+
   function pollJobs(jobs) {
     jobListEl.innerHTML = '';
     jobs.forEach(({ jobId, filename, callId }) => {
+      _jobMeta[jobId] = { filename, callId };
       const row = document.createElement('div');
       row.id = `job-${jobId}`;
       row.className = 'job-row';
       row.innerHTML = `
         <span>${filename}</span>
-        <span style="color:var(--muted); font-size:0.72rem;">Call ${callId}</span>
         <span class="status-badge status-pending">Pending</span>
       `;
       jobListEl.appendChild(row);
@@ -577,28 +598,31 @@
     const row = document.getElementById(`job-${jobId}`);
     if (!row) return;
 
-    const badge = `<span class="status-badge status-${data.status}">${data.status}</span>`;
-    const sheetsNote = data.sheets_row > 0
-      ? `<span style="font-size:0.72rem; color:var(--success);">Saved to Sheets row ${data.sheets_row}</span>`
-      : '';
-    const errorNote = data.error ? `<span style="font-size:0.72rem; color:var(--error);">${data.error}</span>` : '';
-
-    row.innerHTML = `
-      <span>${filename}</span>
-      <span style="color:var(--muted); font-size:0.72rem;">Call ${callId}</span>
-      <div style="text-align:right;">${badge}${sheetsNote}${errorNote}</div>
-    `;
-
     if (data.status === 'complete' && data.scorecard) {
       const existing = document.getElementById(`scorecard-${jobId}`);
       if (!existing) {
-        const panel = buildScorecardPanel(jobId, data.scorecard, filename);
+        // Replace job-row with spacer, insert enriched scorecard
+        const panel = buildScorecardPanel(jobId, data.scorecard, filename, callId, data.sheets_row);
+        row.className = 'eval-spacer';
+        row.innerHTML = '';
         row.insertAdjacentElement('afterend', panel);
       }
+    } else if (data.status === 'error') {
+      row.innerHTML = `
+        <span>${filename}</span>
+        <span class="status-badge status-error">error</span>
+        <span style="font-size:0.72rem; color:var(--error);">${data.error || 'Unknown error'}</span>
+      `;
+    } else {
+      // Pending or scoring — show minimal placeholder
+      row.innerHTML = `
+        <span>${filename}</span>
+        <span class="status-badge status-${data.status}">${data.status}</span>
+      `;
     }
   }
 
-  function buildScorecardPanel(jobId, sc, filename) {
+  function buildScorecardPanel(jobId, sc, filename, callId, sheetsRow) {
     const numericScores = sc.sections
       .filter(s => s.score_type === 'numeric' && s.score !== null)
       .map(s => s.score);
@@ -611,9 +635,18 @@
     panel.id = `scorecard-${jobId}`;
     panel.className = 'scorecard-panel';
 
+    const sheetsNote = sheetsRow > 0 ? `<span>Sheets row ${sheetsRow}</span>` : '';
+
     const header = `
       <div class="scorecard-header">
-        <span>${filename}</span>
+        <div>
+          <div>${filename}</div>
+          <div class="header-meta">
+            <span>Call ${callId || ''}</span>
+            <span class="status-badge status-complete">complete</span>
+            ${sheetsNote}
+          </div>
+        </div>
         <div style="display:flex; gap:0.5rem; align-items:center;">
           ${flagged ? '<span class="long-call-flag">Long call — manager review</span>' : ''}
           <span class="scorecard-avg">${avg}<span style="font-family:'DM Mono'; font-size:0.75rem; color:rgba(255,255,255,0.7);">/5</span></span>
