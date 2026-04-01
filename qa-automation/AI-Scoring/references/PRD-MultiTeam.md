@@ -277,6 +277,13 @@ Single-page HTML at `/datapoint/{call_id}`. Combines the scoring UI panel style 
 │ Supervisor: {supervisor}  |  Scored by: {manager}    │
 │ Caller: {caller_name} {caller_phone} (if available)  │
 ├─────────────────────────────────────────────────────┤
+│ ┌─ Call Summary ─────────────────────────────────┐  │  ← Gemini-generated summary
+│ │ (muted text, light background)                 │  │    of the call's context,
+│ │ "Member called regarding a billing discrepancy │  │    outcome, and key moments.
+│ │  on their March statement. Agent identified... │  │    2-4 sentences.
+│ │  Issue resolved with credit applied."          │  │
+│ └────────────────────────────────────────────────┘  │
+│                                                      │
 │ ┌─ Score Breakdown ──────────────────────────────┐  │
 │ │ Greeting              ████████░░  4/5   HIGH   │  │  ← Scoring UI style rows
 │ │ Purpose of Call       ██████░░░░  3/5   MED    │  │    with reasoning text
@@ -315,26 +322,30 @@ Single-page HTML at `/datapoint/{call_id}`. Combines the scoring UI panel style 
 
 ### New Columns in Form Responses AI and Analyst_History
 
-Two new columns appended after the existing extended columns:
+Three new columns appended after the existing extended columns:
 
 **Form Responses AI (after col AI):**
-| Col | Field |
-|---|---|
-| AJ | Caller Name |
-| AK | Caller Phone |
+| Col | Field | Source |
+|---|---|---|
+| AJ | Call Summary | Gemini-generated during scoring (2-4 sentence summary of the call's context, outcome, and key moments) |
+| AK | Caller Name | Dialpad API `get_call_details()` at scoring time |
+| AL | Caller Phone | Dialpad API `get_call_details()` at scoring time |
 
 **Analyst_History (after col AK):**
 | Col | Index | Field |
 |---|---|---|
-| AL | 37 | Caller Name (from Form AI lookup) |
-| AM | 38 | Caller Phone (from Form AI lookup) |
+| AL | 37 | Call Summary (from Form AI lookup) |
+| AM | 38 | Caller Name (from Form AI lookup) |
+| AN | 39 | Caller Phone (from Form AI lookup) |
+
+**Note:** The `call_summary` field already exists in `ScorecardWithMeta` (returned by `scoring_service.py`). It is currently written as part of the scorecard JSON but NOT persisted as a column in Form Responses AI. This change promotes it to a first-class column so it flows through the enrichment pipeline into Analyst_History and becomes available on the DataPoint detail page.
 
 ### Implementation Phase
 This feature can be implemented as **Phase 0** (before rubric abstraction) since it works within the current single-team architecture. It adds value immediately and doesn't depend on multi-team routing.
 
 **Phase 0 sub-steps:**
 1. Add `get_call_details(call_id)` to `dialpad_client.py`
-2. Modify scoring pipeline to persist caller name/phone
+2. Modify scoring pipeline to persist call_summary, caller name, and caller phone as columns in Form Responses AI
 3. Add `eval_id` field to `EvaluationRecord` model (extracted from Dialpad link)
 4. Create `/api/datapoints/{call_id}` endpoint
 5. Create `/api/datapoints?bin=X&days=Y` list endpoint
@@ -427,14 +438,14 @@ This feature can be implemented as **Phase 0** (before rubric abstraction) since
 |---|---|---|
 | `backend/services/dialpad_client.py` | 0 | Add `get_call_details(call_id)` for caller metadata |
 | `backend/services/scoring_service.py` | 0 | Fetch caller name/phone during scoring |
-| `backend/services/sheets_service.py` | 0 | Write caller name/phone to Form Responses AI cols AJ-AK |
-| `backend/services/history_service.py` | 0 | Add cols 37-38, add eval_id to EvaluationRecord parsing |
-| `backend/models/dashboard.py` | 0 | Add eval_id, caller_name, caller_phone fields |
+| `backend/services/sheets_service.py` | 0 | Write call_summary, caller name, caller phone to Form Responses AI cols AJ-AL |
+| `backend/services/history_service.py` | 0 | Add cols 37-39, add eval_id to EvaluationRecord parsing |
+| `backend/models/dashboard.py` | 0 | Add eval_id, call_summary, caller_name, caller_phone fields |
 | `backend/main.py` | 0 | Include datapoints router, add page route |
 | `frontend/dashboard.html` | 0 | Chart.js onClick for trend dots |
 | `frontend/team_dashboard.html` | 0 | Chart.js onClick for distribution bars, outlier links |
-| `qa-automation/src/Config.js` | 0 | HISTORY_COL + FORM_AI_COL entries for new columns |
-| `qa-automation/src/AnalystHistory.js` | 0 | Extend enrichment + headers for caller metadata |
+| `qa-automation/src/Config.js` | 0 | HISTORY_COL entries for cols AL-AN, FORM_AI_COL entries for AJ-AL |
+| `qa-automation/src/AnalystHistory.js` | 0 | Extend enrichment + headers for call_summary, caller name, caller phone |
 
 ### Files that stay unchanged
 - `backend/models/scorecard.py` — already abstract
