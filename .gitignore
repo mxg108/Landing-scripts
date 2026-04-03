@@ -6,6 +6,10 @@ Thumbs.db
 .env
 *.env
 
+# Google Apps Script project IDs
+.clasp.json
+appsscript.json
+
 # Sensitive Looker references (dashboard structure, field names, IDs)
 mass-notifications/src/lookerclient/LookML_Dashboard_Reference.yaml
 mass-notifications/src/lookerclient/Looker_API_Reference_and_Apps_Script_Plan.md

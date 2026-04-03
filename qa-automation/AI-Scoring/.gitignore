@@ -23,3 +23,7 @@ chroma_db/
 # OS
 .DS_Store
 Thumbs.db
+
+#  Google Apps Scripts IDs
+.clasp.json
+appsscript.json
