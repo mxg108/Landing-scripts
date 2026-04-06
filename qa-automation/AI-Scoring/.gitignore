@@ -20,6 +20,10 @@ data/
 # ChromaDB local store
 chroma_db/
 
+# Audit logs
+audit.log
+*.jsonl
+
 # OS
 .DS_Store
 Thumbs.db

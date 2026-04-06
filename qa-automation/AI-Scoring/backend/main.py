@@ -12,13 +12,11 @@ import os
 _env_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(_env_path)
 
-# Diagnostic: confirm Dialpad key is loaded (remove after confirming)
-_dp_key = os.getenv("DIALPAD_API_KEY", "")
-print(f"[main] DIALPAD_API_KEY loaded: {'Yes (' + _dp_key[:8] + '...)' if _dp_key else 'NO — check .env path'}")
-
 from backend.routes.scoring import router
 from backend.routes.dashboard import router as dashboard_router
 from backend.routes.team import router as team_router
+from backend.middleware.auth import AUTH_DEPENDENCY
+from backend.middleware.audit import AuditLogMiddleware
 
 app = FastAPI(
     title="Landing QA Scoring API",
@@ -26,16 +24,28 @@ app = FastAPI(
     version="1.1.0",
 )
 
+_allowed_origins = [
+    o.strip()
+    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",")
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten in production
+    allow_origins=_allowed_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(AuditLogMiddleware)
 
-app.include_router(router)
-app.include_router(dashboard_router)
-app.include_router(team_router)
+app.include_router(router, dependencies=AUTH_DEPENDENCY)
+app.include_router(dashboard_router, dependencies=AUTH_DEPENDENCY)
+app.include_router(team_router, dependencies=AUTH_DEPENDENCY)
+
+
+@app.get("/api/health")
+async def health():
+    return {"status": "ok"}
 
 # Serve the frontend HTML at the root
 _frontend_dir = Path(__file__).resolve().parent.parent / "frontend"

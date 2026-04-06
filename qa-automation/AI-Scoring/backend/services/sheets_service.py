@@ -75,16 +75,22 @@ SCORED_SECTION_COLUMNS = {
 
 
 def _get_sheet():
-    creds_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
+    creds_env = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
     sheet_id = os.getenv("GOOGLE_SHEETS_ID")
     tab_name = os.getenv("GOOGLE_SHEETS_TAB", "QA Scores")
 
-    if not creds_path or not sheet_id:
+    if not creds_env or not sheet_id:
         raise RuntimeError(
-            "GOOGLE_SERVICE_ACCOUNT_JSON and GOOGLE_SHEETS_ID must be set in .env"
+            "GOOGLE_SERVICE_ACCOUNT_JSON and GOOGLE_SHEETS_ID must be set"
         )
 
-    creds = Credentials.from_service_account_file(creds_path, scopes=SCOPES)
+    # Support file path (local dev) or inline JSON (Railway/production)
+    if creds_env.strip().startswith("{"):
+        creds_info = json.loads(creds_env)
+        creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
+    else:
+        creds = Credentials.from_service_account_file(creds_env, scopes=SCOPES)
+
     client = gspread.authorize(creds)
     spreadsheet = client.open_by_key(sheet_id)
     return spreadsheet.worksheet(tab_name)

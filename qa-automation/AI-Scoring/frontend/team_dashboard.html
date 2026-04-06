@@ -214,6 +214,20 @@
 </div>
 
 <script>
+// --- Auth ---
+function getApiKey() {
+  let key = sessionStorage.getItem('qa_api_key');
+  if (!key) {
+    key = prompt('Enter your QA API key:');
+    if (key) sessionStorage.setItem('qa_api_key', key);
+  }
+  return key;
+}
+function authHeaders() {
+  const key = getApiKey();
+  return key ? { 'Authorization': 'Bearer ' + key } : {};
+}
+
 const API_BASE = window.location.origin;
 let selectedDays = 90;
 let activeOnly = true;
@@ -230,7 +244,12 @@ async function fetchTeamStats() {
   const params = new URLSearchParams({ days: selectedDays, active_only: activeOnly });
   if (selectedSupervisor) params.set('supervisor', selectedSupervisor);
   try {
-    const r = await fetch(`${API_BASE}/api/team/stats?${params}`);
+    const r = await fetch(`${API_BASE}/api/team/stats?${params}`, { headers: authHeaders() });
+    if (r.status === 401) {
+      sessionStorage.removeItem('qa_api_key');
+      alert('Invalid API key. Please reload and try again.');
+      return;
+    }
     if (!r.ok) throw new Error(r.statusText);
     teamData = await r.json();
     renderTab(currentTab);
@@ -241,7 +260,12 @@ async function fetchTeamStats() {
 
 async function fetchMails() {
   try {
-    const r = await fetch(`${API_BASE}/api/team/mails`);
+    const r = await fetch(`${API_BASE}/api/team/mails`, { headers: authHeaders() });
+    if (r.status === 401) {
+      sessionStorage.removeItem('qa_api_key');
+      alert('Invalid API key. Please reload and try again.');
+      return;
+    }
     if (!r.ok) return;
     const mails = await r.json();
     const sel = document.getElementById('supervisorSelect');

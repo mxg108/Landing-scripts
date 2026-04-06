@@ -305,6 +305,19 @@
   <div id="footer" class="footer"></div>
 
   <script>
+    // --- Auth ---
+    function getApiKey() {
+      let key = sessionStorage.getItem('qa_api_key');
+      if (!key) {
+        key = prompt('Enter your QA API key:');
+        if (key) sessionStorage.setItem('qa_api_key', key);
+      }
+      return key;
+    }
+    function authHeaders() {
+      const key = getApiKey();
+      return key ? { 'Authorization': 'Bearer ' + key } : {};
+    }
     const API_BASE = window.location.origin;
     let selectedDays = 30;
     let trendChartInstance = null;
@@ -357,7 +370,12 @@
 
     async function fetchJSON(url) {
       try {
-        const res = await fetch(url);
+        const res = await fetch(url, { headers: authHeaders() });
+        if (res.status === 401) {
+          sessionStorage.removeItem('qa_api_key');
+          alert('Invalid API key. Please reload and try again.');
+          return null;
+        }
         if (res.status === 404) return null;
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return await res.json();

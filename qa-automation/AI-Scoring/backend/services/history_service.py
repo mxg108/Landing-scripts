@@ -191,8 +191,16 @@ class SheetsProvider(DataProvider):
     name = "Google Sheets"
 
     def __init__(self) -> None:
-        sa_path = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
-        creds = Credentials.from_service_account_file(sa_path, scopes=_SCOPES)
+        import json as _json
+        creds_env = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+
+        # Support file path (local dev) or inline JSON (Railway/production)
+        if creds_env.strip().startswith("{"):
+            creds_info = _json.loads(creds_env)
+            creds = Credentials.from_service_account_info(creds_info, scopes=_SCOPES)
+        else:
+            creds = Credentials.from_service_account_file(creds_env, scopes=_SCOPES)
+
         self._gc = gspread.authorize(creds)
         sheet_id = os.environ["GOOGLE_SHEETS_ID"]
         tab_name = os.environ.get("GOOGLE_HISTORY_TAB", "Analyst_History")

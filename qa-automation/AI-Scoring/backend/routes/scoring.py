@@ -19,11 +19,6 @@ router = APIRouter(prefix="/api", tags=["scoring"])
 _jobs: dict[str, dict] = {}
 
 
-@router.get("/health")
-async def health():
-    return {"status": "ok"}
-
-
 @router.get("/calls")
 async def list_calls(agent_name: str, date_start: str, date_end: str):
     """

@@ -470,6 +470,19 @@
 </div>
 
 <script>
+  // --- Auth ---
+  function getApiKey() {
+    let key = sessionStorage.getItem('qa_api_key');
+    if (!key) {
+      key = prompt('Enter your QA API key:');
+      if (key) sessionStorage.setItem('qa_api_key', key);
+    }
+    return key;
+  }
+  function authHeaders() {
+    const key = getApiKey();
+    return key ? { 'Authorization': 'Bearer ' + key } : {};
+  }
   const dropZone = document.getElementById('drop-zone');
   const fileInput = document.getElementById('file-input');
   const fileList = document.getElementById('file-list');
@@ -553,7 +566,13 @@
       formData.append('agent_name', agentName);
       formData.append('manager_email', managerEmail);
 
-      const res = await fetch('/api/score', { method: 'POST', body: formData });
+      const res = await fetch('/api/score', { method: 'POST', body: formData, headers: authHeaders() });
+      if (res.status === 401) {
+        sessionStorage.removeItem('qa_api_key');
+        alert('Invalid API key. Please reload and try again.');
+        submitBtn.textContent = 'Score Calls';
+        return;
+      }
       const data = await res.json();
       jobIds.push({ jobId: data.job_id, filename: item.file.name, callId: item.callId });
     }
@@ -585,7 +604,7 @@
     const interval = setInterval(async () => {
       let allDone = true;
       for (const { jobId, filename, callId } of jobs) {
-        const res = await fetch(`/api/score/${jobId}`);
+        const res = await fetch(`/api/score/${jobId}`, { headers: authHeaders() });
         const data = await res.json();
         updateJobRow(jobId, filename, callId, data);
         if (data.status !== 'complete' && data.status !== 'error') allDone = false;

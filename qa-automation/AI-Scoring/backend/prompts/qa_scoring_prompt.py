@@ -8,6 +8,7 @@ CRITICAL OUTPUT RULES:
 - All string values must have apostrophes and internal quotes escaped.
 - Never use raw newlines inside string values — use a space instead.
 - The JSON must be parseable by Python json.loads() without modification.
+- Use the Second person ("you") when referring to the agent in the reasoning AND feedback sections, as if you are directly addressing them with a personal tone.
 """
 
 SCORING_RUBRIC = """
