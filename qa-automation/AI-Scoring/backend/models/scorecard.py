@@ -25,6 +25,13 @@ class Scorecard(BaseModel):
     opportunities: str
 
 
+class ApprovalRequest(BaseModel):
+    """Payload from the frontend Approve & Send button."""
+    sections: List[ScorecardSection]
+    key_strengths: str
+    opportunities: str
+
+
 class ScorecardWithMeta(Scorecard):
     """Scorecard enriched with call metadata for the pipeline."""
     call_id: Optional[str] = None

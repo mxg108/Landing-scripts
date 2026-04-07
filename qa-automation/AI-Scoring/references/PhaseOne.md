@@ -267,24 +267,59 @@ partially overlap with the original Phases 2-4.
 
 The following merges both roadmaps into a single sequence. Each step is independently shippable.
 
-#### Step 1 — Security Hardening + Deployment (PRD Phase B, partially)
+#### Step 1 — Security Hardening + Deployment (PRD Phase B, partially) -- COMPLETE
 
 **Goal:** Get the current single-team system deployed and accessible to managers remotely.
 
-This is the deployment that Phase 1 deferred. Without this, the system only runs on the developer's
-laptop. No multi-team work can start until auth exists.
+**Completed 2026-04-06:**
+- API key authentication middleware (`backend/middleware/auth.py`) with `secrets.compare_digest()`
+- Audit logging middleware (`backend/middleware/audit.py`) — JSONL file
+- CORS restricted to `ALLOWED_ORIGINS` env var (Railway domain + localhost)
+- Dual credential loading (file path for local dev, inline JSON for Railway)
+- Deployed to Railway Hobby tier at `landing-scripts-production.up.railway.app` (port 8080)
+- Frontend auth via `sessionStorage` prompt on first API call
+- Health endpoint (`/api/health`) remains unauthenticated
+- Procfile, .env.example, diagnostic print removed
 
-- Restrict CORS to known origins (Railway domain + localhost)
-- Add API key authentication middleware (`backend/middleware/auth.py`)
-- Add audit logging middleware (`backend/middleware/audit.py`) — JSONL file initially
-- Deploy to Railway (free tier, HTTPS built-in)
-- Environment variables for all secrets
-- Remove diagnostic print statement from `main.py`
+#### Step 1.5 — Manager Approval Workflow
 
-**Deliverables:** Member Support managers access the system via `https://{app}.railway.app/`.
-API key required. Every request logged.
+**Goal:** Managers review, edit, and approve AI-proposed scores entirely in the frontend.
+No manual Sheets work required. Approval triggers the existing Apps Script email pipeline.
 
-**Verification:** No-key requests get 401. CORS blocks unknown origins. Audit log captures all scoring requests.
+This is the missing link between AI scoring and manager delivery. Without it, managers must
+manually copy scores between Sheets tabs — friction that blocks adoption. CLAUDE.md principle:
+"AI proposes; managers approve." This feature IS the approval mechanism.
+
+**Flow:**
+1. AI scores call -> writes draft to Form Responses AI (existing)
+2. Manager reviews scorecard in frontend, edits scores/reasoning/feedback as needed
+3. Clicks "Approve & Send"
+4. Backend updates Form Responses AI with manager edits:
+   - Score columns D-M (if changed)
+   - Feedback columns N-O (if changed)
+   - AI reasoning columns S, U, W, Y, AA, AC, AE, AF, AI (with edited reasoning)
+5. Backend copies cols A-P to Form Responses 1 (appends new row)
+6. Backend waits 3-4 seconds for ARRAYFORMULA to calculate Overall Score (col Q) and agent email (col V)
+7. Backend calls Apps Script `doPost()` web app endpoint
+8. Apps Script `_processRow()` handles: Analyst_History append + enrichment + email send
+
+**Backend changes:**
+- New endpoint: `POST /api/score/{job_id}/approve` — receives edited scorecard
+- `sheets_service.py` — add methods to update reasoning columns + copy row to Form Responses 1
+- New: call Apps Script web app `doPost()` after buffer
+
+**Apps Script changes:**
+- Add `doPost(e)` function to `Main.js` — calls `_processRow()` on latest row
+- Deploy as Web App (execute as: me, access: anyone with link)
+- No other Apps Script changes required
+
+**Frontend changes:**
+- Make scorecard panel editable: score dropdowns, reasoning textareas, feedback fields
+- Add "Approve & Send" button
+- Show confirmation on successful approval + email send
+
+**Deliverables:** Manager clicks "Approve & Send" in the frontend -> scores land in both sheets,
+email sent to agent. Zero Sheets interaction required.
 
 #### Step 2 — DataPoints: Evaluation Drill-Down (PRD Phase 0)
 
@@ -438,6 +473,10 @@ These thresholds determine when to upgrade infrastructure:
 | Postgres deferred to Step 9, coupled with automation | 2026-04 | Sheets working fine for 1-2 teams; database needed when sampling state enters the picture |
 | Dashboards pulled into Phase 1 instead of Phase 3 | 2026-03 | Analytics needed immediately for coaching value; waiting until Phase 3 would delay the primary use case |
 | Railway deployment blocked on auth | 2026-04 | Cannot deploy with CORS `["*"]` and no authentication |
+| Step 1 completed, deployed to Railway | 2026-04-06 | Auth, CORS, audit logging, dual credentials, Hobby tier |
+| Approval workflow added as Step 1.5 (before DataPoints) | 2026-04-06 | Without frontend approval, managers still live in Sheets — blocks adoption more than missing drill-down |
+| Apps Script doPost() for triggering email pipeline | 2026-04-06 | Keeps Apps Script sacred; backend writes to Sheets + calls web app rather than duplicating email logic |
+| 3-4 second buffer before doPost() call | 2026-04-06 | ARRAYFORMULA needs time to calculate Overall Score (col Q) and agent email (col V) after row write |
 
 ---
 

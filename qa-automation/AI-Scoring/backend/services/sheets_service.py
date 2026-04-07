@@ -32,6 +32,7 @@ Setup:
 import json
 import os
 from datetime import datetime, timezone
+from typing import Optional
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -74,17 +75,16 @@ SCORED_SECTION_COLUMNS = {
 }
 
 
-def _get_sheet():
+def _get_spreadsheet():
+    """Return the gspread Spreadsheet object for the QA sheet."""
     creds_env = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
     sheet_id = os.getenv("GOOGLE_SHEETS_ID")
-    tab_name = os.getenv("GOOGLE_SHEETS_TAB", "QA Scores")
 
     if not creds_env or not sheet_id:
         raise RuntimeError(
             "GOOGLE_SERVICE_ACCOUNT_JSON and GOOGLE_SHEETS_ID must be set"
         )
 
-    # Support file path (local dev) or inline JSON (Railway/production)
     if creds_env.strip().startswith("{"):
         creds_info = json.loads(creds_env)
         creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
@@ -92,8 +92,13 @@ def _get_sheet():
         creds = Credentials.from_service_account_file(creds_env, scopes=SCOPES)
 
     client = gspread.authorize(creds)
-    spreadsheet = client.open_by_key(sheet_id)
-    return spreadsheet.worksheet(tab_name)
+    return client.open_by_key(sheet_id)
+
+
+def _get_sheet(tab_name: Optional[str] = None):
+    """Return a worksheet from the QA spreadsheet."""
+    tab = tab_name or os.getenv("GOOGLE_SHEETS_TAB", "QA Scores")
+    return _get_spreadsheet().worksheet(tab)
 
 
 YN_DISPLAY = {
@@ -187,3 +192,118 @@ def append_scorecard_row(scorecard: ScorecardWithMeta) -> int:
                     print(f"[sheets_service] Failed to insert note at {col_letter}{row_num}: {e}")
 
     return row_num
+
+
+def update_scorecard_reasoning(
+    row_num: int,
+    sections: list[dict],
+) -> None:
+    """
+    Update ONLY the reasoning/confidence columns (Q-AI) and cell notes
+    in Form Responses AI. Score columns (D-M) and feedback (N-O) are
+    left untouched — the original AI draft is preserved as an audit trail.
+    Approved scores go directly to Form Responses 1 instead.
+    """
+    sheet = _get_sheet()
+    sections_by_id = {s["id"]: s for s in sections}
+
+    # --- Reasoning columns Q-AI (19 values: source + 9 × [confidence, reasoning]) ---
+    reasoning_values = ["ai"]
+    for section_id in SCORED_SECTION_COLUMNS.values():
+        section = sections_by_id.get(section_id, {})
+        reasoning_values.append(section.get("confidence", ""))
+        reasoning_values.append(section.get("reasoning", ""))
+
+    sheet.update(
+        f"Q{row_num}:AI{row_num}", [reasoning_values],
+        value_input_option="USER_ENTERED",
+    )
+
+    # --- Re-insert cell notes on scored columns with edited reasoning ---
+    for col_letter, section_id in SCORED_SECTION_COLUMNS.items():
+        section = sections_by_id.get(section_id, {})
+        reasoning = section.get("reasoning", "")
+        confidence = section.get("confidence", "")
+        flags = section.get("flags", [])
+        if reasoning:
+            note = f"[{confidence.upper()}] {reasoning}"
+            if flags:
+                note += f"\nFlags: {', '.join(flags)}"
+            try:
+                sheet.insert_note(f"{col_letter}{row_num}", note)
+            except Exception as e:
+                print(f"[sheets_service] Failed to update note at {col_letter}{row_num}: {e}")
+
+
+def write_approved_to_form_responses_1(
+    form_ai_row_num: int,
+    sections: list[dict],
+    key_strengths: str,
+    opportunities: str,
+) -> int:
+    """
+    Write the manager-approved scorecard directly to Form Responses 1.
+    Reads metadata (timestamp, manager, agent, dialpad link) from the
+    original Form Responses AI row but uses the approved scores/feedback.
+    Returns the 1-indexed row number in Form Responses 1.
+    """
+    spreadsheet = _get_spreadsheet()
+    form_ai = spreadsheet.worksheet(
+        os.getenv("GOOGLE_SHEETS_TAB", "Form Responses AI")
+    )
+    form_1 = spreadsheet.worksheet("Form Responses 1")
+
+    # Read metadata from Form AI: A=timestamp, B=manager, C=agent, P=dialpad link
+    original_row = form_ai.row_values(form_ai_row_num)
+    timestamp = original_row[0] if len(original_row) > 0 else ""
+    manager_email = original_row[1] if len(original_row) > 1 else ""
+    agent_name = original_row[2] if len(original_row) > 2 else ""
+    dialpad_link = original_row[15] if len(original_row) > 15 else ""
+
+    sections_by_id = {s["id"]: s for s in sections}
+    score_section_ids = list(SCORED_SECTION_COLUMNS.values())
+
+    # Build row A-P with approved scores
+    row = [
+        timestamp,                                                          # A
+        manager_email,                                                      # B
+        agent_name,                                                         # C
+    ]
+    for section_id in score_section_ids[:8]:  # D-K
+        row.append(_format_score(sections_by_id.get(section_id, {})))
+    doc = sections_by_id.get("documentation", {})
+    row.append(doc.get("score", 1) if doc else 1)                           # L
+    row.append(_format_score(sections_by_id.get(score_section_ids[8], {}))) # M
+    row.append(key_strengths)                                               # N
+    row.append(opportunities)                                               # O
+    row.append(dialpad_link)                                                # P
+
+    result = form_1.append_row(row, value_input_option="USER_ENTERED")
+    updated_range = result.get("updates", {}).get("updatedRange", "")
+    try:
+        form_1_row = int(updated_range.split("!")[1].split(":")[0][1:])
+    except (IndexError, ValueError):
+        form_1_row = -1
+
+    return form_1_row
+
+
+def trigger_apps_script(form_1_row_num: int) -> dict:
+    """POST to the Apps Script web app to trigger the email pipeline."""
+    import httpx
+
+    url = os.getenv("APPS_SCRIPT_WEBAPP_URL", "")
+    if not url:
+        raise RuntimeError(
+            "APPS_SCRIPT_WEBAPP_URL not set — deploy Main.js as a web app "
+            "and add the URL to .env"
+        )
+
+    response = httpx.post(
+        url,
+        json={"rowNumber": form_1_row_num},
+        timeout=30.0,
+        follow_redirects=True,
+    )
+    response.raise_for_status()
+    return response.json()
