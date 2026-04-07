@@ -12,8 +12,8 @@ from backend.models.scorecard import ApprovalRequest
 from backend.services.scoring_service import score_call
 from backend.services.sheets_service import (
     append_scorecard_row,
-    update_scorecard_row,
-    copy_to_form_responses_1,
+    update_scorecard_reasoning,
+    write_approved_to_form_responses_1,
     trigger_apps_script,
 )
 from backend.services.dialpad_client import get_user_id_by_name, get_calls_for_agent
@@ -196,20 +196,24 @@ async def approve_scorecard(job_id: str, approval: ApprovalRequest):
     job["status"] = "approving"
 
     try:
-        # 1. Update Form Responses AI with manager edits
+        # 1. Update reasoning columns in Form AI (for enrichment),
+        #    but preserve original AI scores as audit trail
         sections_dicts = [s.model_dump() for s in approval.sections]
-        update_scorecard_row(
+        update_scorecard_reasoning(
             row_num=sheets_row,
+            sections=sections_dicts,
+        )
+
+        # 2. Write approved scores directly to Form Responses 1
+        form_1_row = write_approved_to_form_responses_1(
+            form_ai_row_num=sheets_row,
             sections=sections_dicts,
             key_strengths=approval.key_strengths,
             opportunities=approval.opportunities,
         )
 
-        # 2. Copy A-P to Form Responses 1
-        form_1_row = copy_to_form_responses_1(sheets_row)
-
         # 3. Wait for ARRAYFORMULA (col Q overall score, col V agent email)
-        await asyncio.sleep(4)
+        await asyncio.sleep(2)
 
         # 4. Trigger Apps Script email pipeline
         script_response = trigger_apps_script(form_1_row)

@@ -32,6 +32,7 @@ Setup:
 import json
 import os
 from datetime import datetime, timezone
+from typing import Optional
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -94,7 +95,7 @@ def _get_spreadsheet():
     return client.open_by_key(sheet_id)
 
 
-def _get_sheet(tab_name: str | None = None):
+def _get_sheet(tab_name: Optional[str] = None):
     """Return a worksheet from the QA spreadsheet."""
     tab = tab_name or os.getenv("GOOGLE_SHEETS_TAB", "QA Scores")
     return _get_spreadsheet().worksheet(tab)
@@ -193,38 +194,18 @@ def append_scorecard_row(scorecard: ScorecardWithMeta) -> int:
     return row_num
 
 
-def update_scorecard_row(
+def update_scorecard_reasoning(
     row_num: int,
     sections: list[dict],
-    key_strengths: str,
-    opportunities: str,
 ) -> None:
     """
-    Update an existing Form Responses AI row with manager-edited scores,
-    reasoning, and feedback. Preserves the original timestamp, manager,
-    agent, and dialpad link.
+    Update ONLY the reasoning/confidence columns (Q-AI) and cell notes
+    in Form Responses AI. Score columns (D-M) and feedback (N-O) are
+    left untouched — the original AI draft is preserved as an audit trail.
+    Approved scores go directly to Form Responses 1 instead.
     """
     sheet = _get_sheet()
     sections_by_id = {s["id"]: s for s in sections}
-
-    # --- Score columns D-M (10 values: D=greeting .. K=efficiency, L=1, M=CRI) ---
-    score_section_ids = list(SCORED_SECTION_COLUMNS.values())
-    score_values = []
-    for section_id in score_section_ids[:8]:  # D through K (greeting..efficiency)
-        score_values.append(_format_score(sections_by_id.get(section_id, {})))
-    score_values.append(1)  # L: Documentation (always manual)
-    score_values.append(_format_score(sections_by_id.get(score_section_ids[8], {})))  # M: CRI
-
-    sheet.update(
-        f"D{row_num}:M{row_num}", [score_values],
-        value_input_option="USER_ENTERED",
-    )
-
-    # --- Feedback columns N-O ---
-    sheet.update(
-        f"N{row_num}:O{row_num}", [[key_strengths, opportunities]],
-        value_input_option="USER_ENTERED",
-    )
 
     # --- Reasoning columns Q-AI (19 values: source + 9 × [confidence, reasoning]) ---
     reasoning_values = ["ai"]
@@ -238,7 +219,7 @@ def update_scorecard_row(
         value_input_option="USER_ENTERED",
     )
 
-    # --- Re-insert cell notes on scored columns ---
+    # --- Re-insert cell notes on scored columns with edited reasoning ---
     for col_letter, section_id in SCORED_SECTION_COLUMNS.items():
         section = sections_by_id.get(section_id, {})
         reasoning = section.get("reasoning", "")
@@ -254,9 +235,16 @@ def update_scorecard_row(
                 print(f"[sheets_service] Failed to update note at {col_letter}{row_num}: {e}")
 
 
-def copy_to_form_responses_1(row_num: int) -> int:
+def write_approved_to_form_responses_1(
+    form_ai_row_num: int,
+    sections: list[dict],
+    key_strengths: str,
+    opportunities: str,
+) -> int:
     """
-    Copy columns A-P from a Form Responses AI row to Form Responses 1.
+    Write the manager-approved scorecard directly to Form Responses 1.
+    Reads metadata (timestamp, manager, agent, dialpad link) from the
+    original Form Responses AI row but uses the approved scores/feedback.
     Returns the 1-indexed row number in Form Responses 1.
     """
     spreadsheet = _get_spreadsheet()
@@ -265,9 +253,32 @@ def copy_to_form_responses_1(row_num: int) -> int:
     )
     form_1 = spreadsheet.worksheet("Form Responses 1")
 
-    row_data = form_ai.row_values(row_num)[:16]  # A-P only
+    # Read metadata from Form AI: A=timestamp, B=manager, C=agent, P=dialpad link
+    original_row = form_ai.row_values(form_ai_row_num)
+    timestamp = original_row[0] if len(original_row) > 0 else ""
+    manager_email = original_row[1] if len(original_row) > 1 else ""
+    agent_name = original_row[2] if len(original_row) > 2 else ""
+    dialpad_link = original_row[15] if len(original_row) > 15 else ""
 
-    result = form_1.append_row(row_data, value_input_option="USER_ENTERED")
+    sections_by_id = {s["id"]: s for s in sections}
+    score_section_ids = list(SCORED_SECTION_COLUMNS.values())
+
+    # Build row A-P with approved scores
+    row = [
+        timestamp,                                                          # A
+        manager_email,                                                      # B
+        agent_name,                                                         # C
+    ]
+    for section_id in score_section_ids[:8]:  # D-K
+        row.append(_format_score(sections_by_id.get(section_id, {})))
+    doc = sections_by_id.get("documentation", {})
+    row.append(doc.get("score", 1) if doc else 1)                           # L
+    row.append(_format_score(sections_by_id.get(score_section_ids[8], {}))) # M
+    row.append(key_strengths)                                               # N
+    row.append(opportunities)                                               # O
+    row.append(dialpad_link)                                                # P
+
+    result = form_1.append_row(row, value_input_option="USER_ENTERED")
     updated_range = result.get("updates", {}).get("updatedRange", "")
     try:
         form_1_row = int(updated_range.split("!")[1].split(":")[0][1:])
