@@ -104,7 +104,7 @@
       margin-bottom: 16px;
       color: var(--navy);
     }
-    .card.hidden { display: none; }
+    .hidden { display: none; }
 
     /* Placeholder */
     .placeholder {
@@ -405,7 +405,8 @@
       ['statsCard', 'trendCard', 'sectionCard'].forEach(id =>
         document.getElementById(id).classList.add('hidden')
       );
-      // Reset AI assessment to button state
+      // Reset AI assessment
+      _resetAIButton();
       document.getElementById('assessmentPlaceholder').classList.remove('hidden');
       document.getElementById('assessmentContent').classList.add('hidden');
       document.getElementById('footer').textContent = '';
@@ -426,6 +427,49 @@
 
       document.getElementById('footer').textContent =
         `Data source: Google Sheets | ${history.length} evaluations | Last ${selectedDays} days`;
+
+      // Restore cached AI assessment if available
+      const cachedAssessment = _getCachedAssessment();
+      if (cachedAssessment) {
+        _showAssessment(cachedAssessment);
+      }
+    }
+
+    function _assessmentCacheKey() {
+      return `qa_assessment_${currentAgent}_${selectedDays}`;
+    }
+
+    function _cacheAssessment(progression) {
+      try {
+        const entry = { data: progression, cachedAt: Date.now() };
+        sessionStorage.setItem(_assessmentCacheKey(), JSON.stringify(entry));
+      } catch (e) { /* sessionStorage full or unavailable — ignore */ }
+    }
+
+    function _getCachedAssessment() {
+      try {
+        const raw = sessionStorage.getItem(_assessmentCacheKey());
+        if (!raw) return null;
+        const entry = JSON.parse(raw);
+        // 1-hour TTL (matches backend cache)
+        if (Date.now() - entry.cachedAt > 3600000) {
+          sessionStorage.removeItem(_assessmentCacheKey());
+          return null;
+        }
+        return entry.data;
+      } catch (e) { return null; }
+    }
+
+    function _resetAIButton() {
+      const btn = document.getElementById('aiBtn');
+      btn.textContent = 'Get AI Assessment';
+      btn.disabled = false;
+    }
+
+    function _showAssessment(progression) {
+      renderAssessment(progression);
+      document.getElementById('assessmentPlaceholder').classList.add('hidden');
+      document.getElementById('assessmentContent').classList.remove('hidden');
     }
 
     async function loadAIAssessment() {
@@ -439,9 +483,9 @@
       );
 
       if (progression) {
-        renderAssessment(progression);
-        document.getElementById('assessmentPlaceholder').classList.add('hidden');
-        document.getElementById('assessmentContent').classList.remove('hidden');
+        _showAssessment(progression);
+        _cacheAssessment(progression);
+        _resetAIButton();
       } else {
         btn.textContent = 'Failed — retry';
         btn.disabled = false;
