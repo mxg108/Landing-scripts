@@ -774,14 +774,23 @@
       `;
     });
 
-    // Insert Documentation row after Efficiency (index 7)
+    // Insert Documentation row after Efficiency (index 7) — editable, manager must score
     sectionRows.splice(8, 0, `
-      <div class="section-row">
+      <div class="section-row" style="border-left:3px solid var(--amber);">
         <div>
-          <div class="section-name">Documentation</div>
-          <div class="section-reasoning">Manual review required — not scored by AI.</div>
+          <div class="section-name" style="color:var(--amber);">Documentation — Score Required</div>
+          <div class="section-reasoning" style="color:var(--amber);">Select a score to enable Approve & Send.</div>
         </div>
-        <div class="manual-only">—</div>
+        <div>
+          <select class="score-select" id="doc-score-${jobId}" onchange="checkDocScore('${jobId}')">
+            <option value="" selected>—</option>
+            <option value="1">1/5</option>
+            <option value="2">2/5</option>
+            <option value="3">3/5</option>
+            <option value="4">4/5</option>
+            <option value="5">5/5</option>
+          </select>
+        </div>
         <div><span class="confidence-badge" style="background:#e5e7eb; color:#6b7280;">MANUAL</span></div>
       </div>
     `);
@@ -800,8 +809,8 @@
 
     const approveBar = `
       <div class="approve-bar" id="approve-bar-${jobId}">
-        <span class="approve-status" id="approve-status-${jobId}">Review scores and click to send evaluation email.</span>
-        <button class="btn-approve" id="approve-btn-${jobId}" onclick="approveScorecard('${jobId}')">Approve & Send</button>
+        <span class="approve-status" id="approve-status-${jobId}">Score Documentation to enable Approve & Send.</span>
+        <button class="btn-approve" id="approve-btn-${jobId}" onclick="approveScorecard('${jobId}')" disabled>Approve & Send</button>
       </div>
     `;
 
@@ -847,6 +856,19 @@
     return panel;
   }
 
+  function checkDocScore(jobId) {
+    const docSelect = document.getElementById(`doc-score-${jobId}`);
+    const btn = document.getElementById(`approve-btn-${jobId}`);
+    const statusEl = document.getElementById(`approve-status-${jobId}`);
+    if (docSelect.value) {
+      btn.disabled = false;
+      statusEl.textContent = 'Review scores and click to send evaluation email.';
+    } else {
+      btn.disabled = true;
+      statusEl.textContent = 'Score Documentation to enable Approve & Send.';
+    }
+  }
+
   async function approveScorecard(jobId) {
     const btn = document.getElementById(`approve-btn-${jobId}`);
     const statusEl = document.getElementById(`approve-status-${jobId}`);
@@ -875,6 +897,20 @@
         audio_dependent: s.audio_dependent,
         flags: s.flags || [],
       };
+    });
+
+    // Add Documentation score (manual, not in AI sections)
+    const docScore = parseInt(document.getElementById(`doc-score-${jobId}`).value);
+    sections.push({
+      id: 'documentation',
+      name: 'Documentation',
+      score: docScore,
+      score_type: 'numeric',
+      yn_value: null,
+      confidence: 'manual',
+      reasoning: 'Scored manually by manager.',
+      audio_dependent: false,
+      flags: [],
     });
 
     const payload = {
