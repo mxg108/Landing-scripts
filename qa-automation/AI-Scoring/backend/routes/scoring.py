@@ -8,8 +8,14 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 
+from backend.models.scorecard import ApprovalRequest
 from backend.services.scoring_service import score_call
-from backend.services.sheets_service import append_scorecard_row
+from backend.services.sheets_service import (
+    append_scorecard_row,
+    update_scorecard_row,
+    copy_to_form_responses_1,
+    trigger_apps_script,
+)
 from backend.services.dialpad_client import get_user_id_by_name, get_calls_for_agent
 from datetime import datetime
 
@@ -160,3 +166,65 @@ async def score_batch(
         background_tasks.add_task(run)
 
     return {"job_ids": job_ids, "count": len(job_ids)}
+
+
+@router.post("/score/{job_id}/approve")
+async def approve_scorecard(job_id: str, approval: ApprovalRequest):
+    """
+    Manager approves a scored call (optionally with edits).
+    Updates Form Responses AI, copies to Form Responses 1,
+    waits for ARRAYFORMULA, then triggers Apps Script email pipeline.
+    """
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job["status"] == "approved":
+        raise HTTPException(status_code=409, detail="Already approved")
+    if job["status"] != "complete":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job is '{job['status']}', must be 'complete' to approve",
+        )
+
+    sheets_row = job.get("sheets_row", -1)
+    if sheets_row < 1:
+        raise HTTPException(
+            status_code=500,
+            detail="No valid Sheets row recorded for this job",
+        )
+
+    job["status"] = "approving"
+
+    try:
+        # 1. Update Form Responses AI with manager edits
+        sections_dicts = [s.model_dump() for s in approval.sections]
+        update_scorecard_row(
+            row_num=sheets_row,
+            sections=sections_dicts,
+            key_strengths=approval.key_strengths,
+            opportunities=approval.opportunities,
+        )
+
+        # 2. Copy A-P to Form Responses 1
+        form_1_row = copy_to_form_responses_1(sheets_row)
+
+        # 3. Wait for ARRAYFORMULA (col Q overall score, col V agent email)
+        await asyncio.sleep(4)
+
+        # 4. Trigger Apps Script email pipeline
+        script_response = trigger_apps_script(form_1_row)
+
+        # 5. Mark as approved
+        job["status"] = "approved"
+        job["form_responses_1_row"] = form_1_row
+
+        return {
+            "status": "approved",
+            "form_ai_row": sheets_row,
+            "form_1_row": form_1_row,
+            "script_response": script_response,
+        }
+
+    except Exception as e:
+        job["status"] = "complete"  # roll back so manager can retry
+        raise HTTPException(status_code=500, detail=f"Approval failed: {str(e)}")

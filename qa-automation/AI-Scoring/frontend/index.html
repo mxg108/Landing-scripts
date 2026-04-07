@@ -411,6 +411,65 @@
       font-variant-numeric: tabular-nums;
     }
 
+    /* Editable scorecard controls */
+    .score-select, .confidence-select {
+      font-family: 'DM Mono', monospace;
+      padding: 0.2rem 0.3rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--bg);
+      color: var(--text);
+      text-align: center;
+      width: 100%;
+      cursor: pointer;
+    }
+    .score-select { font-size: 0.78rem; }
+    .confidence-select {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .score-select:focus, .confidence-select:focus { border-color: var(--accent); outline: none; }
+    .score-select:disabled, .confidence-select:disabled { opacity: 0.6; cursor: default; }
+
+    .reasoning-textarea, .notes-textarea {
+      font-family: 'DM Mono', monospace;
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.35rem 0.5rem;
+      resize: vertical;
+      background: var(--bg);
+      line-height: 1.4;
+    }
+    .reasoning-textarea { font-size: 0.72rem; color: var(--muted); margin-top: 0.2rem; min-height: 2.5rem; }
+    .notes-textarea { font-size: 0.78rem; min-height: 3rem; background: #fff; line-height: 1.5; padding: 0.5rem; }
+    .reasoning-textarea:focus, .notes-textarea:focus { border-color: var(--accent); outline: none; }
+    .reasoning-textarea:disabled, .notes-textarea:disabled { opacity: 0.6; cursor: default; }
+
+    .approve-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 1.25rem;
+      background: var(--navy);
+    }
+    .btn-approve {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.82rem;
+      padding: 0.7rem 2rem;
+      background: var(--success);
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: 500;
+      transition: background 0.15s;
+    }
+    .btn-approve:hover { background: #245a42; }
+    .btn-approve:disabled { background: var(--border); cursor: not-allowed; }
+    .approve-status { font-size: 0.78rem; color: rgba(255,255,255,0.7); }
+
     @media (max-width: 600px) {
       .form-grid { grid-template-columns: 1fr; }
       .form-group.full { grid-column: 1; }
@@ -586,6 +645,7 @@
   // --- Polling ---
   // Store callId per job so buildScorecardPanel can access it
   const _jobMeta = {};
+  const _scorecardData = {};
 
   function pollJobs(jobs) {
     jobListEl.innerHTML = '';
@@ -607,7 +667,7 @@
         const res = await fetch(`/api/score/${jobId}`, { headers: authHeaders() });
         const data = await res.json();
         updateJobRow(jobId, filename, callId, data);
-        if (data.status !== 'complete' && data.status !== 'error') allDone = false;
+        if (!['complete', 'approved', 'error'].includes(data.status)) allDone = false;
       }
       if (allDone) clearInterval(interval);
     }, 3000);
@@ -617,7 +677,7 @@
     const row = document.getElementById(`job-${jobId}`);
     if (!row) return;
 
-    if (data.status === 'complete' && data.scorecard) {
+    if ((data.status === 'complete' || data.status === 'approved') && data.scorecard) {
       const existing = document.getElementById(`scorecard-${jobId}`);
       if (!existing) {
         // Replace job-row with spacer, insert enriched scorecard
@@ -642,6 +702,8 @@
   }
 
   function buildScorecardPanel(jobId, sc, filename, callId, sheetsRow) {
+    _scorecardData[jobId] = sc;
+
     const numericScores = sc.sections
       .filter(s => s.score_type === 'numeric' && s.score !== null)
       .map(s => s.score);
@@ -674,22 +736,40 @@
     `;
 
     const sectionRows = sc.sections.map(s => {
-      const scoreDisplay = s.score_type === 'yn'
-        ? (s.yn_value || 'N/A')
-        : (s.score !== null ? `${s.score}/5` : 'N/A');
-      const confClass = `conf-${s.confidence}`;
       const flags = s.flags && s.flags.length
         ? `<div class="section-flags">${s.flags.join(', ')}</div>` : '';
       const audioTag = s.audio_dependent ? ' <span style="color:var(--muted); font-size:0.68rem;">[audio]</span>' : '';
+
+      // Editable score control
+      let scoreControl;
+      if (s.score_type === 'yn') {
+        scoreControl = `<select class="score-select" data-section-id="${s.id}" data-field="yn_value">
+          <option value="Y" ${s.yn_value==='Y'?'selected':''}>Y</option>
+          <option value="N" ${s.yn_value==='N'?'selected':''}>N</option>
+          <option value="NA" ${s.yn_value==='NA'?'selected':''}>NA</option>
+        </select>`;
+      } else {
+        scoreControl = `<select class="score-select" data-section-id="${s.id}" data-field="score">
+          ${[1,2,3,4,5].map(v => `<option value="${v}" ${s.score===v?'selected':''}>${v}/5</option>`).join('')}
+        </select>`;
+      }
+
+      // Editable confidence control
+      const confControl = `<select class="confidence-select" data-section-id="${s.id}" data-field="confidence">
+        <option value="high" ${s.confidence==='high'?'selected':''}>HIGH</option>
+        <option value="medium" ${s.confidence==='medium'?'selected':''}>MEDIUM</option>
+        <option value="low" ${s.confidence==='low'?'selected':''}>LOW</option>
+      </select>`;
+
       return `
         <div class="section-row">
           <div>
             <div class="section-name">${s.name}${audioTag}</div>
-            <div class="section-reasoning">${s.reasoning}</div>
+            <textarea class="reasoning-textarea" data-section-id="${s.id}" data-field="reasoning" rows="2">${s.reasoning}</textarea>
             ${flags}
           </div>
-          <div class="score-val">${scoreDisplay}</div>
-          <div><span class="confidence-badge ${confClass}">${s.confidence}</span></div>
+          <div>${scoreControl}</div>
+          <div>${confControl}</div>
         </div>
       `;
     });
@@ -710,9 +790,18 @@
       <div class="notes-section">
         ${sc.call_summary ? `<div class="notes-label">Call Summary</div><div style="margin-bottom:0.75rem;">${sc.call_summary}</div>` : ''}
         <div class="notes-label">Key Strengths</div>
-        <div style="margin-bottom:0.75rem;">${sc.key_strengths}</div>
-        <div class="notes-label">Opportunities for Improvement</div>
-        <div>${sc.opportunities}</div>
+        <textarea class="notes-textarea" id="strengths-${jobId}" rows="3">${sc.key_strengths}</textarea>
+        <div style="margin-top:0.75rem;">
+          <div class="notes-label">Opportunities for Improvement</div>
+          <textarea class="notes-textarea" id="opportunities-${jobId}" rows="3">${sc.opportunities}</textarea>
+        </div>
+      </div>
+    `;
+
+    const approveBar = `
+      <div class="approve-bar" id="approve-bar-${jobId}">
+        <span class="approve-status" id="approve-status-${jobId}">Review scores and click to send evaluation email.</span>
+        <button class="btn-approve" id="approve-btn-${jobId}" onclick="approveScorecard('${jobId}')">Approve & Send</button>
       </div>
     `;
 
@@ -754,8 +843,80 @@
       `;
     }
 
-    panel.innerHTML = header + sectionRows.join('') + notes + transcriptPanel;
+    panel.innerHTML = header + sectionRows.join('') + approveBar + notes + transcriptPanel;
     return panel;
+  }
+
+  async function approveScorecard(jobId) {
+    const btn = document.getElementById(`approve-btn-${jobId}`);
+    const statusEl = document.getElementById(`approve-status-${jobId}`);
+    const panel = document.getElementById(`scorecard-${jobId}`);
+
+    btn.disabled = true;
+    btn.textContent = 'Sending...';
+    statusEl.textContent = 'Updating sheets and sending email...';
+
+    const sc = _scorecardData[jobId];
+
+    const sections = sc.sections.map(s => {
+      const scoreEl = panel.querySelector(`[data-section-id="${s.id}"][data-field="score"]`);
+      const ynEl = panel.querySelector(`[data-section-id="${s.id}"][data-field="yn_value"]`);
+      const confEl = panel.querySelector(`[data-section-id="${s.id}"][data-field="confidence"]`);
+      const reasonEl = panel.querySelector(`[data-section-id="${s.id}"][data-field="reasoning"]`);
+
+      return {
+        id: s.id,
+        name: s.name,
+        score: scoreEl ? parseInt(scoreEl.value) : null,
+        score_type: s.score_type,
+        yn_value: ynEl ? ynEl.value : null,
+        confidence: confEl ? confEl.value : s.confidence,
+        reasoning: reasonEl ? reasonEl.value : s.reasoning,
+        audio_dependent: s.audio_dependent,
+        flags: s.flags || [],
+      };
+    });
+
+    const payload = {
+      sections,
+      key_strengths: document.getElementById(`strengths-${jobId}`).value,
+      opportunities: document.getElementById(`opportunities-${jobId}`).value,
+    };
+
+    try {
+      const res = await fetch(`/api/score/${jobId}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.status === 401) {
+        sessionStorage.removeItem('qa_api_key');
+        alert('Invalid API key. Please reload and try again.');
+        btn.disabled = false;
+        btn.textContent = 'Approve & Send';
+        return;
+      }
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Unknown error');
+      }
+
+      const data = await res.json();
+
+      btn.textContent = 'Sent';
+      btn.style.background = '#065f46';
+      statusEl.textContent = `Email sent. Form Responses 1 row ${data.form_1_row}.`;
+
+      panel.querySelectorAll('select, textarea').forEach(el => el.disabled = true);
+
+    } catch (err) {
+      statusEl.textContent = `Error: ${err.message}. You can retry.`;
+      statusEl.style.color = '#fca5a5';
+      btn.disabled = false;
+      btn.textContent = 'Retry Approve & Send';
+    }
   }
 </script>
 

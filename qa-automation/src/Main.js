@@ -57,6 +57,58 @@ function onOpen() {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// Web App endpoint (called by FastAPI backend after manager approval)
+// ══════════════════════════════════════════════════════════════════
+
+/**
+ * Web App entry point — receives a JSON payload with the row number
+ * in Form Responses 1 to process. Called after the backend copies
+ * approved scores and waits for ARRAYFORMULA computation.
+ *
+ * @param {Object} e — the web app event object
+ * @return {ContentOutput} JSON response
+ */
+function doPost(e) {
+  try {
+    var payload = JSON.parse(e.postData.contents);
+    var rowNumber = payload.rowNumber;
+
+    if (!rowNumber || typeof rowNumber !== 'number') {
+      return ContentService
+        .createTextOutput(JSON.stringify({ status: 'error', message: 'Missing or invalid rowNumber' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    Logger.log('[doPost] Processing row %s in %s', rowNumber, CONFIG.QA_SHEET_NAME);
+
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.QA_SHEET_NAME);
+    if (!sheet) {
+      throw new Error('Sheet "' + CONFIG.QA_SHEET_NAME + '" not found.');
+    }
+
+    var row = sheet.getRange(rowNumber, 1, 1, sheet.getLastColumn()).getValues()[0];
+
+    if (!row[0]) {
+      return ContentService
+        .createTextOutput(JSON.stringify({ status: 'error', message: 'Row ' + rowNumber + ' appears empty' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    _processRow(row);
+
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: 'ok', message: 'Row ' + rowNumber + ' processed' }))
+      .setMimeType(ContentService.MimeType.JSON);
+
+  } catch (err) {
+    Logger.log('[doPost ERROR] %s\n%s', err.message, err.stack);
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: 'error', message: err.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
 // Manual entry points
 // ══════════════════════════════════════════════════════════════════
 

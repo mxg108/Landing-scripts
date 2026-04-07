@@ -74,17 +74,16 @@ SCORED_SECTION_COLUMNS = {
 }
 
 
-def _get_sheet():
+def _get_spreadsheet():
+    """Return the gspread Spreadsheet object for the QA sheet."""
     creds_env = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
     sheet_id = os.getenv("GOOGLE_SHEETS_ID")
-    tab_name = os.getenv("GOOGLE_SHEETS_TAB", "QA Scores")
 
     if not creds_env or not sheet_id:
         raise RuntimeError(
             "GOOGLE_SERVICE_ACCOUNT_JSON and GOOGLE_SHEETS_ID must be set"
         )
 
-    # Support file path (local dev) or inline JSON (Railway/production)
     if creds_env.strip().startswith("{"):
         creds_info = json.loads(creds_env)
         creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
@@ -92,8 +91,13 @@ def _get_sheet():
         creds = Credentials.from_service_account_file(creds_env, scopes=SCOPES)
 
     client = gspread.authorize(creds)
-    spreadsheet = client.open_by_key(sheet_id)
-    return spreadsheet.worksheet(tab_name)
+    return client.open_by_key(sheet_id)
+
+
+def _get_sheet(tab_name: str | None = None):
+    """Return a worksheet from the QA spreadsheet."""
+    tab = tab_name or os.getenv("GOOGLE_SHEETS_TAB", "QA Scores")
+    return _get_spreadsheet().worksheet(tab)
 
 
 YN_DISPLAY = {
@@ -187,3 +191,108 @@ def append_scorecard_row(scorecard: ScorecardWithMeta) -> int:
                     print(f"[sheets_service] Failed to insert note at {col_letter}{row_num}: {e}")
 
     return row_num
+
+
+def update_scorecard_row(
+    row_num: int,
+    sections: list[dict],
+    key_strengths: str,
+    opportunities: str,
+) -> None:
+    """
+    Update an existing Form Responses AI row with manager-edited scores,
+    reasoning, and feedback. Preserves the original timestamp, manager,
+    agent, and dialpad link.
+    """
+    sheet = _get_sheet()
+    sections_by_id = {s["id"]: s for s in sections}
+
+    # --- Score columns D-M (10 values: D=greeting .. K=efficiency, L=1, M=CRI) ---
+    score_section_ids = list(SCORED_SECTION_COLUMNS.values())
+    score_values = []
+    for section_id in score_section_ids[:8]:  # D through K (greeting..efficiency)
+        score_values.append(_format_score(sections_by_id.get(section_id, {})))
+    score_values.append(1)  # L: Documentation (always manual)
+    score_values.append(_format_score(sections_by_id.get(score_section_ids[8], {})))  # M: CRI
+
+    sheet.update(
+        f"D{row_num}:M{row_num}", [score_values],
+        value_input_option="USER_ENTERED",
+    )
+
+    # --- Feedback columns N-O ---
+    sheet.update(
+        f"N{row_num}:O{row_num}", [[key_strengths, opportunities]],
+        value_input_option="USER_ENTERED",
+    )
+
+    # --- Reasoning columns Q-AI (19 values: source + 9 × [confidence, reasoning]) ---
+    reasoning_values = ["ai"]
+    for section_id in SCORED_SECTION_COLUMNS.values():
+        section = sections_by_id.get(section_id, {})
+        reasoning_values.append(section.get("confidence", ""))
+        reasoning_values.append(section.get("reasoning", ""))
+
+    sheet.update(
+        f"Q{row_num}:AI{row_num}", [reasoning_values],
+        value_input_option="USER_ENTERED",
+    )
+
+    # --- Re-insert cell notes on scored columns ---
+    for col_letter, section_id in SCORED_SECTION_COLUMNS.items():
+        section = sections_by_id.get(section_id, {})
+        reasoning = section.get("reasoning", "")
+        confidence = section.get("confidence", "")
+        flags = section.get("flags", [])
+        if reasoning:
+            note = f"[{confidence.upper()}] {reasoning}"
+            if flags:
+                note += f"\nFlags: {', '.join(flags)}"
+            try:
+                sheet.insert_note(f"{col_letter}{row_num}", note)
+            except Exception as e:
+                print(f"[sheets_service] Failed to update note at {col_letter}{row_num}: {e}")
+
+
+def copy_to_form_responses_1(row_num: int) -> int:
+    """
+    Copy columns A-P from a Form Responses AI row to Form Responses 1.
+    Returns the 1-indexed row number in Form Responses 1.
+    """
+    spreadsheet = _get_spreadsheet()
+    form_ai = spreadsheet.worksheet(
+        os.getenv("GOOGLE_SHEETS_TAB", "Form Responses AI")
+    )
+    form_1 = spreadsheet.worksheet("Form Responses 1")
+
+    row_data = form_ai.row_values(row_num)[:16]  # A-P only
+
+    result = form_1.append_row(row_data, value_input_option="USER_ENTERED")
+    updated_range = result.get("updates", {}).get("updatedRange", "")
+    try:
+        form_1_row = int(updated_range.split("!")[1].split(":")[0][1:])
+    except (IndexError, ValueError):
+        form_1_row = -1
+
+    return form_1_row
+
+
+def trigger_apps_script(form_1_row_num: int) -> dict:
+    """POST to the Apps Script web app to trigger the email pipeline."""
+    import httpx
+
+    url = os.getenv("APPS_SCRIPT_WEBAPP_URL", "")
+    if not url:
+        raise RuntimeError(
+            "APPS_SCRIPT_WEBAPP_URL not set — deploy Main.js as a web app "
+            "and add the URL to .env"
+        )
+
+    response = httpx.post(
+        url,
+        json={"rowNumber": form_1_row_num},
+        timeout=30.0,
+        follow_redirects=True,
+    )
+    response.raise_for_status()
+    return response.json()
