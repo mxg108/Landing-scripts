@@ -35,7 +35,7 @@ function onFormSubmit(e) {
     Utilities.sleep(3000);
 
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.QA_SHEET_NAME);
-    var row   = sheet.getRange(rowNum, 1, 1, sheet.getLastColumn()).getValues()[0];
+    var row   = sheet.getRange(rowNum, 1, 1, 22).getValues()[0];  // A-V only
 
     _processRow(row);
   } catch (err) {
@@ -86,7 +86,9 @@ function doPost(e) {
       throw new Error('Sheet "' + CONFIG.QA_SHEET_NAME + '" not found.');
     }
 
-    var row = sheet.getRange(rowNumber, 1, 1, sheet.getLastColumn()).getValues()[0];
+    // Read only cols A-V (22 columns). Using getLastColumn() can return thousands
+    // of columns when ARRAYFORMULAs extend beyond the data range.
+    var row = sheet.getRange(rowNumber, 1, 1, 22).getValues()[0];
 
     if (!row[0]) {
       return ContentService
@@ -198,25 +200,26 @@ function rebuildHistory() {
  * @private
  */
 function _processRow(row) {
-  // 1. Parse the row into a structured QAEntry
+  Logger.log('[_processRow] Step 1: parsing QAEntry...');
   var entry = new QAEntry(row);
+  Logger.log('[_processRow] agent=%s, overallScore=%s', entry.agentName, entry.overallScore);
 
-  // 1b. Column V (agentEmail) is ARRAYFORMULA-driven and may be empty when the
-  //     trigger fires. Always resolve from the Mails sheet as the source of truth.
+  Logger.log('[_processRow] Step 1b: looking up agent email...');
   entry.agentEmail = _lookupAgentEmail(entry.agentName);
+  Logger.log('[_processRow] agentEmail=%s', entry.agentEmail);
 
-  // 2. Open spreadsheet and history manager
+  Logger.log('[_processRow] Step 2: opening history...');
   var ss      = SpreadsheetApp.getActiveSpreadsheet();
   var history = new AnalystHistory(ss);
 
-  // 3. Retrieve past entries BEFORE appending the current one
+  Logger.log('[_processRow] Step 3: getting past entries...');
   var pastEntries = history.getHistory(entry.agentName);
+  Logger.log('[_processRow] pastEntries count=%s', pastEntries.length);
 
-  // 4. Append current entry to history
+  Logger.log('[_processRow] Step 4: appending to history...');
   history.append(entry);
+  Logger.log('[_processRow] Step 4 complete.');
 
-  // 5. Include current entry in the progression display
-  //    (prepend to front since history is newest-first)
   var allEntries = [
     {
       agentName:    entry.agentName,
@@ -226,18 +229,19 @@ function _processRow(row) {
     }
   ].concat(pastEntries);
 
-  // 6. Build HTML cards
+  Logger.log('[_processRow] Step 6: building cards...');
   var scoreCard       = new ScoreCard(entry);
   var feedbackCard    = new FeedbackCard(entry);
   var progressionCard = new ProgressionCard(entry, allEntries);
 
-  // 7. Render full email
+  Logger.log('[_processRow] Step 7: rendering email...');
   var renderer = new HtmlRenderer(entry, scoreCard, feedbackCard, progressionCard);
   var htmlBody = renderer.renderEmail();
 
-  // 8. Send
+  Logger.log('[_processRow] Step 8: sending email...');
   var sender = new EmailSender(entry);
   sender.send(htmlBody);
+  Logger.log('[_processRow] DONE — email sent.');
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -254,15 +258,17 @@ function _getLatestRow() {
   var sheet = ss.getSheetByName(CONFIG.QA_SHEET_NAME);
   if (!sheet) throw new Error('QA Sheet "' + CONFIG.QA_SHEET_NAME + '" not found.');
 
-  // Use Timestamp column (A) to find the real last data row.
-  // sheet.getLastRow() is unreliable when ARRAYFORMULAs extend empty rows.
-  var timestamps = sheet.getRange('A:A').getValues();
-  var lastRow = timestamps.length;
-  while (lastRow > 1 && !timestamps[lastRow - 1][0]) lastRow--;
+  // Read col A up to getLastRow() in a single bulk call (not the full 1M-row column).
+  // Then scan backwards to find the last row with actual data in col A.
+  var maxRow = sheet.getLastRow();
+  if (maxRow < 2) throw new Error('No data rows found in the QA Sheet.');
 
+  var timestamps = sheet.getRange(1, 1, maxRow, 1).getValues();
+  var lastRow = maxRow;
+  while (lastRow > 1 && !timestamps[lastRow - 1][0]) lastRow--;
   if (lastRow < 2) throw new Error('No data rows found in the QA Sheet.');
 
-  return sheet.getRange(lastRow, 1, 1, sheet.getLastColumn()).getValues()[0];
+  return sheet.getRange(lastRow, 1, 1, 22).getValues()[0];
 }
 
 /**

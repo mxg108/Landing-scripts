@@ -196,27 +196,42 @@ async def approve_scorecard(job_id: str, approval: ApprovalRequest):
     job["status"] = "approving"
 
     try:
+        sections_dicts = [s.model_dump() for s in approval.sections]
+
         # 1. Update reasoning columns in Form AI (for enrichment),
         #    but preserve original AI scores as audit trail
-        sections_dicts = [s.model_dump() for s in approval.sections]
+        print(f"[approve] Step 1: updating reasoning in Form AI row {sheets_row}...")
         update_scorecard_reasoning(
             row_num=sheets_row,
-            sections=sections_dicts,
-        )
-
-        # 2. Write approved scores directly to Form Responses 1
-        form_1_row = write_approved_to_form_responses_1(
-            form_ai_row_num=sheets_row,
             sections=sections_dicts,
             key_strengths=approval.key_strengths,
             opportunities=approval.opportunities,
         )
+        print("[approve] Step 1 complete.")
+
+        # 2. Write approved scores directly to Form Responses 1
+        #    Metadata comes from the stored scorecard — no Sheets read needed
+        sc = job["scorecard"]
+        print(f"[approve] Step 2: writing approved row to Form Responses 1...")
+        form_1_row = write_approved_to_form_responses_1(
+            sections=sections_dicts,
+            key_strengths=approval.key_strengths,
+            opportunities=approval.opportunities,
+            timestamp=datetime.now().strftime("%m/%d/%Y %H:%M:%S"),
+            manager_email=sc.get("manager_email", ""),
+            agent_name=sc.get("agent_name", ""),
+            dialpad_link=sc.get("dialpad_link", ""),
+        )
+        print(f"[approve] Step 2 complete. Form 1 row: {form_1_row}")
 
         # 3. Wait for ARRAYFORMULA (col Q overall score, col V agent email)
+        print("[approve] Step 3: waiting 2s for ARRAYFORMULA...")
         await asyncio.sleep(2)
 
         # 4. Trigger Apps Script email pipeline
+        print(f"[approve] Step 4: triggering Apps Script doPost for row {form_1_row}...")
         script_response = trigger_apps_script(form_1_row)
+        print(f"[approve] Step 4 complete: {script_response}")
 
         # 5. Mark as approved
         job["status"] = "approved"

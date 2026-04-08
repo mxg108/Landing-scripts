@@ -76,7 +76,7 @@ SCORED_SECTION_COLUMNS = {
 
 
 def _get_spreadsheet():
-    """Return the gspread Spreadsheet object for the QA sheet."""
+    """Return a fresh gspread Spreadsheet object."""
     creds_env = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
     sheet_id = os.getenv("GOOGLE_SHEETS_ID")
 
@@ -92,6 +92,7 @@ def _get_spreadsheet():
         creds = Credentials.from_service_account_file(creds_env, scopes=SCOPES)
 
     client = gspread.authorize(creds)
+    client.set_timeout(120)
     return client.open_by_key(sheet_id)
 
 
@@ -175,21 +176,8 @@ def append_scorecard_row(scorecard: ScorecardWithMeta) -> int:
     except (IndexError, ValueError):
         row_num = -1
 
-    # Insert cell notes with AI reasoning on each scored section
-    if row_num > 0:
-        for col_letter, section_id in SCORED_SECTION_COLUMNS.items():
-            section = sections_by_id.get(section_id, {})
-            reasoning = section.get("reasoning", "")
-            confidence = section.get("confidence", "")
-            flags = section.get("flags", [])
-            if reasoning:
-                note = f"[{confidence.upper()}] {reasoning}"
-                if flags:
-                    note += f"\nFlags: {', '.join(flags)}"
-                try:
-                    sheet.insert_note(f"{col_letter}{row_num}", note)
-                except Exception as e:
-                    print(f"[sheets_service] Failed to insert note at {col_letter}{row_num}: {e}")
+    # Cell notes skipped — reasoning is already in columns R-AI.
+    # 9 sequential insert_note calls caused rate-limit timeouts on Railway.
 
     return row_num
 
@@ -197,15 +185,28 @@ def append_scorecard_row(scorecard: ScorecardWithMeta) -> int:
 def update_scorecard_reasoning(
     row_num: int,
     sections: list[dict],
+    key_strengths: str = "",
+    opportunities: str = "",
 ) -> None:
     """
-    Update ONLY the reasoning/confidence columns (Q-AI) and cell notes
-    in Form Responses AI. Score columns (D-M) and feedback (N-O) are
-    left untouched — the original AI draft is preserved as an audit trail.
-    Approved scores go directly to Form Responses 1 instead.
+    Update reasoning/confidence columns (Q-AI), feedback columns (N-O),
+    and cell notes in Form Responses AI. Score columns (D-M) are left
+    untouched — the original AI draft scores are preserved as an audit trail.
+    Feedback (N-O) is updated because _enrichFromFormResponsesAI copies
+    these into Analyst_History, which feeds the progression service.
     """
     sheet = _get_sheet()
     sections_by_id = {s["id"]: s for s in sections}
+
+    # --- Feedback columns N-O (needed for Analyst_History enrichment) ---
+    if key_strengths or opportunities:
+        print(f"[sheets] update_reasoning: writing N-O at row {row_num}...")
+        sheet.update(
+            f"N{row_num}:O{row_num}",
+            [[key_strengths, opportunities]],
+            value_input_option="USER_ENTERED",
+        )
+        print("[sheets] update_reasoning: N-O done.")
 
     # --- Reasoning columns Q-AI (19 values: source + 9 × [confidence, reasoning]) ---
     reasoning_values = ["ai"]
@@ -214,51 +215,36 @@ def update_scorecard_reasoning(
         reasoning_values.append(section.get("confidence", ""))
         reasoning_values.append(section.get("reasoning", ""))
 
+    print(f"[sheets] update_reasoning: writing Q-AI at row {row_num}...")
     sheet.update(
         f"Q{row_num}:AI{row_num}", [reasoning_values],
         value_input_option="USER_ENTERED",
     )
+    print("[sheets] update_reasoning: Q-AI done.")
 
-    # --- Re-insert cell notes on scored columns with edited reasoning ---
-    for col_letter, section_id in SCORED_SECTION_COLUMNS.items():
-        section = sections_by_id.get(section_id, {})
-        reasoning = section.get("reasoning", "")
-        confidence = section.get("confidence", "")
-        flags = section.get("flags", [])
-        if reasoning:
-            note = f"[{confidence.upper()}] {reasoning}"
-            if flags:
-                note += f"\nFlags: {', '.join(flags)}"
-            try:
-                sheet.insert_note(f"{col_letter}{row_num}", note)
-            except Exception as e:
-                print(f"[sheets_service] Failed to update note at {col_letter}{row_num}: {e}")
+    # Cell notes from the initial append are left as-is (original AI reasoning).
+    # The canonical edited reasoning lives in columns R-AI.
+    # Skipping note re-insertion saves 9 API calls and avoids rate-limit timeouts.
 
 
 def write_approved_to_form_responses_1(
-    form_ai_row_num: int,
     sections: list[dict],
     key_strengths: str,
     opportunities: str,
+    timestamp: str,
+    manager_email: str,
+    agent_name: str,
+    dialpad_link: str,
 ) -> int:
     """
     Write the manager-approved scorecard directly to Form Responses 1.
-    Reads metadata (timestamp, manager, agent, dialpad link) from the
-    original Form Responses AI row but uses the approved scores/feedback.
+    All data comes from the approval payload and stored job metadata —
+    no read from Form Responses AI needed.
     Returns the 1-indexed row number in Form Responses 1.
     """
+    print("[sheets] write_approved: opening Form Responses 1...")
     spreadsheet = _get_spreadsheet()
-    form_ai = spreadsheet.worksheet(
-        os.getenv("GOOGLE_SHEETS_TAB", "Form Responses AI")
-    )
     form_1 = spreadsheet.worksheet("Form Responses 1")
-
-    # Read metadata from Form AI: A=timestamp, B=manager, C=agent, P=dialpad link
-    original_row = form_ai.row_values(form_ai_row_num)
-    timestamp = original_row[0] if len(original_row) > 0 else ""
-    manager_email = original_row[1] if len(original_row) > 1 else ""
-    agent_name = original_row[2] if len(original_row) > 2 else ""
-    dialpad_link = original_row[15] if len(original_row) > 15 else ""
 
     sections_by_id = {s["id"]: s for s in sections}
     score_section_ids = list(SCORED_SECTION_COLUMNS.values())
@@ -278,7 +264,9 @@ def write_approved_to_form_responses_1(
     row.append(opportunities)                                               # O
     row.append(dialpad_link)                                                # P
 
+    print("[sheets] write_approved: appending row...")
     result = form_1.append_row(row, value_input_option="USER_ENTERED")
+    print("[sheets] write_approved: done.")
     updated_range = result.get("updates", {}).get("updatedRange", "")
     try:
         form_1_row = int(updated_range.split("!")[1].split(":")[0][1:])
@@ -302,7 +290,7 @@ def trigger_apps_script(form_1_row_num: int) -> dict:
     response = httpx.post(
         url,
         json={"rowNumber": form_1_row_num},
-        timeout=30.0,
+        timeout=60.0,
         follow_redirects=True,
     )
     response.raise_for_status()
