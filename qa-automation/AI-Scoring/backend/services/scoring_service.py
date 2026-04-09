@@ -5,7 +5,7 @@ Ties together: Dialpad transcript → Notion SOP → Gemini scoring.
 
 from backend.models.scorecard import ScorecardWithMeta
 from backend.services.audio_service import score_audio
-from backend.services.dialpad_client import get_transcript, build_dialpad_link, CALL_DURATION_FLAG_MS
+from backend.services.dialpad_client import get_transcript, get_call_details, build_dialpad_link, CALL_DURATION_FLAG_MS
 from backend.services.notion_service import fetch_sop_for_call
 
 
@@ -53,6 +53,9 @@ async def score_call(
         extra_notes=extra_notes,
     )
 
+    # Step 4: Caller metadata from Dialpad
+    call_details = await get_call_details(call_id)
+
     return ScorecardWithMeta(
         **scorecard.model_dump(),
         call_id=call_id,
@@ -62,6 +65,8 @@ async def score_call(
         duration_ms=duration_ms,
         flagged_long_call=flagged_long,
         sop_used=sop_data["sop_title"] or None,
+        caller_name=call_details.get("caller_name", ""),
+        caller_phone=call_details.get("caller_phone", ""),
         transcript_display=transcript_data.get("transcript_display", []),
         moments_display=transcript_data.get("moments_display", []),
     )

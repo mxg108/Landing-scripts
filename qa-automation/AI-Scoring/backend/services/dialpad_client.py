@@ -114,6 +114,66 @@ def build_dialpad_link(call_id: str) -> str:
     return f"https://dialpad.com/callhistory/callreview/{call_id}"
 
 
+async def get_call_details(call_id: str) -> dict:
+    """
+    Fetch call metadata from Dialpad GET /api/v2/call/{call_id}.
+    Returns structured caller info, call metadata, and routing details.
+    Non-fatal — returns empty defaults on failure.
+    """
+    empty = {
+        "caller_name": "",
+        "caller_phone": "",
+        "caller_email": "",
+        "direction": "",
+        "external_number": "",
+        "internal_number": "",
+        "was_recorded": False,
+        "is_transferred": False,
+        "mos_score": None,
+        "date_connected": "",
+        "date_ended": "",
+        "total_duration": 0,
+        "target_name": "",
+        "target_type": "",
+    }
+
+    if not os.getenv("DIALPAD_API_KEY"):
+        return empty
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{BASE_URL}/call/{call_id}",
+                headers=_headers(),
+                timeout=15.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            contact = data.get("contact", {})
+            target = data.get("target", {})
+
+            return {
+                "caller_name": contact.get("name", "") or "",
+                "caller_phone": contact.get("phone", "") or data.get("external_number", "") or "",
+                "caller_email": contact.get("email", "") or "",
+                "direction": data.get("direction", ""),
+                "external_number": data.get("external_number", ""),
+                "internal_number": data.get("internal_number", ""),
+                "was_recorded": data.get("was_recorded", False),
+                "is_transferred": data.get("is_transferred", False),
+                "mos_score": data.get("mos_score"),
+                "date_connected": data.get("date_connected", ""),
+                "date_ended": data.get("date_ended", ""),
+                "total_duration": data.get("total_duration", 0),
+                "target_name": target.get("name", "") or "",
+                "target_type": target.get("type", "") or "",
+            }
+    except Exception as e:
+        print(f"[dialpad_client] get_call_details failed for {call_id}: {e}")
+        return empty
+
+
 # ---------------------------------------------------------------------------
 # Transcript + moments
 # ---------------------------------------------------------------------------

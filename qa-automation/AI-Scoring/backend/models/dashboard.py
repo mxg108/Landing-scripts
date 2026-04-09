@@ -16,9 +16,13 @@ class EvaluationRecord(BaseModel):
     manager_email: str
     overall_score: float
     sections: dict[str, SectionScore]
+    eval_id: Optional[str] = None        # call_id extracted from dialpad_link
     dialpad_link: Optional[str] = None
     key_strengths: Optional[str] = None
     improvements: Optional[str] = None
+    call_summary: Optional[str] = None
+    caller_name: Optional[str] = None
+    caller_phone: Optional[str] = None
     source: str = "manual"  # "manual", "ai", or "backfilled"
 
 class SectionAssessment(BaseModel):

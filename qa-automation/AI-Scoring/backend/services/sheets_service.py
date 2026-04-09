@@ -168,6 +168,11 @@ def append_scorecard_row(scorecard: ScorecardWithMeta) -> int:
         row.append(section.get("confidence", ""))                         # confidence
         row.append(section.get("reasoning", ""))                          # reasoning
 
+    # Append caller metadata columns AJ-AL
+    row.append(scorecard.call_summary or "")                              # AJ: Call Summary
+    row.append(scorecard.caller_name or "")                               # AK: Caller Name
+    row.append(scorecard.caller_phone or "")                              # AL: Caller Phone
+
     result = sheet.append_row(row, value_input_option="USER_ENTERED")
     # Extract the row number from the update response
     updated_range = result.get("updates", {}).get("updatedRange", "")

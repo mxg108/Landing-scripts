@@ -89,6 +89,11 @@ EXTENDED_COLUMNS: dict[str, tuple[int, int]] = {
     "customer_resolution_indicator": (35, 36),
 }
 
+# New columns after the extended pairs (added by DataPoints feature)
+COL_CALL_SUMMARY = 37
+COL_CALLER_NAME = 38
+COL_CALLER_PHONE = 39
+
 # ---------------------------------------------------------------------------
 # Timestamp parsing
 # ---------------------------------------------------------------------------
@@ -117,6 +122,14 @@ def _parse_timestamp(value: str) -> datetime | None:
 def _safe(row: list, idx: int, default: str = "") -> str:
     """Return row[idx] if it exists, else *default*."""
     return row[idx] if idx < len(row) else default
+
+
+def _extract_eval_id(dialpad_link: str) -> str:
+    """Extract the call_id from a Dialpad link URL."""
+    if not dialpad_link:
+        return ""
+    clean = dialpad_link.split("[")[0].strip()  # strip [LONG CALL] suffix
+    return clean.rstrip("/").split("/")[-1]
 
 
 def _parse_row(row: list[str]) -> EvaluationRecord | None:
@@ -167,6 +180,8 @@ def _parse_row(row: list[str]) -> EvaluationRecord | None:
     except (ValueError, TypeError):
         overall = 0.0
 
+    dialpad_link = _safe(row, COL_DIALPAD_LINK) or None
+
     return EvaluationRecord(
         timestamp=ts,
         agent_name=_safe(row, COL_AGENT_NAME),
@@ -174,9 +189,13 @@ def _parse_row(row: list[str]) -> EvaluationRecord | None:
         manager_email=_safe(row, COL_MANAGER_EMAIL),
         overall_score=overall,
         sections=sections,
-        dialpad_link=_safe(row, COL_DIALPAD_LINK) or None,
+        eval_id=_extract_eval_id(dialpad_link or ""),
+        dialpad_link=dialpad_link,
         key_strengths=_safe(row, COL_KEY_STRENGTHS) or None,
         improvements=_safe(row, COL_IMPROVEMENTS) or None,
+        call_summary=_safe(row, COL_CALL_SUMMARY) or None,
+        caller_name=_safe(row, COL_CALLER_NAME) or None,
+        caller_phone=_safe(row, COL_CALLER_PHONE) or None,
         source=_safe(row, COL_SOURCE) or "manual",
     )
 

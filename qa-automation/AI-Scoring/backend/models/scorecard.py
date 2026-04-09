@@ -42,5 +42,7 @@ class ScorecardWithMeta(Scorecard):
     flagged_long_call: bool = False
     model: str = "gemini-2.5-flash"
     sop_used: Optional[str] = None      # SOP title injected, if any
+    caller_name: Optional[str] = None   # From Dialpad get_call_details
+    caller_phone: Optional[str] = None  # From Dialpad get_call_details
     transcript_display: List[dict] = []  # [{timestamp, speaker, text}, ...]
     moments_display: List[dict] = []     # [{timestamp, type}, ...]
