@@ -5,8 +5,8 @@
 
   Maintained by: [Maximiliano Pérez / Member Support Management]
   Department:    Operations
-  Last Updated:  March 2026
-  Status:        Active — both scripts are live and in use
+  Last Updated:  April 2026
+  Status:        Active — all systems live and in use
 
 --------------------------------------------------------------------------------
   OVERVIEW
@@ -22,13 +22,16 @@ manual effort for operations and quality assurance workflows at Landing.
   2.1 AI-Scoring          — AI-powered call scoring pipeline + agent progression dashboard
 
 The QA Automation Apps Script and AI-Scoring Python backend work together:
-AI-Scoring grades calls via Gemini and writes to Form Responses AI, while
-the Apps Script enriches Analyst_History with AI reasoning when a manager
-approves and sends the email. The agent progression dashboard reads from
-Analyst_History to show trends and Gemini-generated coaching assessments.
+AI-Scoring grades calls via Gemini and writes to Form Responses AI. Managers
+review and edit scores in the frontend, then click "Approve & Send" which
+updates Sheets and triggers the Apps Script email pipeline via doPost().
+The Apps Script enriches Analyst_History with AI reasoning on email send.
+Dashboard pages show per-agent trends, team analytics, and Gemini coaching.
+DataPoint detail pages provide full drill-down into individual evaluations.
 
 Mass Notifications and QA Automation run inside Google Sheets as custom menus
-or form triggers. AI-Scoring runs as a FastAPI server (local or Railway).
+or form triggers. AI-Scoring runs as a FastAPI server deployed on Railway
+(Hobby tier) with API key authentication and CORS restrictions.
 
 --------------------------------------------------------------------------------
   REPOSITORY STRUCTURE
@@ -37,7 +40,9 @@ or form triggers. AI-Scoring runs as a FastAPI server (local or Railway).
   landing-scripts/
   ├── database/
   │   └── migrations/           SQL migration files
-  │       └── 001_mass_notifications_schema.sql
+  │       ├── 001_mass_notifications_schema.sql
+  │       ├── 002_add_property_event_columns.sql
+  │       └── 003_qa_scoring_schema.sql
   │
   ├── mass-notifications/
   │   └── src/                  Google Apps Script files (.gs)
@@ -78,33 +83,51 @@ or form triggers. AI-Scoring runs as a FastAPI server (local or Railway).
       │   ├── HtmlRenderer.js   Full email template assembly
       │   └── EmailSender.js    Gmail integration (send or draft)
       │
-      └── AI-Scoring/           Python backend (v1.1.0 — Phase 1 live)
-          ├── CLAUDE.md         Full project spec and roadmap
-          ├── AgentProgressionDashboard.md  Dashboard design doc
+      └── AI-Scoring/           Python backend (v2.0 — deployed on Railway)
+          ├── references/
+          │   ├── CLAUDE.md         Full project spec and roadmap
+          │   ├── PhaseZero.md      Phase 0 handoff doc
+          │   ├── PhaseOne.md       Phase 1 handoff + unified roadmap
+          │   ├── PRD-MultiTeam.md  Multi-team expansion spec
+          │   ├── AgentProgressionDashboard.md  Dashboard design doc
+          │   └── TeamStatsBoard.md Team analytics design doc
           ├── backend/
           │   ├── main.py           FastAPI app entry point
+          │   ├── middleware/
+          │   │   ├── auth.py       API key authentication
+          │   │   └── audit.py      JSONL request audit logging
           │   ├── models/
-          │   │   ├── scorecard.py  Scoring pipeline models
-          │   │   └── dashboard.py  Dashboard / progression models
+          │   │   ├── scorecard.py  Scoring + approval models
+          │   │   ├── dashboard.py  EvaluationRecord + progression models
+          │   │   └── team_stats.py Team analytics models
           │   ├── prompts/
           │   │   ├── qa_scoring_prompt.py   Call scoring prompt
           │   │   └── progression_prompt.py  Agent coaching prompt
           │   ├── routes/
-          │   │   ├── scoring.py    /api/score endpoints
-          │   │   └── dashboard.py  /api/agents + /api/agents/{name}/*
+          │   │   ├── scoring.py    /api/score + /api/score/{id}/approve
+          │   │   ├── dashboard.py  /api/agents + /api/agents/{name}/*
+          │   │   ├── team.py       /api/team/stats + /api/team/mails
+          │   │   └── datapoints.py /api/datapoints + /api/datapoints/{id}
           │   └── services/
-          │       ├── scoring_service.py     Gemini call scoring
-          │       ├── sheets_service.py      Write to Form Responses AI
-          │       ├── dialpad_client.py      Dialpad API integration
+          │       ├── scoring_service.py     Gemini call scoring pipeline
+          │       ├── sheets_service.py      Read/write Form Responses AI + 1
+          │       ├── dialpad_client.py      Dialpad API (calls, transcripts, details)
           │       ├── data_provider.py       Abstract data provider
           │       ├── history_service.py     SheetsProvider (Analyst_History)
+          │       ├── team_stats.py          Statistical computations (EWMA, SPC, outliers)
           │       ├── db_provider.py         PostgresProvider (stub)
-          │       └── progression_service.py Gemini coaching assessments
+          │       ├── progression_service.py Gemini coaching assessments
+          │       └── notion_service.py      Notion SOP integration (stub)
           ├── frontend/
-          │   ├── index.html        Call scoring upload UI
-          │   └── dashboard.html    Agent progression dashboard
-          └── scripts/
-              └── score_call.py     Phase 0 CLI scoring script
+          │   ├── index.html        Call scoring + editable scorecard + Approve & Send
+          │   ├── dashboard.html    Per-agent progression dashboard (clickable trends)
+          │   ├── team_dashboard.html Team analytics (outliers, SPC, distribution)
+          │   └── datapoint.html    Evaluation detail page (DataPoint drill-down)
+          ├── scripts/
+          │   ├── score_call.py     Phase 0 CLI scoring script
+          │   └── backfill_history.py One-time backfill for historical DataPoints
+          ├── Procfile              Railway deployment start command
+          └── .env.example          Environment variable documentation
 
 --------------------------------------------------------------------------------
   1. MASS NOTIFICATIONS
@@ -241,22 +264,30 @@ HOW IT WORKS (HIGH LEVEL)
        up the matching Dialpad link in Form Responses AI and copying reasoning,
        confidence, key strengths, and improvements.
 
-  AI-assisted flow (Gemini):
-    1. Manager uploads audio to localhost:8000 (AI-Scoring frontend).
+  AI-assisted flow (Gemini + Approve & Send):
+    1. Manager uploads audio at the AI-Scoring frontend (Railway or localhost).
     2. Gemini 2.5 Flash scores all sections with confidence + reasoning.
-    3. Results are written to Form Responses AI (cols A-P + reasoning cols Q-AI).
-    4. Manager copy-pastes to Form Responses 1 and triggers the UI button.
-    5. The Apps Script enrichment in step 9 above pulls the AI reasoning
-       into Analyst_History automatically.
+    3. Results are written to Form Responses AI (cols A-P + reasoning cols Q-AI
+       + caller metadata cols AJ-AL).
+    4. Manager reviews the editable scorecard in the frontend — can modify
+       scores, reasoning, and feedback. Scores Documentation manually.
+    5. Manager clicks "Approve & Send".
+    6. Backend updates reasoning in Form Responses AI, writes approved scores
+       directly to Form Responses 1, waits for ARRAYFORMULA computation,
+       then triggers Apps Script doPost() web app endpoint.
+    7. Apps Script _processRow() handles: Analyst_History append + enrichment
+       + QA email send to the agent.
 
 KEY SHEETS
   - Form Responses 1    QA form submissions (auto-populated by Google Forms).
   - Form Responses AI   AI-scored calls from the Gemini pipeline. Cols A-P mirror
                         Form Responses 1; cols Q-AI contain per-section reasoning.
   - Analyst_History     Running log of all past evaluations per agent (cols A-O
-                        from Apps Script + cols P-AK enriched from Form AI).
-                        Source of truth for the agent progression dashboard.
-  - Mails              Agent name-to-email mapping (cols A and B).
+                        from Apps Script + cols P-AK enriched from Form AI
+                        + cols AL-AN for call summary, caller name, caller phone).
+                        Source of truth for dashboards and DataPoint detail pages.
+  - Mails              Agent name-to-email mapping (cols A-B), supervisor (C),
+                        canonical name (D). Determines "active" agent roster.
 
 QA SCORECARD CATEGORIES
   Numeric (scored 1–5):
@@ -296,8 +327,10 @@ CURRENT LIMITATIONS / KNOWN ISSUES
     - Columns with ARRAYFORMULAs (Overall Score, Agent Email) may not resolve
       before the trigger fires; a 3-second sleep + Mails sheet lookup mitigates this.
     - QA Analysts still manually pick and score calls unless using AI-Scoring.
-    - AI-scored calls require a copy-paste from Form Responses AI to Form
-      Responses 1 before the email can be triggered.
+    - Dialpad API key expires regularly (~1 hour); must be refreshed in Railway
+      env vars until OAuth with Client ID/Secret is set up with engineering.
+    - Historical DataPoints may lack caller metadata and AI reasoning (only
+      scores and feedback are backfilled).
 
 CONTACTS / OWNERSHIP
   Script maintained by: Maximiliano Pérez García
@@ -305,48 +338,78 @@ CONTACTS / OWNERSHIP
   For issues: Message Max Pérez via Slack or create a post in #ert-member-support
 
 --------------------------------------------------------------------------------
-  3. AI-SCORING (v1.1.0 — PHASE 1 LIVE + AGENT DASHBOARD)
+  3. AI-SCORING (v2.0 — DEPLOYED ON RAILWAY)
 --------------------------------------------------------------------------------
 
 PURPOSE
   Python-based backend that uses Gemini 2.5 Flash to score agent calls from
-  audio recordings. Reduces QA analyst workload and provides AI-generated
-  coaching assessments via an agent progression dashboard.
+  audio recordings. Managers review and edit scores in an interactive frontend,
+  then approve to trigger the Apps Script email pipeline. Dashboards provide
+  per-agent progression, team analytics, and evaluation drill-down pages.
 
 STATUS
   Phase 0 — complete. Validated against real calls.
-  Phase 1 — live. FastAPI scoring pipeline + agent progression dashboard.
+  Phase 1 — complete. FastAPI scoring pipeline + Sheets integration.
+  Step 1  — complete. Security hardening + Railway deployment (API key auth,
+            CORS restrictions, JSONL audit logging, dual credential loading).
+  Step 1.5 — complete. Manager approval workflow (editable scorecard,
+            Approve & Send button, doPost integration).
+  Step 2  — complete. DataPoints (evaluation drill-down, clickable charts,
+            detail page, caller metadata, backfill script).
 
-  Scoring: Managers upload audio at localhost:8000, Gemini scores all sections,
-  results land in Form Responses AI with per-section reasoning.
+  Deployed at: landing-scripts-production.up.railway.app (Railway Hobby tier)
+  Local dev:   localhost:8000
 
-  Dashboard: localhost:8000/dashboard shows per-agent score trends (7-90 days),
-  per-section averages, and Gemini-generated coaching assessments. Reads from
-  Analyst_History (enriched by Apps Script on email send).
+  Scoring: Managers upload audio, Gemini scores all sections, results shown
+  as an editable scorecard. Manager adjusts scores/reasoning, adds Documentation
+  score, clicks "Approve & Send". Email is sent, history is updated.
+
+  Dashboards:
+    /dashboard              Team analytics (EWMA, SPC, outliers, distribution
+                            with drill-down, section analysis, supervisor views)
+    /dashboard/agent/{name} Per-agent trends, section averages, Gemini coaching
+    /datapoint/{call_id}    Single evaluation detail (scores, reasoning, caller
+                            info, feedback, QA progression mini-history)
 
 CURRENT STACK
-  - Google Gemini 2.5 Flash   AI audio analysis and scoring
-  - FastAPI (Python 3.9+)     Backend API (uvicorn)
+  - Google Gemini 2.5 Flash   AI audio analysis, scoring, coaching assessments
+  - FastAPI (Python 3.9+)     Backend API (uvicorn, deployed on Railway)
   - gspread + Sheets API      Read/write Google Sheets
   - Chart.js                  Dashboard visualizations (CDN, no build step)
-  - Dialpad API               Agent lookup and call list retrieval
-  - PostgreSQL                Stub ready for future use (Railway free tier)
+  - Dialpad API               Agent lookup, call list, transcripts, call details
+  - Railway                   Hosting (Hobby tier), auto-deploy from GitHub
+  - PostgreSQL                Schema stubbed (database/migrations/003), future use
+
+SECURITY
+  - API key authentication per team (Authorization: Bearer header)
+  - CORS restricted to Railway domain + localhost
+  - JSONL audit logging on every request
+  - Frontend prompts for API key on first use (sessionStorage)
 
 DEPLOYMENT ROADMAP
-  Phase 0 (complete)     Validated AI scoring with real calls (score_call.py)
-  Phase 1 (live)         FastAPI backend + Sheets integration + dashboard
-  Phase 1.1 (current)    Agent progression dashboard with Gemini coaching
-  Phase 2 (planned)      Notion SOP sync + ChromaDB RAG integration
-  Phase 3 (planned)      Full manager dashboard (Next.js or Retool)
-  Phase 4 (planned)      Dialpad webhook automation (fully hands-free)
+  Phase 0 (complete)     Validated AI scoring with real calls
+  Step 1 (complete)      Security hardening + Railway deployment
+  Step 1.5 (complete)    Manager approval workflow (Approve & Send)
+  Step 2 (complete)      DataPoints — evaluation drill-down + clickable charts
+  Step 3 (next)          Rubric abstraction (JSON config per team)
+  Step 4 (planned)       Team routing + multi-team support
+  Step 5 (planned)       Sales team onboarding
+  Step 6 (planned)       SOP/Notion RAG integration
+  Step 7 (planned)       Cost tracking + admin dashboard
+  Step 8 (planned)       Dialpad webhook automation (fully hands-free)
+  Step 9 (planned)       PostgreSQL migration
+
+  Full roadmap: qa-automation/AI-Scoring/references/PhaseOne.md
 
 KEY PRINCIPLES
-  - Human review is mandatory. AI proposes; managers approve via UI button.
-  - Documentation (Section 9 of scorecard) is never automated.
-  - The existing Apps Script email flow is preserved.
+  - Human review is mandatory. AI proposes; managers approve via Approve & Send.
+  - Documentation (Section 9 of scorecard) is always scored manually by manager.
+  - The existing Apps Script email flow is preserved (triggered via doPost).
+  - Data isolation: original AI scores preserved in Form Responses AI as audit trail.
+  - Adding a new team should require configuration, not code changes.
 
-  Full specification: qa-automation/AI-Scoring/CLAUDE.md
-  Dashboard design doc: qa-automation/AI-Scoring/AgentProgressionDashboard.md
+  Full specification: qa-automation/AI-Scoring/references/CLAUDE.md
+  Multi-team PRD: qa-automation/AI-Scoring/references/PRD-MultiTeam.md
 
 --------------------------------------------------------------------------------
   GOOGLE APIS & PERMISSIONS USED
@@ -367,8 +430,9 @@ KEY PRINCIPLES
 
   AI-Scoring (Python backend):
     - Google Gemini API   (audio scoring + progression assessments)
-    - Google Sheets API   (read/write Form Responses AI and Analyst_History)
-    - Dialpad API         (agent lookup, call list retrieval)
+    - Google Sheets API   (read/write Form Responses AI, Form Responses 1,
+                           and Analyst_History via service account)
+    - Dialpad API         (agent lookup, call list, transcripts, call details)
 
   Mass Notifications also uses:
     - PostgreSQL (JDBC)  (archive campaigns and recipients to Railway-hosted DB)
@@ -410,7 +474,8 @@ KEY PRINCIPLES
   Dialpad       VoIP platform used for call center operations; source of call recordings
   RAG           Retrieval-Augmented Generation — using a knowledge base to ground AI
   Gemini Flash  Google's cost-efficient multimodal AI model used for audio scoring
-  Railway       Cloud hosting platform for the PostgreSQL database
+  DataPoint     A single evaluation record accessible via /datapoint/{call_id}
+  Railway       Cloud hosting platform for AI-Scoring backend + PostgreSQL
   JDBC          Java Database Connectivity — used by Apps Script to connect to Postgres
   JSONB         Binary JSON type in PostgreSQL; supports querying inside JSON fields
 
@@ -423,10 +488,8 @@ KEY PRINCIPLES
   issues are managed by Max.
 
   Branch strategy: feature branches → PR → merge to main.
-  Active branches:
-    feature/agent-progression-dashboard  Agent dashboard + Analyst_History enrichment
-    feature/ai-scoring                   AI-Scoring Phase 1 pipeline (merged)
-    feature/database-integration         PostgreSQL for Mass Notifications (merged)
+  Railway auto-deploys on push to main (root dir: qa-automation/AI-Scoring).
+  Apps Script changes deployed via clasp push from qa-automation/ directory.
 
 --------------------------------------------------------------------------------
   SUPPORT & CONTACT

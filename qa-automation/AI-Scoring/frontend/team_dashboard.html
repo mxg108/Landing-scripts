@@ -151,7 +151,7 @@
     <div class="kpi-row" id="kpiRow"></div>
     <div class="charts-grid">
       <div class="card"><h3>SPC Control Chart</h3><canvas id="spcCanvas"></canvas></div>
-      <div class="card"><h3>Score Distribution</h3><canvas id="distCanvas"></canvas></div>
+      <div class="card"><h3>Score Distribution</h3><canvas id="distCanvas" style="cursor:pointer;"></canvas><div id="distDrillDown" style="display:none;"></div></div>
     </div>
     <div class="card"><h3>EWMA by Agent</h3><canvas id="ewmaCanvas"></canvas></div>
   </div>
@@ -241,6 +241,7 @@ let sectionAvgChart = null, sectionVarChart = null, supervisorChart = null;
 
 // --- Fetch ---
 async function fetchTeamStats() {
+  collapseDistDrill();  // collapse drill-down on timeframe/filter change
   const params = new URLSearchParams({ days: selectedDays, active_only: activeOnly });
   if (selectedSupervisor) params.set('supervisor', selectedSupervisor);
   try {
@@ -414,8 +415,106 @@ function renderDistChart() {
   distChart = new Chart(document.getElementById('distCanvas'), {
     type: 'bar',
     data: { labels: bins.map(b => b.bin), datasets: [{ label: 'Count', data: bins.map(b => b.count), backgroundColor: colors, borderColor: colors, borderWidth: 1 }] },
-    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+      onClick: (event, activeElements) => {
+        if (!activeElements.length) return;
+        const idx = activeElements[0].index;
+        const bin = bins[idx].bin;
+        loadDistDrillDown(bin);
+      }
+    }
   });
+}
+
+// --- Distribution drill-down ---
+let _distDrillData = null;
+let _distDrillBin = null;
+let _distSortKey = 'score';
+let _distSortAsc = false;
+
+function collapseDistDrill() {
+  const el = document.getElementById('distDrillDown');
+  el.style.display = 'none';
+  el.innerHTML = '';
+  _distDrillData = null;
+  _distDrillBin = null;
+}
+
+function sortDistDrill(key) {
+  if (_distSortKey === key) {
+    _distSortAsc = !_distSortAsc;
+  } else {
+    _distSortKey = key;
+    _distSortAsc = key === 'agent';  // default asc for agent, desc for score/date
+  }
+  renderDistDrillTable();
+}
+
+function renderDistDrillTable() {
+  if (!_distDrillData) return;
+  const drillEl = document.getElementById('distDrillDown');
+
+  const sorted = [..._distDrillData].sort((a, b) => {
+    let va, vb;
+    if (_distSortKey === 'agent') { va = a.agent_name.toLowerCase(); vb = b.agent_name.toLowerCase(); }
+    else if (_distSortKey === 'date') { va = a.timestamp; vb = b.timestamp; }
+    else { va = a.overall_score; vb = b.overall_score; }
+    if (va < vb) return _distSortAsc ? -1 : 1;
+    if (va > vb) return _distSortAsc ? 1 : -1;
+    return 0;
+  });
+
+  const arrow = (key) => _distSortKey === key ? (_distSortAsc ? ' &#9650;' : ' &#9660;') : '';
+  const thStyle = 'padding:6px;cursor:pointer;user-select:none;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);';
+
+  drillEl.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 6px 4px;">
+      <span style="font-size:0.78rem;font-weight:500;color:var(--navy);">${_distDrillBin} — ${sorted.length} evaluations</span>
+      <span onclick="collapseDistDrill()" style="cursor:pointer;font-size:0.8rem;color:var(--muted);padding:2px 8px;" title="Collapse">&#9660;</span>
+    </div>
+    <table style="width:100%;font-size:0.78rem;border-collapse:collapse;">
+      <tr style="border-bottom:2px solid var(--border);">
+        <th style="${thStyle}text-align:left;" onclick="sortDistDrill('agent')">Agent${arrow('agent')}</th>
+        <th style="${thStyle}" onclick="sortDistDrill('date')">Date${arrow('date')}</th>
+        <th style="${thStyle}" onclick="sortDistDrill('score')">Score${arrow('score')}</th>
+        <th style="${thStyle}">Call</th>
+      </tr>
+      ${sorted.map(e => `<tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;"><a href="/dashboard/agent/${encodeURIComponent(e.agent_name)}">${e.agent_name}</a></td>
+        <td style="padding:6px;text-align:center;">${new Date(e.timestamp).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</td>
+        <td style="padding:6px;text-align:center;color:${e.overall_score>=85?'var(--green)':e.overall_score>=70?'var(--amber)':'var(--red)'};font-weight:500;">${e.overall_score.toFixed(1)}</td>
+        <td style="padding:6px;text-align:center;">${e.eval_id ? `<a href="/datapoint/${e.eval_id}">View</a>` : ''}</td>
+      </tr>`).join('')}
+    </table>`;
+}
+
+async function loadDistDrillDown(bin) {
+  const drillEl = document.getElementById('distDrillDown');
+
+  // If same bin clicked, toggle collapse
+  if (_distDrillBin === bin && drillEl.style.display !== 'none') {
+    collapseDistDrill();
+    return;
+  }
+
+  _distDrillBin = bin;
+  _distSortKey = 'score';
+  _distSortAsc = false;
+  drillEl.style.display = '';
+  drillEl.innerHTML = `<p style="color:var(--muted);font-size:0.8rem;padding:10px 6px;">Loading evaluations in ${bin}...</p>`;
+
+  try {
+    const r = await fetch(`${API_BASE}/api/datapoints?bin=${bin}&days=${selectedDays}&active_only=${activeOnly}`, { headers: authHeaders() });
+    if (!r.ok) { drillEl.innerHTML = `<p style="color:var(--red);font-size:0.8rem;padding:8px;">Failed to load.</p>`; return; }
+    _distDrillData = await r.json();
+    if (!_distDrillData.length) { drillEl.innerHTML = `<p style="color:var(--muted);font-size:0.8rem;padding:10px 6px;">No evaluations in ${bin}.</p>`; return; }
+    renderDistDrillTable();
+  } catch (err) {
+    drillEl.innerHTML = `<p style="color:var(--red);font-size:0.8rem;padding:8px;">Error: ${err.message}</p>`;
+  }
 }
 
 function renderEwmaChart() {

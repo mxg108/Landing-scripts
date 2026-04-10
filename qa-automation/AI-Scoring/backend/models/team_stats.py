@@ -25,6 +25,7 @@ class OutlierRecord(BaseModel):
     agent_median: float
     modified_z: float
     classification: str  # "exceptional", "concerning"
+    eval_id: str = ""    # call_id from Dialpad link
 
 
 class TrainingOpportunity(BaseModel):

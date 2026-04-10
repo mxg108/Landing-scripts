@@ -44,10 +44,12 @@ async def list_datapoints(
     bin: Optional[str] = Query(default=None, description="Score range, e.g. '81-90'"),
     agent: Optional[str] = Query(default=None),
     days: int = Query(default=90, ge=1, le=365),
+    active_only: bool = Query(default=True),
 ):
     """
     List evaluation records, filtered by score bin or agent name.
     At least one filter (bin or agent) is required.
+    active_only filters to agents in the Mails roster (matches team dashboard).
     """
     if not bin and not agent:
         raise HTTPException(400, "Provide 'bin' (e.g. '81-90') or 'agent' query parameter")
@@ -58,6 +60,18 @@ async def list_datapoints(
         records = await provider.get_agent_history(agent, days)
     else:
         records = await provider.get_all_history(days)
+
+    # Filter to active agents only (matches team dashboard chart filters)
+    if active_only and not agent:
+        active_names = set()
+        mails = provider._get_mails_sheet()
+        for row in mails[1:]:
+            if row and row[0].strip():
+                active_names.add(row[0].strip().lower())
+                # Also add canonical name if present
+                if len(row) > 3 and row[3].strip():
+                    active_names.add(row[3].strip().lower())
+        records = [r for r in records if r.agent_name.strip().lower() in active_names]
 
     if bin:
         try:
