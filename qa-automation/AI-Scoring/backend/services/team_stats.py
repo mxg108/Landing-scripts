@@ -46,6 +46,7 @@ _COL_SECTIONS_START = 4  # indices 4-11 for 8 numeric sections
 _COL_IDENTITY = 12
 _COL_CUSTOMER_RES = 13
 _COL_MANAGER = 14
+_COL_DIALPAD_LINK = 15
 
 # Timestamp formats
 _TS_FORMATS = [
@@ -150,6 +151,13 @@ def load_and_clean(
         cust_res = str(row[_COL_CUSTOMER_RES]).strip().upper()[:1] if len(row) > _COL_CUSTOMER_RES else ""
 
         manager = str(row[_COL_MANAGER]).strip().lower() if len(row) > _COL_MANAGER else ""
+        dialpad_link = str(row[_COL_DIALPAD_LINK]).strip() if len(row) > _COL_DIALPAD_LINK else ""
+
+        # Extract eval_id from dialpad link (strip query params + [LONG CALL] suffix)
+        eval_id = ""
+        if dialpad_link:
+            clean = dialpad_link.split("[")[0].strip().split("?")[0].strip()
+            eval_id = clean.rstrip("/").split("/")[-1]
 
         records.append({
             "agent": agent,
@@ -161,6 +169,7 @@ def load_and_clean(
             "manager_email": manager,
             "is_active": agent.lower() in active_set,
             "supervisor": supervisor_map.get(agent.lower(), ""),
+            "eval_id": eval_id,
         })
 
     df = pd.DataFrame(records)
@@ -209,6 +218,7 @@ def compute_outliers(
                     "agent_median": round(float(median), 1),
                     "modified_z": round(float(z), 2),
                     "classification": "exceptional" if z > 0 else "concerning",
+                    "eval_id": row.get("eval_id", ""),
                 })
 
     results.sort(key=lambda x: abs(x["modified_z"]), reverse=True)

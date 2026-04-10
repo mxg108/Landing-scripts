@@ -133,6 +133,9 @@ class AnalystHistory {
       'Efficiency Reasoning',            // AI
       'Customer Resolution Confidence',  // AJ
       'Customer Resolution Reasoning',   // AK
+      'Call Summary',                    // AL
+      'Caller Name',                     // AM
+      'Caller Phone',                    // AN
     ];
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
     sheet.getRange(1, 1, 1, headers.length)
@@ -205,9 +208,12 @@ class AnalystHistory {
         (matchedRow[FAC.EFFICIENCY_REASON] || '').toString(),       // AI
         (matchedRow[FAC.CUSTOMER_RES_CONF] || '').toString(),       // AJ
         (matchedRow[FAC.CUSTOMER_RES_REASON] || '').toString(),     // AK
+        (matchedRow[FAC.CALL_SUMMARY] || '').toString(),            // AL
+        (matchedRow[FAC.CALLER_NAME] || '').toString(),             // AM
+        (matchedRow[FAC.CALLER_PHONE] || '').toString(),            // AN
       ];
 
-      // Write to Analyst_History cols Q-AK (columns 17-37 in 1-indexed)
+      // Write to Analyst_History cols Q-AN (columns 17-40 in 1-indexed)
       this.sheet.getRange(historyRowNum, HC.KEY_STRENGTHS + 1, 1, extendedValues.length)
         .setValues([extendedValues]);
 

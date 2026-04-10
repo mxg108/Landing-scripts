@@ -129,6 +129,9 @@ const CONFIG = {
     EFFICIENCY_REASON:  34,  // AI
     CUSTOMER_RES_CONF:  35,  // AJ
     CUSTOMER_RES_REASON: 36, // AK
+    CALL_SUMMARY:       37,  // AL
+    CALLER_NAME:        38,  // AM
+    CALLER_PHONE:       39,  // AN
   },
 
   // ── Form Responses AI extended columns (0-based) ──────────────────
@@ -153,5 +156,8 @@ const CONFIG = {
     EFFICIENCY_REASON:  32,  // AG
     CUSTOMER_RES_CONF:  33,  // AH
     CUSTOMER_RES_REASON: 34, // AI
+    CALL_SUMMARY:       35,  // AJ
+    CALLER_NAME:        36,  // AK
+    CALLER_PHONE:       37,  // AL
   },
 };

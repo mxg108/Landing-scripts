@@ -143,6 +143,7 @@
     .chart-wrapper {
       position: relative;
       height: 320px;
+      cursor: pointer;
     }
 
     /* Assessment */
@@ -545,6 +546,13 @@
         options: {
           responsive: true,
           maintainAspectRatio: false,
+          onClick: (event, activeElements) => {
+            if (activeElements.length) {
+              const idx = activeElements[0].index;
+              const rec = history[idx];
+              if (rec.eval_id) window.location.href = `/datapoint/${rec.eval_id}`;
+            }
+          },
           scales: {
             y: { min: 0, max: 100, ticks: { stepSize: 10 } }
           },

@@ -125,10 +125,17 @@ def _safe(row: list, idx: int, default: str = "") -> str:
 
 
 def _extract_eval_id(dialpad_link: str) -> str:
-    """Extract the call_id from a Dialpad link URL."""
+    """Extract the call_id from a Dialpad link URL.
+
+    Handles variations:
+      https://dialpad.com/callhistory/callreview/5644687275335680
+      https://dialpad.com/callhistory/callreview/5644687275335680?source=session-history...
+      https://dialpad.com/callhistory/callreview/5644687275335680 [LONG CALL — ...]
+    """
     if not dialpad_link:
         return ""
     clean = dialpad_link.split("[")[0].strip()  # strip [LONG CALL] suffix
+    clean = clean.split("?")[0].strip()         # strip query parameters
     return clean.rstrip("/").split("/")[-1]
 
 

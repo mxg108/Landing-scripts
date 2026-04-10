@@ -20,7 +20,23 @@ async def get_datapoint(call_id: str):
         if rec.eval_id == call_id:
             return rec
 
-    raise HTTPException(404, f"No evaluation found for call_id '{call_id}'")
+    # Debug: find near-matches to diagnose why the lookup failed
+    debug_matches = []
+    for rec in all_records:
+        link = rec.dialpad_link or ""
+        if call_id in link or (rec.eval_id and call_id[:8] in rec.eval_id):
+            debug_matches.append({
+                "eval_id": rec.eval_id,
+                "dialpad_link": link[:80],
+                "agent": rec.agent_name,
+                "manager": rec.manager_email,
+            })
+
+    detail = f"No evaluation found for call_id '{call_id}'."
+    if debug_matches:
+        detail += f" Found {len(debug_matches)} partial match(es): {debug_matches[:3]}"
+
+    raise HTTPException(404, detail)
 
 
 @router.get("/datapoints", response_model=list[EvaluationRecord])

@@ -457,7 +457,7 @@ function renderOutliers() {
 function fillOutliers(data) {
   document.querySelector('#outliersTable tbody').innerHTML = data.map(o => `<tr>
     <td><a href="/dashboard/agent/${encodeURIComponent(o.agent)}">${escapeHtml(o.agent)}</a></td>
-    <td>${o.date || ''}</td><td style="color:${scoreColor(o.score)}">${fmt(o.score, 0)}</td>
+    <td>${o.date || ''}</td><td>${o.eval_id ? `<a href="/datapoint/${o.eval_id}" style="color:${scoreColor(o.score)};font-weight:500;">${fmt(o.score, 0)}</a>` : `<span style="color:${scoreColor(o.score)}">${fmt(o.score, 0)}</span>`}</td>
     <td>${fmt(o.agent_median)}</td><td>${fmt(o.modified_z, 2)}</td>
     <td><span class="badge badge-${o.classification}">${o.classification}</span></td>
   </tr>`).join('');
