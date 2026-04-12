@@ -495,7 +495,9 @@
       <div class="form-grid">
         <div class="form-group">
           <label for="agent-name">Agent Name</label>
-          <input type="text" id="agent-name" placeholder="e.g. Ivan Garcia" required />
+          <select id="agent-name" required>
+            <option value="" disabled selected>Loading agents...</option>
+          </select>
         </div>
         <div class="form-group">
           <label for="manager-email">Your Email (Manager)</label>
@@ -542,6 +544,23 @@
     const key = getApiKey();
     return key ? { 'Authorization': 'Bearer ' + key } : {};
   }
+
+  // --- Populate agent dropdown from Mails sheet ---
+  async function loadAgentDropdown() {
+    const select = document.getElementById('agent-name');
+    try {
+      const res = await fetch('/api/team/mails', { headers: authHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const mails = await res.json();
+      const names = mails.map(m => m.agent_name).sort();
+      select.innerHTML = '<option value="" disabled selected>Select agent...</option>'
+        + names.map(n => `<option value="${n}">${n}</option>`).join('');
+    } catch (e) {
+      console.error('Failed to load agents:', e);
+      select.innerHTML = '<option value="" disabled selected>Failed to load agents</option>';
+    }
+  }
+  loadAgentDropdown();
   const dropZone = document.getElementById('drop-zone');
   const fileInput = document.getElementById('file-input');
   const fileList = document.getElementById('file-list');
