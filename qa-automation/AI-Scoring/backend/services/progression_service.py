@@ -6,7 +6,7 @@ import json
 import os
 import re
 import time
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from google import genai
 from google.genai import types
@@ -18,24 +18,13 @@ from backend.models.dashboard import (
 )
 from backend.prompts.progression_prompt import build_progression_prompt
 
-MODEL = "gemini-2.5-flash"
+if TYPE_CHECKING:
+    from backend.config.team_config import TeamConfig
+
 CACHE_TTL_SECONDS = 3600  # 1 hour
 
 # Simple in-memory TTL cache: {(agent_name_lower, days): (timestamp, result)}
 _cache: dict[tuple[str, int], tuple[float, ProgressionAssessment]] = {}
-
-# Map Gemini response section names to internal keys
-_SECTION_NAME_TO_KEY = {
-    "Greeting": "greeting",
-    "Caller Identity Validation": "identity_validation",
-    "Purpose of the Call": "purpose_of_call",
-    "Matching the Moment": "matching_the_moment",
-    "Process Adherence": "process_adherence",
-    "Call Resolution": "call_resolution",
-    "Communication": "communication",
-    "Efficiency & Call Handling": "efficiency",
-    "Customer Resolution Indicator": "customer_resolution_indicator",
-}
 
 
 def _get_cached(agent_name: str, days: int) -> Optional[ProgressionAssessment]:
@@ -96,6 +85,7 @@ async def get_progression(
     provider,
     agent_name: str,
     days: int = 30,
+    config: TeamConfig | None = None,
 ) -> ProgressionAssessment:
     """Generate a Gemini-powered progression assessment for an agent.
 
@@ -103,11 +93,16 @@ async def get_progression(
         provider: A data provider with ``name`` and ``get_agent_history`` attrs.
         agent_name: The agent's display name.
         days: Number of days of history to analyze (default 30).
+        config: Team configuration. If None, loads the default.
 
     Returns:
         A ProgressionAssessment with overall assessment and per-section
         coaching insights.
     """
+    if config is None:
+        from backend.config.team_config import get_team_config
+        config = get_team_config()
+
     cached = _get_cached(agent_name, days)
     if cached is not None:
         return cached
@@ -130,7 +125,7 @@ async def get_progression(
         return result
 
     evaluations_json = _serialize_records(records)
-    prompt = build_progression_prompt(agent_name, evaluations_json, days)
+    prompt = build_progression_prompt(config, agent_name, evaluations_json, days)
 
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -138,11 +133,11 @@ async def get_progression(
 
     client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
-        model=MODEL,
+        model=config.gemini.progression_model,
         contents=prompt,
         config=types.GenerateContentConfig(
-            temperature=0.3,
-            max_output_tokens=16384,
+            temperature=config.gemini.progression_temperature,
+            max_output_tokens=config.gemini.progression_max_output_tokens,
         ),
     )
 
@@ -150,7 +145,6 @@ async def get_progression(
     try:
         parsed = json.loads(raw_text)
     except json.JSONDecodeError:
-        # Gemini truncated the response — return a partial assessment
         result = ProgressionAssessment(
             overall_assessment=(
                 f"Assessment generation for {agent_name} produced a partial response. "
@@ -164,11 +158,12 @@ async def get_progression(
         _set_cached(agent_name, days, result)
         return result
 
-    # Convert list response to dict keyed by internal section names
+    # Convert list response to dict keyed by internal history IDs
+    section_name_map = config.section_name_to_history_id
     section_assessments: dict[str, SectionAssessment] = {}
     for sa in parsed.get("section_assessments", []):
         display_name = sa.get("section_name", "")
-        key = _SECTION_NAME_TO_KEY.get(display_name, display_name.lower())
+        key = section_name_map.get(display_name, display_name.lower())
         section_assessments[key] = SectionAssessment(
             trend=sa["trend"],
             summary=sa["summary"],

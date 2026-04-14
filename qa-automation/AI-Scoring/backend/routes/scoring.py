@@ -8,6 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 
+from backend.config.team_config import get_team_config
 from backend.models.scorecard import ApprovalRequest
 from backend.services.scoring_service import score_call
 from backend.services.sheets_service import (
@@ -81,6 +82,7 @@ async def score_single_call(
     audio_bytes = await audio_file.read()
     job_id = f"{call_id}_{agent_name}".replace(" ", "_")
     _jobs[job_id] = {"status": "pending", "call_id": call_id}
+    config = get_team_config()
 
     async def run():
         try:
@@ -91,9 +93,10 @@ async def score_single_call(
                 call_id=call_id,
                 agent_name=agent_name,
                 manager_email=manager_email,
+                config=config,
                 duration_ms=duration_ms,
             )
-            row_num = append_scorecard_row(scorecard)
+            row_num = append_scorecard_row(scorecard, config)
             _jobs[job_id]["status"] = "complete"
             _jobs[job_id]["sheets_row"] = row_num
             _jobs[job_id]["scorecard"] = scorecard.model_dump()
@@ -136,6 +139,7 @@ async def score_batch(
             detail=f"Mismatch: {len(audio_files)} files vs {len(id_list)} call IDs"
         )
 
+    config = get_team_config()
     job_ids = []
     for i, (audio_file, call_id) in enumerate(zip(audio_files, id_list)):
         audio_bytes = await audio_file.read()
@@ -153,9 +157,10 @@ async def score_batch(
                     call_id=cid,
                     agent_name=agent_name,
                     manager_email=manager_email,
+                    config=config,
                     duration_ms=dur,
                 )
-                row_num = append_scorecard_row(scorecard)
+                row_num = append_scorecard_row(scorecard, config)
                 _jobs[jid]["status"] = "complete"
                 _jobs[jid]["sheets_row"] = row_num
                 _jobs[jid]["scorecard"] = scorecard.model_dump()
@@ -194,6 +199,7 @@ async def approve_scorecard(job_id: str, approval: ApprovalRequest):
         )
 
     job["status"] = "approving"
+    config = get_team_config()
 
     try:
         sections_dicts = [s.model_dump() for s in approval.sections]
@@ -204,6 +210,7 @@ async def approve_scorecard(job_id: str, approval: ApprovalRequest):
         update_scorecard_reasoning(
             row_num=sheets_row,
             sections=sections_dicts,
+            config=config,
             key_strengths=approval.key_strengths,
             opportunities=approval.opportunities,
         )
@@ -215,6 +222,7 @@ async def approve_scorecard(job_id: str, approval: ApprovalRequest):
         print(f"[approve] Step 2: writing approved row to Form Responses 1...")
         form_1_row = write_approved_to_form_responses_1(
             sections=sections_dicts,
+            config=config,
             key_strengths=approval.key_strengths,
             opportunities=approval.opportunities,
             timestamp=datetime.now().strftime("%m/%d/%Y %H:%M:%S"),

@@ -1,19 +1,22 @@
 """Gemini audio upload and scoring."""
 
+from __future__ import annotations
+
 import json
 import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING
 
 from google import genai
 from google.genai import types
 
-from backend.prompts.qa_scoring_prompt import SYSTEM_PROMPT, build_prompt
+from backend.prompts.qa_scoring_prompt import build_prompt, build_system_prompt
 from backend.models.scorecard import Scorecard
 
-MODEL = "gemini-2.5-flash"
+if TYPE_CHECKING:
+    from backend.config.team_config import TeamConfig
 
 SUPPORTED_MIME_TYPES = {
     ".mp3": "audio/mp3",
@@ -57,6 +60,7 @@ def _extract_json(text: str) -> dict:
 async def score_audio(
     audio_bytes: bytes,
     filename: str,
+    config: TeamConfig,
     transcript_text: str = "",
     moments_text: str = "",
     sop_title: str = "",
@@ -83,6 +87,7 @@ async def score_audio(
         )
 
         prompt = build_prompt(
+            config=config,
             transcript_text=transcript_text,
             moments_text=moments_text,
             sop_title=sop_title,
@@ -92,7 +97,7 @@ async def score_audio(
         )
 
         response = client.models.generate_content(
-            model=MODEL,
+            model=config.gemini.scoring_model,
             contents=[
                 types.Content(
                     role="user",
@@ -103,9 +108,9 @@ async def score_audio(
                 )
             ],
             config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=0.2,
-                max_output_tokens=65536,
+                system_instruction=build_system_prompt(config),
+                temperature=config.gemini.scoring_temperature,
+                max_output_tokens=config.gemini.scoring_max_output_tokens,
             ),
         )
 

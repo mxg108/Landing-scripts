@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Query
 
+from backend.config.team_config import get_team_config
 from backend.models.team_stats import (
     MailsEntry,
     TeamStatsResponse,
@@ -33,12 +34,13 @@ async def team_stats(
     supervisor: str = Query(default=""),
 ):
     """Return all team-level statistical computations in one response."""
+    config = get_team_config()
     provider = await get_provider()
 
     raw_history = provider._ws.get_all_values()
     raw_mails = provider._get_mails_sheet()
 
-    df = load_and_clean(raw_history, raw_mails)
+    df = load_and_clean(raw_history, raw_mails, config.sheets.analyst_history)
 
     if df.empty:
         return TeamStatsResponse(
@@ -78,12 +80,15 @@ async def team_stats(
         "analyst_count": df["agent"].nunique(),
     }
 
+    numeric_sections = config.numeric_history_ids
+    section_labels = config.section_labels
+
     return TeamStatsResponse(
         kpis=kpis,
-        roster=compute_agent_roster(df),
+        roster=compute_agent_roster(df, numeric_sections, section_labels),
         outliers=compute_outliers(df),
         spc=compute_monthly_spc(df),
-        section_analysis=compute_section_analysis(df),
+        section_analysis=compute_section_analysis(df, numeric_sections, section_labels),
         binary_stats=compute_binary_stats(df),
         supervisor_stats=compute_supervisor_stats(df),
         ewma=compute_ewma(df),
