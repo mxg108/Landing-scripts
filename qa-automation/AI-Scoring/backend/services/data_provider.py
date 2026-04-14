@@ -28,13 +28,18 @@ class DataProvider(ABC):
         ...
 
 
-_provider_instance: DataProvider | None = None
+# Per-team provider cache (keyed by team_id)
+_providers: dict[str, DataProvider] = {}
 
 
-async def get_provider() -> DataProvider:
-    """Return a singleton SheetsProvider. Reuses the same instance (and its cache) across requests."""
-    global _provider_instance
-    if _provider_instance is None:
+async def get_provider(team_id: str = "member_support") -> DataProvider:
+    """Return a cached SheetsProvider for the given team.
+
+    Reuses the same instance (and its sheet cache) across requests.
+    """
+    if team_id not in _providers:
+        from backend.config.team_config import get_team_config
         from backend.services.history_service import SheetsProvider
-        _provider_instance = SheetsProvider()
-    return _provider_instance
+        config = get_team_config(team_id)
+        _providers[team_id] = SheetsProvider(config=config)
+    return _providers[team_id]

@@ -1,12 +1,19 @@
 """
 Scoring pipeline orchestrator.
-Ties together: Dialpad transcript → Notion SOP → Gemini scoring.
+Ties together: Dialpad transcript -> Notion SOP -> Gemini scoring.
 """
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from backend.models.scorecard import ScorecardWithMeta
 from backend.services.audio_service import score_audio
 from backend.services.dialpad_client import get_transcript, get_call_details, build_dialpad_link, CALL_DURATION_FLAG_MS
 from backend.services.notion_service import fetch_sop_for_call
+
+if TYPE_CHECKING:
+    from backend.config.team_config import TeamConfig
 
 
 async def score_call(
@@ -15,6 +22,7 @@ async def score_call(
     call_id: str,
     agent_name: str,
     manager_email: str,
+    config: TeamConfig,
     duration_ms: float = 0,
 ) -> ScorecardWithMeta:
     """
@@ -45,6 +53,7 @@ async def score_call(
     scorecard = await score_audio(
         audio_bytes=audio_bytes,
         filename=filename,
+        config=config,
         transcript_text=transcript_text,
         moments_text=moments_text,
         sop_title=sop_data["sop_title"],

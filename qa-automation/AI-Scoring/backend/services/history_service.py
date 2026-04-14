@@ -1,9 +1,13 @@
-"""Google Sheets data provider — reads Analyst_History tab."""
+"""Google Sheets data provider — reads Analyst_History tab.
+
+Column layout is read from TeamConfig rather than hardcoded constants.
+"""
 
 from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 import time as _time
 
@@ -12,6 +16,9 @@ from google.oauth2.service_account import Credentials
 
 from backend.models.dashboard import EvaluationRecord, SectionScore
 from backend.services.data_provider import DataProvider
+
+if TYPE_CHECKING:
+    from backend.config.team_config import AnalystHistoryConfig, TeamConfig
 
 # ---------------------------------------------------------------------------
 # Raw sheet data cache with 5-minute TTL
@@ -44,57 +51,6 @@ _SCOPES = [
 ]
 
 # ---------------------------------------------------------------------------
-# Column index constants (0-based)
-# ---------------------------------------------------------------------------
-COL_AGENT_NAME = 0
-COL_AGENT_EMAIL = 1
-COL_TIMESTAMP = 2
-COL_OVERALL_SCORE = 3
-
-# Scored sections (indices 4-11)
-SECTION_COLUMNS: dict[str, int] = {
-    "greeting": 4,
-    "purpose_of_call": 5,
-    "matching_the_moment": 6,
-    "process_adherence": 7,
-    "call_resolution": 8,
-    "communication": 9,
-    "efficiency": 10,
-    "documentation": 11,
-}
-
-# Y/N indicator sections (indices 12-13)
-YN_COLUMNS: dict[str, int] = {
-    "identity_validation": 12,
-    "customer_resolution_indicator": 13,
-}
-
-COL_MANAGER_EMAIL = 14
-COL_DIALPAD_LINK = 15
-COL_KEY_STRENGTHS = 16
-COL_IMPROVEMENTS = 17
-COL_SOURCE = 18
-
-# Extended confidence/reasoning pairs starting at index 19.
-# Each tuple is (confidence_idx, reasoning_idx).
-EXTENDED_COLUMNS: dict[str, tuple[int, int]] = {
-    "greeting": (19, 20),
-    "identity_validation": (21, 22),
-    "purpose_of_call": (23, 24),
-    "matching_the_moment": (25, 26),
-    "process_adherence": (27, 28),
-    "call_resolution": (29, 30),
-    "communication": (31, 32),
-    "efficiency": (33, 34),
-    "customer_resolution_indicator": (35, 36),
-}
-
-# New columns after the extended pairs (added by DataPoints feature)
-COL_CALL_SUMMARY = 37
-COL_CALLER_NAME = 38
-COL_CALLER_PHONE = 39
-
-# ---------------------------------------------------------------------------
 # Timestamp parsing
 # ---------------------------------------------------------------------------
 _TS_FORMATS = [
@@ -116,7 +72,7 @@ def _parse_timestamp(value: str) -> datetime | None:
 
 
 # ---------------------------------------------------------------------------
-# Row parser
+# Helpers
 # ---------------------------------------------------------------------------
 
 def _safe(row: list, idx: int, default: str = "") -> str:
@@ -139,74 +95,6 @@ def _extract_eval_id(dialpad_link: str) -> str:
     return clean.rstrip("/").split("/")[-1]
 
 
-def _parse_row(row: list[str]) -> EvaluationRecord | None:
-    """Convert a single spreadsheet row into an EvaluationRecord, or None."""
-    if len(row) < 15:
-        return None
-
-    ts = _parse_timestamp(_safe(row, COL_TIMESTAMP))
-    if ts is None:
-        return None
-
-    # Build sections dict --------------------------------------------------
-    sections: dict[str, SectionScore] = {}
-
-    # Scored sections (1-5)
-    for name, idx in SECTION_COLUMNS.items():
-        score_val = str(_safe(row, idx))
-        conf = None
-        reasoning = None
-        if name in EXTENDED_COLUMNS:
-            ci, ri = EXTENDED_COLUMNS[name]
-            conf = _safe(row, ci) or None
-            reasoning = _safe(row, ri) or None
-        sections[name] = SectionScore(
-            score=score_val,
-            confidence=conf,
-            reasoning=reasoning,
-        )
-
-    # Y/N indicator sections
-    for name, idx in YN_COLUMNS.items():
-        yn_val = _safe(row, idx)
-        conf = None
-        reasoning = None
-        if name in EXTENDED_COLUMNS:
-            ci, ri = EXTENDED_COLUMNS[name]
-            conf = _safe(row, ci) or None
-            reasoning = _safe(row, ri) or None
-        sections[name] = SectionScore(
-            score=yn_val,
-            confidence=conf,
-            reasoning=reasoning,
-        )
-
-    # Overall score --------------------------------------------------------
-    try:
-        overall = float(_safe(row, COL_OVERALL_SCORE, "0"))
-    except (ValueError, TypeError):
-        overall = 0.0
-
-    dialpad_link = _safe(row, COL_DIALPAD_LINK) or None
-
-    return EvaluationRecord(
-        timestamp=ts,
-        agent_name=_safe(row, COL_AGENT_NAME),
-        agent_email=_safe(row, COL_AGENT_EMAIL),
-        manager_email=_safe(row, COL_MANAGER_EMAIL),
-        overall_score=overall,
-        sections=sections,
-        eval_id=_extract_eval_id(dialpad_link or ""),
-        dialpad_link=dialpad_link,
-        key_strengths=_safe(row, COL_KEY_STRENGTHS) or None,
-        improvements=_safe(row, COL_IMPROVEMENTS) or None,
-        call_summary=_safe(row, COL_CALL_SUMMARY) or None,
-        caller_name=_safe(row, COL_CALLER_NAME) or None,
-        caller_phone=_safe(row, COL_CALLER_PHONE) or None,
-        source=_safe(row, COL_SOURCE) or "manual",
-    )
-
-
 # ---------------------------------------------------------------------------
 # SheetsProvider
 # ---------------------------------------------------------------------------
@@ -216,8 +104,16 @@ class SheetsProvider(DataProvider):
 
     name = "Google Sheets"
 
-    def __init__(self) -> None:
+    def __init__(self, config: TeamConfig | None = None) -> None:
         import json as _json
+
+        # Load config if not provided
+        if config is None:
+            from backend.config.team_config import get_team_config
+            config = get_team_config()
+        self._config = config
+        self._ah = config.sheets.analyst_history
+
         creds_env = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 
         # Support file path (local dev) or inline JSON (Railway/production)
@@ -229,8 +125,81 @@ class SheetsProvider(DataProvider):
 
         self._gc = gspread.authorize(creds)
         sheet_id = os.environ["GOOGLE_SHEETS_ID"]
-        tab_name = os.environ.get("GOOGLE_HISTORY_TAB", "Analyst_History")
+        tab_name = os.environ.get("GOOGLE_HISTORY_TAB", self._ah.tab_name_default)
         self._ws = self._gc.open_by_key(sheet_id).worksheet(tab_name)
+
+    # ------------------------------------------------------------------
+    # Row parser (reads column layout from self._ah)
+    # ------------------------------------------------------------------
+
+    def _parse_row(self, row: list[str]) -> EvaluationRecord | None:
+        """Convert a single spreadsheet row into an EvaluationRecord, or None."""
+        ah = self._ah
+
+        if len(row) < 15:
+            return None
+
+        ts = _parse_timestamp(_safe(row, ah.col_timestamp))
+        if ts is None:
+            return None
+
+        # Build sections dict ------------------------------------------------
+        sections: dict[str, SectionScore] = {}
+
+        # Scored sections (1-5)
+        for name, idx in ah.section_columns.items():
+            score_val = str(_safe(row, idx))
+            conf = None
+            reasoning = None
+            if name in ah.extended_columns:
+                ci, ri = ah.extended_columns[name]
+                conf = _safe(row, ci) or None
+                reasoning = _safe(row, ri) or None
+            sections[name] = SectionScore(
+                score=score_val,
+                confidence=conf,
+                reasoning=reasoning,
+            )
+
+        # Y/N indicator sections
+        for name, idx in ah.yn_columns.items():
+            yn_val = _safe(row, idx)
+            conf = None
+            reasoning = None
+            if name in ah.extended_columns:
+                ci, ri = ah.extended_columns[name]
+                conf = _safe(row, ci) or None
+                reasoning = _safe(row, ri) or None
+            sections[name] = SectionScore(
+                score=yn_val,
+                confidence=conf,
+                reasoning=reasoning,
+            )
+
+        # Overall score ------------------------------------------------------
+        try:
+            overall = float(_safe(row, ah.col_overall_score, "0"))
+        except (ValueError, TypeError):
+            overall = 0.0
+
+        dialpad_link = _safe(row, ah.col_dialpad_link) or None
+
+        return EvaluationRecord(
+            timestamp=ts,
+            agent_name=_safe(row, ah.col_agent_name),
+            agent_email=_safe(row, ah.col_agent_email),
+            manager_email=_safe(row, ah.col_manager_email),
+            overall_score=overall,
+            sections=sections,
+            eval_id=_extract_eval_id(dialpad_link or ""),
+            dialpad_link=dialpad_link,
+            key_strengths=_safe(row, ah.col_key_strengths) or None,
+            improvements=_safe(row, ah.col_improvements) or None,
+            call_summary=_safe(row, ah.col_call_summary) or None,
+            caller_name=_safe(row, ah.col_caller_name) or None,
+            caller_phone=_safe(row, ah.col_caller_phone) or None,
+            source=_safe(row, ah.col_source) or "manual",
+        )
 
     # ------------------------------------------------------------------
     async def list_agents(self) -> list[str]:
@@ -261,9 +230,9 @@ class SheetsProvider(DataProvider):
         for row in all_rows[1:]:  # skip header
             if not row:
                 continue
-            if row[COL_AGENT_NAME].strip().lower() != agent_name.strip().lower():
+            if row[self._ah.col_agent_name].strip().lower() != agent_name.strip().lower():
                 continue
-            rec = _parse_row(row)
+            rec = self._parse_row(row)
             if rec is None:
                 continue
             if rec.timestamp < cutoff:
@@ -282,7 +251,7 @@ class SheetsProvider(DataProvider):
             return cached
         mails_ws = self._gc.open_by_key(
             os.environ.get("GOOGLE_SHEETS_ID", "")
-        ).worksheet("Mails")
+        ).worksheet(self._config.sheets.mails_tab)
         data = mails_ws.get_all_values()
         _set_cached_raw("mails", data)
         return data
@@ -302,7 +271,7 @@ class SheetsProvider(DataProvider):
         for row in all_rows[1:]:  # skip header
             if not row:
                 continue
-            rec = _parse_row(row)
+            rec = self._parse_row(row)
             if rec is None:
                 continue
             if rec.timestamp < cutoff:

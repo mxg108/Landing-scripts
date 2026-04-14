@@ -1,6 +1,7 @@
 """Dashboard API endpoints for agent progression."""
 
 from fastapi import APIRouter, HTTPException, Query
+from backend.config.team_config import get_team_config
 from backend.models.dashboard import EvaluationRecord, ProgressionAssessment
 from backend.services.data_provider import get_provider
 from backend.services.progression_service import get_progression
@@ -28,5 +29,6 @@ async def agent_history(name: str, days: int = Query(default=30, ge=1, le=365)):
 @router.get("/agents/{name}/progression", response_model=ProgressionAssessment)
 async def agent_progression(name: str, days: int = Query(default=30, ge=1, le=365)):
     """Return Gemini-generated progression assessment for an agent."""
+    config = get_team_config()
     provider = await get_provider()
-    return await get_progression(provider, name, days)
+    return await get_progression(provider, name, days, config=config)

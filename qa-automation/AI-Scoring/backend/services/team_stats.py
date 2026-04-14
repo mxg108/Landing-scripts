@@ -2,51 +2,22 @@
 
 All functions are pure computation — they take raw data (lists or DataFrames)
 and return plain dicts/lists. No I/O, no Sheets API calls.
+
+Section lists and column indices are passed as parameters (from TeamConfig)
+rather than read from module-level constants.
 """
 
 from __future__ import annotations
 
 import unicodedata
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
-# ---------------------------------------------------------------------------
-# Section keys — must match history_service.py SECTION_COLUMNS
-# ---------------------------------------------------------------------------
-NUMERIC_SECTIONS = [
-    "greeting",
-    "purpose_of_call",
-    "matching_the_moment",
-    "process_adherence",
-    "call_resolution",
-    "communication",
-    "efficiency",
-    "documentation",
-]
-
-SECTION_LABELS = {
-    "greeting": "Greeting",
-    "purpose_of_call": "Purpose of the Call",
-    "matching_the_moment": "Matching the Moment",
-    "process_adherence": "Process Adherence",
-    "call_resolution": "Call Resolution",
-    "communication": "Communication",
-    "efficiency": "Efficiency & Call Handling",
-    "documentation": "Documentation",
-}
-
-# Analyst_History column indices (0-based) — mirrors history_service.py
-_COL_AGENT = 0
-_COL_EMAIL = 1
-_COL_TS = 2
-_COL_OVERALL = 3
-_COL_SECTIONS_START = 4  # indices 4-11 for 8 numeric sections
-_COL_IDENTITY = 12
-_COL_CUSTOMER_RES = 13
-_COL_MANAGER = 14
-_COL_DIALPAD_LINK = 15
+if TYPE_CHECKING:
+    from backend.config.team_config import AnalystHistoryConfig
 
 # Timestamp formats
 _TS_FORMATS = [
@@ -58,7 +29,7 @@ _TS_FORMATS = [
 
 
 def _strip_accents(s: str) -> str:
-    """Remove accent marks for comparison (e.g. León -> Leon)."""
+    """Remove accent marks for comparison (e.g. Leon -> Leon)."""
     nfkd = unicodedata.normalize("NFKD", s)
     return "".join(c for c in nfkd if not unicodedata.combining(c))
 
@@ -79,6 +50,7 @@ def _parse_ts(val: str) -> datetime | None:
 def load_and_clean(
     history_rows: list[list[str]],
     mails_rows: list[list[str]],
+    ah_config: AnalystHistoryConfig,
 ) -> pd.DataFrame:
     """Convert raw sheet rows into a cleaned DataFrame.
 
@@ -86,11 +58,12 @@ def load_and_clean(
         history_rows: Raw rows from Analyst_History (including header).
         mails_rows: Raw rows from Mails sheet (including header).
             Col A = Agent Name, B = Email, C = Supervisor, D = Canonical Name.
+        ah_config: Column layout config for the Analyst_History tab.
 
     Returns:
         DataFrame with columns: agent, timestamp, overall_score,
-        greeting..documentation (8 sections), identity_validation,
-        customer_resolution, manager_email, is_active, supervisor.
+        per-section scores, identity_validation, customer_resolution,
+        manager_email, is_active, supervisor.
     """
     # Build maps from Mails sheet
     canonical_map: dict[str, str] = {}  # raw_name_lower -> canonical
@@ -110,21 +83,22 @@ def load_and_clean(
         active_set.add(canonical.lower())
 
     # Parse history rows
+    numeric_sections = list(ah_config.section_columns.keys())
     records = []
     for row in history_rows[1:]:  # skip header
         if len(row) < 15:
             continue
 
-        agent_raw = str(row[_COL_AGENT]).strip()
+        agent_raw = str(row[ah_config.col_agent_name]).strip()
         if not agent_raw:
             continue
 
-        ts = _parse_ts(row[_COL_TS])
+        ts = _parse_ts(row[ah_config.col_timestamp])
         if ts is None or ts.year < 2020:
             continue
 
         try:
-            overall = float(row[_COL_OVERALL])
+            overall = float(row[ah_config.col_overall_score])
         except (ValueError, TypeError):
             continue
 
@@ -134,24 +108,34 @@ def load_and_clean(
             canonical_map.get(_strip_accents(agent_raw).lower(), agent_raw),
         )
 
-        # Exclude test rows (Maximiliano Pérez with score 0)
+        # Exclude test rows (Maximiliano Perez with score 0)
         if _strip_accents(agent).lower().startswith("maximiliano") and overall == 0:
             continue
 
-        # Parse section scores
+        # Parse numeric section scores
         section_scores = {}
-        for i, sec_name in enumerate(NUMERIC_SECTIONS):
+        for sec_name, col_idx in ah_config.section_columns.items():
             try:
-                section_scores[sec_name] = float(row[_COL_SECTIONS_START + i])
+                section_scores[sec_name] = float(row[col_idx])
             except (ValueError, TypeError, IndexError):
                 section_scores[sec_name] = np.nan
 
-        # Parse Y/N columns
-        id_val = str(row[_COL_IDENTITY]).strip().upper()[:1] if len(row) > _COL_IDENTITY else ""
-        cust_res = str(row[_COL_CUSTOMER_RES]).strip().upper()[:1] if len(row) > _COL_CUSTOMER_RES else ""
+        # Parse Y/N columns.
+        # The DataFrame uses fixed column names that downstream compute_*
+        # functions and the API response depend on. Config provides the
+        # column indices; the DataFrame column names are the internal contract.
+        _YN_DF_NAMES = {
+            "identity_validation": "identity_validation",
+            "customer_resolution_indicator": "customer_resolution",
+        }
+        yn_scores = {}
+        for yn_name, yn_idx in ah_config.yn_columns.items():
+            val = str(row[yn_idx]).strip().upper()[:1] if len(row) > yn_idx else ""
+            df_col = _YN_DF_NAMES.get(yn_name, yn_name)
+            yn_scores[df_col] = val
 
-        manager = str(row[_COL_MANAGER]).strip().lower() if len(row) > _COL_MANAGER else ""
-        dialpad_link = str(row[_COL_DIALPAD_LINK]).strip() if len(row) > _COL_DIALPAD_LINK else ""
+        manager = str(row[ah_config.col_manager_email]).strip().lower() if len(row) > ah_config.col_manager_email else ""
+        dialpad_link = str(row[ah_config.col_dialpad_link]).strip() if len(row) > ah_config.col_dialpad_link else ""
 
         # Extract eval_id from dialpad link (strip query params + [LONG CALL] suffix)
         eval_id = ""
@@ -164,8 +148,7 @@ def load_and_clean(
             "timestamp": ts,
             "overall_score": overall,
             **section_scores,
-            "identity_validation": id_val,
-            "customer_resolution": cust_res,
+            **yn_scores,
             "manager_email": manager,
             "is_active": agent.lower() in active_set,
             "supervisor": supervisor_map.get(agent.lower(), ""),
@@ -276,7 +259,7 @@ def compute_ewma(
 # ---------------------------------------------------------------------------
 
 def compute_monthly_spc(df: pd.DataFrame) -> dict:
-    """Monthly team average with Shewhart-style ±2σ control limits."""
+    """Monthly team average with Shewhart-style +/-2sigma control limits."""
     if df.empty:
         return {"months": [], "ucl": 0, "lcl": 0, "center": 0}
 
@@ -313,14 +296,18 @@ def compute_monthly_spc(df: pd.DataFrame) -> dict:
 # compute_section_analysis
 # ---------------------------------------------------------------------------
 
-def compute_section_analysis(df: pd.DataFrame) -> dict:
+def compute_section_analysis(
+    df: pd.DataFrame,
+    numeric_sections: list[str],
+    section_labels: dict[str, str],
+) -> dict:
     """Team section stats + per-agent weakness detection."""
     if df.empty:
         return {"team_means": {}, "team_stds": {}, "training_opportunities": []}
 
     team_means = {}
     team_stds = {}
-    for sec in NUMERIC_SECTIONS:
+    for sec in numeric_sections:
         if sec in df.columns:
             vals = df[sec].dropna()
             team_means[sec] = round(float(vals.mean()), 2) if len(vals) > 0 else 0
@@ -329,7 +316,7 @@ def compute_section_analysis(df: pd.DataFrame) -> dict:
     # Per-agent weakness detection
     opportunities = []
     for agent, group in df.groupby("agent"):
-        for sec in NUMERIC_SECTIONS:
+        for sec in numeric_sections:
             if sec not in df.columns:
                 continue
             agent_vals = group[sec].dropna()
@@ -347,7 +334,7 @@ def compute_section_analysis(df: pd.DataFrame) -> dict:
                     priority = "low"
                 opportunities.append({
                     "agent": agent,
-                    "section": SECTION_LABELS.get(sec, sec),
+                    "section": section_labels.get(sec, sec),
                     "agent_avg": round(agent_avg, 2),
                     "team_avg": round(t_avg, 2),
                     "gap": round(gap, 2),
@@ -358,8 +345,8 @@ def compute_section_analysis(df: pd.DataFrame) -> dict:
     opportunities.sort(key=lambda x: x["gap"], reverse=True)
 
     return {
-        "team_means": {SECTION_LABELS.get(k, k): v for k, v in team_means.items()},
-        "team_stds": {SECTION_LABELS.get(k, k): v for k, v in team_stds.items()},
+        "team_means": {section_labels.get(k, k): v for k, v in team_means.items()},
+        "team_stds": {section_labels.get(k, k): v for k, v in team_stds.items()},
         "training_opportunities": opportunities,
     }
 
@@ -451,14 +438,18 @@ def _compute_binary_pct(series: pd.Series) -> float:
 # compute_agent_roster
 # ---------------------------------------------------------------------------
 
-def compute_agent_roster(df: pd.DataFrame) -> list[dict]:
+def compute_agent_roster(
+    df: pd.DataFrame,
+    numeric_sections: list[str],
+    section_labels: dict[str, str],
+) -> list[dict]:
     """Summary row per agent for the roster table."""
     if df.empty:
         return []
 
     # Pre-compute team means for weakness detection
     team_means = {}
-    for sec in NUMERIC_SECTIONS:
+    for sec in numeric_sections:
         if sec in df.columns:
             vals = df[sec].dropna()
             team_means[sec] = float(vals.mean()) if len(vals) > 0 else 0
@@ -496,7 +487,7 @@ def compute_agent_roster(df: pd.DataFrame) -> list[dict]:
 
         # Weak sections
         weak = []
-        for sec in NUMERIC_SECTIONS:
+        for sec in numeric_sections:
             if sec not in df.columns:
                 continue
             agent_vals = group[sec].dropna()
@@ -504,7 +495,7 @@ def compute_agent_roster(df: pd.DataFrame) -> list[dict]:
                 continue
             agent_avg = float(agent_vals.mean())
             if team_means.get(sec, 0) - agent_avg > 0.5:
-                weak.append(SECTION_LABELS.get(sec, sec))
+                weak.append(section_labels.get(sec, sec))
 
         is_active = bool(group["is_active"].iloc[0]) if "is_active" in group.columns else False
         supervisor = group["supervisor"].iloc[0] if "supervisor" in group.columns else ""
