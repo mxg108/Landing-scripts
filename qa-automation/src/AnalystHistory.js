@@ -136,6 +136,8 @@ class AnalystHistory {
       'Call Summary',                    // AL
       'Caller Name',                     // AM
       'Caller Phone',                    // AN
+      'Documentation Confidence',        // AO
+      'Documentation Reasoning',         // AP
     ];
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
     sheet.getRange(1, 1, 1, headers.length)
@@ -211,6 +213,8 @@ class AnalystHistory {
         (matchedRow[FAC.CALL_SUMMARY] || '').toString(),            // AL
         (matchedRow[FAC.CALLER_NAME] || '').toString(),             // AM
         (matchedRow[FAC.CALLER_PHONE] || '').toString(),            // AN
+        'manual',                                                   // AO: Documentation Confidence
+        (matchedRow[FAC.DOC_REASONING] || '').toString(),           // AP: Documentation Reasoning
       ];
 
       // Write to Analyst_History cols Q-AN (columns 17-40 in 1-indexed)

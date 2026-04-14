@@ -157,7 +157,7 @@
     }
     .section-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      grid-template-columns: repeat(2, 1fr);
       gap: 16px;
     }
     .section-card {
@@ -185,8 +185,9 @@
       color: #fff;
     }
     .trend-badge.improving { background: var(--green); }
-    .trend-badge.stable { background: var(--amber); }
+    .trend-badge.stable { background: #6ba87b; }
     .trend-badge.declining { background: var(--red); }
+    .trend-badge.fluctuating { background: var(--amber); }
     .section-card .summary {
       font-size: 0.82rem;
       color: var(--muted);

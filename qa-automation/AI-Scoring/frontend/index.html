@@ -798,7 +798,9 @@
       <div class="section-row" style="border-left:3px solid var(--amber);">
         <div>
           <div class="section-name" style="color:var(--amber);">Documentation — Score Required</div>
-          <div class="section-reasoning" style="color:var(--amber);">Select a score to enable Approve & Send.</div>
+          <textarea class="section-reasoning" id="doc-reasoning-${jobId}"
+            placeholder="Enter reasoning for Documentation score (persisted for progression analysis)"
+            rows="2" style="width:100%; margin-top:0.4rem; font-family:'DM Mono',monospace; font-size:0.82rem; border:1px solid #d1d5db; border-radius:4px; padding:0.4rem; resize:vertical;"></textarea>
         </div>
         <div>
           <select class="score-select" id="doc-score-${jobId}" onchange="checkDocScore('${jobId}')">
@@ -918,8 +920,9 @@
       };
     });
 
-    // Add Documentation score (manual, not in AI sections)
+    // Add Documentation score + reasoning (manual, not in AI sections)
     const docScore = parseInt(document.getElementById(`doc-score-${jobId}`).value);
+    const docReasoning = (document.getElementById(`doc-reasoning-${jobId}`).value || '').trim();
     sections.push({
       id: 'documentation',
       name: 'Documentation',
@@ -927,7 +930,7 @@
       score_type: 'numeric',
       yn_value: null,
       confidence: 'manual',
-      reasoning: 'Scored manually by manager.',
+      reasoning: docReasoning || 'Scored manually by manager.',
       audio_dependent: false,
       flags: [],
     });

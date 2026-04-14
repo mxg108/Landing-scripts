@@ -138,6 +138,11 @@ def append_scorecard_row(scorecard: ScorecardWithMeta, config: TeamConfig) -> in
     row.append(scorecard.caller_name or "")                          # AK: Caller Name
     row.append(scorecard.caller_phone or "")                         # AL: Caller Phone
 
+    # Append Documentation reasoning (after caller metadata, avoids shifting)
+    if fai.doc_reasoning_col:
+        doc = sections_by_id.get("documentation", {})
+        row.append(doc.get("reasoning", ""))                         # AM: Documentation reasoning
+
     result = sheet.append_row(row, value_input_option="USER_ENTERED")
     # Extract the row number from the update response
     updated_range = result.get("updates", {}).get("updatedRange", "")
@@ -189,6 +194,20 @@ def update_scorecard_reasoning(
         value_input_option="USER_ENTERED",
     )
     print("[sheets] update_reasoning: Q-AI done.")
+
+    # --- Documentation reasoning (col AM, after caller metadata) ---
+    doc_col = fai.doc_reasoning_col
+    if doc_col:
+        doc = sections_by_id.get("documentation", {})
+        doc_reasoning = doc.get("reasoning", "")
+        if doc_reasoning:
+            print(f"[sheets] update_reasoning: writing {doc_col} at row {row_num}...")
+            sheet.update(
+                f"{doc_col}{row_num}:{doc_col}{row_num}",
+                [[doc_reasoning]],
+                value_input_option="USER_ENTERED",
+            )
+            print(f"[sheets] update_reasoning: {doc_col} done.")
 
 
 def write_approved_to_form_responses_1(

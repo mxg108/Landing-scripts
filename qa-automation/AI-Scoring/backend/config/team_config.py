@@ -40,6 +40,7 @@ class FormResponsesAIConfig(BaseModel):
     scored_section_columns: dict[str, str]   # col letter -> section id (D-K, M)
     reasoning_start_col: str                 # first reasoning column (Q is source, R starts pairs)
     caller_metadata_cols: dict[str, str]     # field -> col letter (AJ-AL)
+    doc_reasoning_col: str = ""              # column for manual Documentation reasoning (after metadata)
 
 
 class AnalystHistoryConfig(BaseModel):
@@ -142,12 +143,22 @@ class TeamConfig(BaseModel):
         return {s.history_id: s.name for s in self.numeric_sections}
 
     @property
+    def progression_sections(self) -> list[SectionDef]:
+        """All sections included in progression assessments.
+
+        Includes manual sections (like Documentation) so Gemini can
+        analyze score trends even for sections it doesn't score itself.
+        """
+        return list(self.sections)
+
+    @property
     def section_name_to_history_id(self) -> dict[str, str]:
-        """Display name -> history_id for AI-scored sections.
+        """Display name -> history_id for all scored sections.
 
         Replaces progression_service._SECTION_NAME_TO_KEY.
+        Includes manual sections so progression response keys resolve.
         """
-        return {s.name: s.history_id for s in self.ai_scored_sections}
+        return {s.name: s.history_id for s in self.sections}
 
     @property
     def scoring_id_to_section(self) -> dict[str, SectionDef]:

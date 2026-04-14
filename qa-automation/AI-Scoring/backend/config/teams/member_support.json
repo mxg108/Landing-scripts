@@ -49,7 +49,8 @@
         "call_summary": "AJ",
         "caller_name": "AK",
         "caller_phone": "AL"
-      }
+      },
+      "doc_reasoning_col": "AM"
     },
     "analyst_history": {
       "tab_name_default": "Analyst_History",
@@ -85,7 +86,8 @@
         "call_resolution": [29, 30],
         "communication": [31, 32],
         "efficiency": [33, 34],
-        "customer_resolution_indicator": [35, 36]
+        "customer_resolution_indicator": [35, 36],
+        "documentation": [40, 41]
       },
       "col_call_summary": 37,
       "col_caller_name": 38,

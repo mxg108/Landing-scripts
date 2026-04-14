@@ -132,6 +132,8 @@ const CONFIG = {
     CALL_SUMMARY:       37,  // AL
     CALLER_NAME:        38,  // AM
     CALLER_PHONE:       39,  // AN
+    DOC_CONF:           40,  // AO
+    DOC_REASON:         41,  // AP
   },
 
   // ── Form Responses AI extended columns (0-based) ──────────────────
@@ -159,5 +161,6 @@ const CONFIG = {
     CALL_SUMMARY:       35,  // AJ
     CALLER_NAME:        36,  // AK
     CALLER_PHONE:       37,  // AL
+    DOC_REASONING:      38,  // AM
   },
 };
