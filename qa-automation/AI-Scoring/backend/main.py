@@ -16,6 +16,7 @@ from backend.routes.scoring import router
 from backend.routes.dashboard import router as dashboard_router
 from backend.routes.team import router as team_router
 from backend.routes.datapoints import router as datapoints_router
+from backend.routes.lookup import router as lookup_router
 from backend.middleware.auth import AUTH_DEPENDENCY
 from backend.middleware.audit import AuditLogMiddleware
 
@@ -43,6 +44,7 @@ app.include_router(router, dependencies=AUTH_DEPENDENCY)
 app.include_router(dashboard_router, dependencies=AUTH_DEPENDENCY)
 app.include_router(team_router, dependencies=AUTH_DEPENDENCY)
 app.include_router(datapoints_router, dependencies=AUTH_DEPENDENCY)
+app.include_router(lookup_router, dependencies=AUTH_DEPENDENCY)
 
 
 @app.get("/api/health")
@@ -66,6 +68,11 @@ async def serve_agent_dashboard(name: str):
 @app.get("/datapoint/{call_id}", include_in_schema=False)
 async def serve_datapoint_page(call_id: str):
     return FileResponse(_frontend_dir / "datapoint.html")
+
+
+@app.get("/lookup", include_in_schema=False)
+async def serve_lookup_page():
+    return FileResponse(_frontend_dir / "lookup.html")
 
 
 @app.get("/dashboard", include_in_schema=False)
