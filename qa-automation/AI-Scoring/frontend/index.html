@@ -484,7 +484,7 @@
       <h1>Landing QA Scoring</h1>
       <p>AI-assisted call evaluation — Phase 1. Human review required before scores reach agents.</p>
     </div>
-    <a href="/dashboard" style="font-family:'DM Mono',monospace;font-size:0.82rem;padding:8px 16px;border:1px solid rgba(255,255,255,0.3);border-radius:6px;color:#fff;text-decoration:none;transition:background 0.2s;">Team Dashboard</a>
+    <a id="team-dashboard-link" href="/dashboard/member_support" style="font-family:'DM Mono',monospace;font-size:0.82rem;padding:8px 16px;border:1px solid rgba(255,255,255,0.3);border-radius:6px;color:#fff;text-decoration:none;transition:background 0.2s;">Team Dashboard</a>
   </div>
 </header>
 
@@ -531,7 +531,14 @@
 </div>
 
 <script>
-  // --- Auth ---
+  // --- Team + Auth ---
+  const TEAM_ID = (location.pathname.match(/^\/score\/([^\/]+)/) || [, 'member_support'])[1];
+  const API_BASE = `/api/${TEAM_ID}`;
+  document.addEventListener('DOMContentLoaded', () => {
+    const dashLink = document.getElementById('team-dashboard-link');
+    if (dashLink) dashLink.href = `/dashboard/${TEAM_ID}`;
+  });
+
   function getApiKey() {
     let key = sessionStorage.getItem('qa_api_key');
     if (!key) {
@@ -549,7 +556,7 @@
   async function loadAgentDropdown() {
     const select = document.getElementById('agent-name');
     try {
-      const res = await fetch('/api/team/mails', { headers: authHeaders() });
+      const res = await fetch(`${API_BASE}/team/mails`, { headers: authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const mails = await res.json();
       const names = mails.map(m => m.agent_name).sort();
@@ -644,7 +651,7 @@
       formData.append('agent_name', agentName);
       formData.append('manager_email', managerEmail);
 
-      const res = await fetch('/api/score', { method: 'POST', body: formData, headers: authHeaders() });
+      const res = await fetch(`${API_BASE}/score`, { method: 'POST', body: formData, headers: authHeaders() });
       if (res.status === 401) {
         sessionStorage.removeItem('qa_api_key');
         alert('Invalid API key. Please reload and try again.');
@@ -683,7 +690,7 @@
     const interval = setInterval(async () => {
       let allDone = true;
       for (const { jobId, filename, callId } of jobs) {
-        const res = await fetch(`/api/score/${jobId}`, { headers: authHeaders() });
+        const res = await fetch(`${API_BASE}/score/${jobId}`, { headers: authHeaders() });
         const data = await res.json();
         updateJobRow(jobId, filename, callId, data);
         if (!['complete', 'approved', 'error'].includes(data.status)) allDone = false;
@@ -942,7 +949,7 @@
     };
 
     try {
-      const res = await fetch(`/api/score/${jobId}/approve`, {
+      const res = await fetch(`${API_BASE}/score/${jobId}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify(payload),

@@ -2,18 +2,20 @@
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
+from backend.middleware.auth import team_id_from_path
 from backend.models.dashboard import EvaluationRecord
 from backend.services.data_provider import get_provider
 
-router = APIRouter(prefix="/api", tags=["datapoints"])
+router = APIRouter(tags=["datapoints"])
 
 
 @router.get("/datapoints/{call_id}", response_model=EvaluationRecord)
-async def get_datapoint(call_id: str):
+async def get_datapoint(request: Request, call_id: str):
     """Return a single evaluation record by call_id (extracted from Dialpad link)."""
-    provider = await get_provider()
+    team_id = team_id_from_path(request)
+    provider = await get_provider(team_id)
     all_records = await provider.get_all_history(days=365)
 
     for rec in all_records:
@@ -41,6 +43,7 @@ async def get_datapoint(call_id: str):
 
 @router.get("/datapoints", response_model=list[EvaluationRecord])
 async def list_datapoints(
+    request: Request,
     bin: Optional[str] = Query(default=None, description="Score range, e.g. '81-90'"),
     agent: Optional[str] = Query(default=None),
     days: int = Query(default=90, ge=1, le=365),
@@ -54,7 +57,8 @@ async def list_datapoints(
     if not bin and not agent:
         raise HTTPException(400, "Provide 'bin' (e.g. '81-90') or 'agent' query parameter")
 
-    provider = await get_provider()
+    team_id = team_id_from_path(request)
+    provider = await get_provider(team_id)
 
     if agent:
         records = await provider.get_agent_history(agent, days)

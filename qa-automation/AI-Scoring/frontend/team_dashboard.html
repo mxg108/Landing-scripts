@@ -120,7 +120,7 @@
 
 <div class="header">
   <div style="display:flex;align-items:center;gap:16px;">
-    <a href="/" style="font-family:'DM Mono',monospace;font-size:0.82rem;padding:6px 14px;border:1px solid rgba(255,255,255,0.3);border-radius:6px;color:#fff;text-decoration:none;transition:background 0.2s;">Scoring</a>
+    <a id="scoring-link" href="/score/member_support" style="font-family:'DM Mono',monospace;font-size:0.82rem;padding:6px 14px;border:1px solid rgba(255,255,255,0.3);border-radius:6px;color:#fff;text-decoration:none;transition:background 0.2s;">Scoring</a>
     <h1>Team Analytics Dashboard</h1>
   </div>
   <div class="header-controls">
@@ -228,7 +228,12 @@ function authHeaders() {
   return key ? { 'Authorization': 'Bearer ' + key } : {};
 }
 
-const API_BASE = window.location.origin;
+const TEAM_ID = (location.pathname.match(/^\/dashboard\/([^\/]+)/) || [, 'member_support'])[1];
+const API_BASE = `${window.location.origin}/api/${TEAM_ID}`;
+document.addEventListener('DOMContentLoaded', () => {
+  const scoringLink = document.getElementById('scoring-link');
+  if (scoringLink) scoringLink.href = `/score/${TEAM_ID}`;
+});
 let selectedDays = 90;
 let activeOnly = true;
 let selectedSupervisor = '';
@@ -245,7 +250,7 @@ async function fetchTeamStats() {
   const params = new URLSearchParams({ days: selectedDays, active_only: activeOnly });
   if (selectedSupervisor) params.set('supervisor', selectedSupervisor);
   try {
-    const r = await fetch(`${API_BASE}/api/team/stats?${params}`, { headers: authHeaders() });
+    const r = await fetch(`${API_BASE}/team/stats?${params}`, { headers: authHeaders() });
     if (r.status === 401) {
       sessionStorage.removeItem('qa_api_key');
       alert('Invalid API key. Please reload and try again.');
@@ -261,7 +266,7 @@ async function fetchTeamStats() {
 
 async function fetchMails() {
   try {
-    const r = await fetch(`${API_BASE}/api/team/mails`, { headers: authHeaders() });
+    const r = await fetch(`${API_BASE}/team/mails`, { headers: authHeaders() });
     if (r.status === 401) {
       sessionStorage.removeItem('qa_api_key');
       alert('Invalid API key. Please reload and try again.');
@@ -483,10 +488,10 @@ function renderDistDrillTable() {
         <th style="${thStyle}">Call</th>
       </tr>
       ${sorted.map(e => `<tr style="border-bottom:1px solid var(--border);">
-        <td style="padding:6px;"><a href="/dashboard/agent/${encodeURIComponent(e.agent_name)}">${e.agent_name}</a></td>
+        <td style="padding:6px;"><a href="/dashboard/${TEAM_ID}/agent/${encodeURIComponent(e.agent_name)}">${e.agent_name}</a></td>
         <td style="padding:6px;text-align:center;">${new Date(e.timestamp).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</td>
         <td style="padding:6px;text-align:center;color:${e.overall_score>=85?'var(--green)':e.overall_score>=70?'var(--amber)':'var(--red)'};font-weight:500;">${e.overall_score.toFixed(1)}</td>
-        <td style="padding:6px;text-align:center;">${e.eval_id ? `<a href="/datapoint/${e.eval_id}">View</a>` : ''}</td>
+        <td style="padding:6px;text-align:center;">${e.eval_id ? `<a href="/datapoint/${TEAM_ID}/${e.eval_id}">View</a>` : ''}</td>
       </tr>`).join('')}
     </table>`;
 }
@@ -507,7 +512,7 @@ async function loadDistDrillDown(bin) {
   drillEl.innerHTML = `<p style="color:var(--muted);font-size:0.8rem;padding:10px 6px;">Loading evaluations in ${bin}...</p>`;
 
   try {
-    const r = await fetch(`${API_BASE}/api/datapoints?bin=${bin}&days=${selectedDays}&active_only=${activeOnly}`, { headers: authHeaders() });
+    const r = await fetch(`${API_BASE}/datapoints?bin=${bin}&days=${selectedDays}&active_only=${activeOnly}`, { headers: authHeaders() });
     if (!r.ok) { drillEl.innerHTML = `<p style="color:var(--red);font-size:0.8rem;padding:8px;">Failed to load.</p>`; return; }
     _distDrillData = await r.json();
     if (!_distDrillData.length) { drillEl.innerHTML = `<p style="color:var(--muted);font-size:0.8rem;padding:10px 6px;">No evaluations in ${bin}.</p>`; return; }
@@ -538,7 +543,7 @@ function renderRoster() {
 
 function fillRoster(data) {
   document.querySelector('#rosterTable tbody').innerHTML = data.map(r => `<tr>
-    <td><a href="/dashboard/agent/${encodeURIComponent(r.agent)}">${escapeHtml(r.agent)}</a></td>
+    <td><a href="/dashboard/${TEAM_ID}/agent/${encodeURIComponent(r.agent)}">${escapeHtml(r.agent)}</a></td>
     <td>${r.n ?? ''}</td><td style="color:${scoreColor(r.mean)}">${fmt(r.mean)}</td><td>${fmt(r.std)}</td>
     <td style="color:${scoreColor(r.ewma)}">${fmt(r.ewma)}</td><td>${trendHtml(r.trend)}</td>
     <td>${pctFmt(r.id_val_pct)}</td><td>${pctFmt(r.cust_res_pct)}</td>
@@ -555,8 +560,8 @@ function renderOutliers() {
 
 function fillOutliers(data) {
   document.querySelector('#outliersTable tbody').innerHTML = data.map(o => `<tr>
-    <td><a href="/dashboard/agent/${encodeURIComponent(o.agent)}">${escapeHtml(o.agent)}</a></td>
-    <td>${o.date || ''}</td><td>${o.eval_id ? `<a href="/datapoint/${o.eval_id}" style="color:${scoreColor(o.score)};font-weight:500;">${fmt(o.score, 0)}</a>` : `<span style="color:${scoreColor(o.score)}">${fmt(o.score, 0)}</span>`}</td>
+    <td><a href="/dashboard/${TEAM_ID}/agent/${encodeURIComponent(o.agent)}">${escapeHtml(o.agent)}</a></td>
+    <td>${o.date || ''}</td><td>${o.eval_id ? `<a href="/datapoint/${TEAM_ID}/${o.eval_id}" style="color:${scoreColor(o.score)};font-weight:500;">${fmt(o.score, 0)}</a>` : `<span style="color:${scoreColor(o.score)}">${fmt(o.score, 0)}</span>`}</td>
     <td>${fmt(o.agent_median)}</td><td>${fmt(o.modified_z, 2)}</td>
     <td><span class="badge badge-${o.classification}">${o.classification}</span></td>
   </tr>`).join('');

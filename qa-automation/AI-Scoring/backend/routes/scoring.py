@@ -1,14 +1,19 @@
-"""FastAPI routes for the QA scoring pipeline."""
+"""FastAPI routes for the QA scoring pipeline.
+
+Registered twice in main.py:
+  - /api/{team_id}/...  (team-aware, TEAM_AUTH_DEPENDENCY)
+  - /api/...            (legacy shim, resolves team_id='member_support')
+"""
 
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
+from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Form
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile, File, Form
 
 from backend.config.team_config import get_team_config
+from backend.middleware.auth import team_id_from_path
 from backend.models.scorecard import ApprovalRequest
 from backend.services.scoring_service import score_call
 from backend.services.sheets_service import (
@@ -18,12 +23,20 @@ from backend.services.sheets_service import (
     trigger_apps_script,
 )
 from backend.services.dialpad_client import get_user_id_by_name, get_calls_for_agent
-from datetime import datetime
 
-router = APIRouter(prefix="/api", tags=["scoring"])
+router = APIRouter(tags=["scoring"])
 
-# In-memory job store (replace with DB in Phase 2)
+# In-memory job store. Keyed by f"{team_id}:{job_id}" so jobs from one team
+# cannot be read by another.
 _jobs: dict[str, dict] = {}
+
+
+def _job_key(team_id: str, job_id: str) -> str:
+    return f"{team_id}:{job_id}"
+
+
+def _make_job_id(call_id: str, agent_name: str) -> str:
+    return f"{call_id}_{agent_name}".replace(" ", "_")
 
 
 @router.get("/calls")
@@ -66,6 +79,7 @@ async def list_calls(agent_name: str, date_start: str, date_end: str):
 
 @router.post("/score")
 async def score_single_call(
+    request: Request,
     background_tasks: BackgroundTasks,
     audio_file: UploadFile = File(...),
     call_id: str = Form(...),
@@ -79,14 +93,16 @@ async def score_single_call(
     Runs scoring in background and writes result to Google Sheets.
     Returns a job_id to poll for status.
     """
+    team_id = team_id_from_path(request)
     audio_bytes = await audio_file.read()
-    job_id = f"{call_id}_{agent_name}".replace(" ", "_")
-    _jobs[job_id] = {"status": "pending", "call_id": call_id}
-    config = get_team_config()
+    job_id = _make_job_id(call_id, agent_name)
+    key = _job_key(team_id, job_id)
+    _jobs[key] = {"status": "pending", "call_id": call_id}
+    config = get_team_config(team_id)
 
     async def run():
         try:
-            _jobs[job_id]["status"] = "scoring"
+            _jobs[key]["status"] = "scoring"
             scorecard = await score_call(
                 audio_bytes=audio_bytes,
                 filename=audio_file.filename,
@@ -97,21 +113,22 @@ async def score_single_call(
                 duration_ms=duration_ms,
             )
             row_num = append_scorecard_row(scorecard, config)
-            _jobs[job_id]["status"] = "complete"
-            _jobs[job_id]["sheets_row"] = row_num
-            _jobs[job_id]["scorecard"] = scorecard.model_dump()
+            _jobs[key]["status"] = "complete"
+            _jobs[key]["sheets_row"] = row_num
+            _jobs[key]["scorecard"] = scorecard.model_dump()
         except Exception as e:
-            _jobs[job_id]["status"] = "error"
-            _jobs[job_id]["error"] = str(e)
+            _jobs[key]["status"] = "error"
+            _jobs[key]["error"] = str(e)
 
     background_tasks.add_task(run)
     return {"job_id": job_id, "status": "pending"}
 
 
 @router.get("/score/{job_id}")
-async def get_score_result(job_id: str):
+async def get_score_result(request: Request, job_id: str):
     """Poll for the result of a scoring job."""
-    job = _jobs.get(job_id)
+    team_id = team_id_from_path(request)
+    job = _jobs.get(_job_key(team_id, job_id))
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
@@ -119,6 +136,7 @@ async def get_score_result(job_id: str):
 
 @router.post("/score/batch")
 async def score_batch(
+    request: Request,
     background_tasks: BackgroundTasks,
     audio_files: list[UploadFile] = File(...),
     call_ids: str = Form(...),        # comma-separated, matching order of audio_files
@@ -130,6 +148,7 @@ async def score_batch(
     Score multiple calls in one submission.
     audio_files and call_ids must be in the same order.
     """
+    team_id = team_id_from_path(request)
     id_list = [cid.strip() for cid in call_ids.split(",")]
     dur_list = [float(d.strip()) if d.strip() else 0 for d in durations_ms.split(",")] if durations_ms else []
 
@@ -139,18 +158,19 @@ async def score_batch(
             detail=f"Mismatch: {len(audio_files)} files vs {len(id_list)} call IDs"
         )
 
-    config = get_team_config()
+    config = get_team_config(team_id)
     job_ids = []
     for i, (audio_file, call_id) in enumerate(zip(audio_files, id_list)):
         audio_bytes = await audio_file.read()
         duration = dur_list[i] if i < len(dur_list) else 0
-        job_id = f"{call_id}_{agent_name}".replace(" ", "_")
-        _jobs[job_id] = {"status": "pending", "call_id": call_id}
+        job_id = _make_job_id(call_id, agent_name)
+        key = _job_key(team_id, job_id)
+        _jobs[key] = {"status": "pending", "call_id": call_id}
         job_ids.append(job_id)
 
-        async def run(ab=audio_bytes, fn=audio_file.filename, cid=call_id, jid=job_id, dur=duration):
+        async def run(ab=audio_bytes, fn=audio_file.filename, cid=call_id, k=key, dur=duration):
             try:
-                _jobs[jid]["status"] = "scoring"
+                _jobs[k]["status"] = "scoring"
                 scorecard = await score_call(
                     audio_bytes=ab,
                     filename=fn,
@@ -161,12 +181,12 @@ async def score_batch(
                     duration_ms=dur,
                 )
                 row_num = append_scorecard_row(scorecard, config)
-                _jobs[jid]["status"] = "complete"
-                _jobs[jid]["sheets_row"] = row_num
-                _jobs[jid]["scorecard"] = scorecard.model_dump()
+                _jobs[k]["status"] = "complete"
+                _jobs[k]["sheets_row"] = row_num
+                _jobs[k]["scorecard"] = scorecard.model_dump()
             except Exception as e:
-                _jobs[jid]["status"] = "error"
-                _jobs[jid]["error"] = str(e)
+                _jobs[k]["status"] = "error"
+                _jobs[k]["error"] = str(e)
 
         background_tasks.add_task(run)
 
@@ -174,13 +194,15 @@ async def score_batch(
 
 
 @router.post("/score/{job_id}/approve")
-async def approve_scorecard(job_id: str, approval: ApprovalRequest):
+async def approve_scorecard(request: Request, job_id: str, approval: ApprovalRequest):
     """
     Manager approves a scored call (optionally with edits).
     Updates Form Responses AI, copies to Form Responses 1,
     waits for ARRAYFORMULA, then triggers Apps Script email pipeline.
     """
-    job = _jobs.get(job_id)
+    team_id = team_id_from_path(request)
+    key = _job_key(team_id, job_id)
+    job = _jobs.get(key)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     if job["status"] == "approved":
@@ -199,7 +221,7 @@ async def approve_scorecard(job_id: str, approval: ApprovalRequest):
         )
 
     job["status"] = "approving"
-    config = get_team_config()
+    config = get_team_config(team_id)
 
     try:
         sections_dicts = [s.model_dump() for s in approval.sections]
@@ -238,7 +260,7 @@ async def approve_scorecard(job_id: str, approval: ApprovalRequest):
 
         # 4. Trigger Apps Script email pipeline
         print(f"[approve] Step 4: triggering Apps Script doPost for row {form_1_row}...")
-        script_response = trigger_apps_script(form_1_row)
+        script_response = trigger_apps_script(form_1_row, config.team_id)
         print(f"[approve] Step 4 complete: {script_response}")
 
         # 5. Mark as approved

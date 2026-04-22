@@ -14,6 +14,7 @@ import time as _time
 import gspread
 from google.oauth2.service_account import Credentials
 
+from backend.config.env import env_for_team
 from backend.models.dashboard import EvaluationRecord, SectionScore
 from backend.services.data_provider import DataProvider
 
@@ -124,8 +125,16 @@ class SheetsProvider(DataProvider):
             creds = Credentials.from_service_account_file(creds_env, scopes=_SCOPES)
 
         self._gc = gspread.authorize(creds)
-        sheet_id = os.environ["GOOGLE_SHEETS_ID"]
-        tab_name = os.environ.get("GOOGLE_HISTORY_TAB", self._ah.tab_name_default)
+        sheet_id = env_for_team("GOOGLE_SHEETS_ID", config.team_id, legacy_ok=True)
+        if not sheet_id:
+            raise RuntimeError(
+                f"GOOGLE_SHEETS_ID (or GOOGLE_SHEETS_ID_{config.team_id.upper()}) not set"
+            )
+        self._sheet_id = sheet_id
+        tab_name = (
+            env_for_team("GOOGLE_HISTORY_TAB", config.team_id, legacy_ok=True)
+            or self._ah.tab_name_default
+        )
         self._ws = self._gc.open_by_key(sheet_id).worksheet(tab_name)
 
     # ------------------------------------------------------------------
@@ -202,9 +211,17 @@ class SheetsProvider(DataProvider):
         )
 
     # ------------------------------------------------------------------
+    @property
+    def _history_cache_key(self) -> str:
+        return f"{self._config.team_id}:history"
+
+    @property
+    def _mails_cache_key(self) -> str:
+        return f"{self._config.team_id}:mails"
+
     async def list_agents(self) -> list[str]:
         """Return sorted, deduplicated agent names from column A."""
-        cached = _get_cached_raw("history")
+        cached = _get_cached_raw(self._history_cache_key)
         if cached is not None:
             values = [row[0] if row else "" for row in cached]
         else:
@@ -219,12 +236,12 @@ class SheetsProvider(DataProvider):
     ) -> list[EvaluationRecord]:
         """Return evaluations for *agent_name* within the last *days* days."""
         cutoff = datetime.now() - timedelta(days=days)
-        cached = _get_cached_raw("history")
+        cached = _get_cached_raw(self._history_cache_key)
         if cached is not None:
             all_rows = cached
         else:
             all_rows = self._ws.get_all_values()
-            _set_cached_raw("history", all_rows)
+            _set_cached_raw(self._history_cache_key, all_rows)
 
         records: list[EvaluationRecord] = []
         for row in all_rows[1:]:  # skip header
@@ -246,25 +263,25 @@ class SheetsProvider(DataProvider):
     def _get_mails_sheet(self) -> list[list[str]]:
         """Read the Mails tab (agent roster with supervisors and canonical names).
         Returns raw rows including header. Cached for 5 minutes."""
-        cached = _get_cached_raw("mails")
+        cached = _get_cached_raw(self._mails_cache_key)
         if cached is not None:
             return cached
-        mails_ws = self._gc.open_by_key(
-            os.environ.get("GOOGLE_SHEETS_ID", "")
-        ).worksheet(self._config.sheets.mails_tab)
+        mails_ws = self._gc.open_by_key(self._sheet_id).worksheet(
+            self._config.sheets.mails_tab
+        )
         data = mails_ws.get_all_values()
-        _set_cached_raw("mails", data)
+        _set_cached_raw(self._mails_cache_key, data)
         return data
 
     # ------------------------------------------------------------------
     async def get_all_history(self, days: int = 90) -> list[EvaluationRecord]:
         """Return ALL evaluation records within the time window (no agent filter)."""
-        cached = _get_cached_raw("history")
+        cached = _get_cached_raw(self._history_cache_key)
         if cached is not None:
             all_rows = cached
         else:
             all_rows = self._ws.get_all_values()
-            _set_cached_raw("history", all_rows)
+            _set_cached_raw(self._history_cache_key, all_rows)
 
         cutoff = datetime.now() - timedelta(days=days)
         records: list[EvaluationRecord] = []
