@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 import gspread
 from google.oauth2.service_account import Credentials
 
+from backend.config.env import env_for_team
 from backend.models.scorecard import ScorecardWithMeta
 
 if TYPE_CHECKING:
@@ -32,14 +33,15 @@ if TYPE_CHECKING:
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
-def _get_spreadsheet():
-    """Return a fresh gspread Spreadsheet object."""
+def _get_spreadsheet(team_id: str):
+    """Return a fresh gspread Spreadsheet object for *team_id*."""
     creds_env = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
-    sheet_id = os.getenv("GOOGLE_SHEETS_ID")
+    sheet_id = env_for_team("GOOGLE_SHEETS_ID", team_id, legacy_ok=True)
 
     if not creds_env or not sheet_id:
         raise RuntimeError(
-            "GOOGLE_SERVICE_ACCOUNT_JSON and GOOGLE_SHEETS_ID must be set"
+            f"GOOGLE_SERVICE_ACCOUNT_JSON and GOOGLE_SHEETS_ID (or "
+            f"GOOGLE_SHEETS_ID_{team_id.upper()}) must be set"
         )
 
     if creds_env.strip().startswith("{"):
@@ -53,10 +55,21 @@ def _get_spreadsheet():
     return client.open_by_key(sheet_id)
 
 
-def _get_sheet(tab_name: str | None = None):
-    """Return a worksheet from the QA spreadsheet."""
-    tab = tab_name or os.getenv("GOOGLE_SHEETS_TAB", "QA Scores")
-    return _get_spreadsheet().worksheet(tab)
+def _get_sheet(config: TeamConfig, tab_name: str | None = None):
+    """Return the Form Responses AI worksheet for *config*'s team."""
+    tab = (
+        tab_name
+        or env_for_team("GOOGLE_SHEETS_TAB", config.team_id, legacy_ok=True)
+        or config.sheets.form_responses_ai.tab_name_default
+    )
+    return _get_spreadsheet(config.team_id).worksheet(tab)
+
+
+def _sheets_configured(team_id: str) -> bool:
+    """True if the env vars needed to reach *team_id*'s sheet are present."""
+    return bool(os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")) and bool(
+        env_for_team("GOOGLE_SHEETS_ID", team_id, legacy_ok=True)
+    )
 
 
 YN_DISPLAY = {
@@ -80,12 +93,12 @@ def append_scorecard_row(scorecard: ScorecardWithMeta, config: TeamConfig) -> in
     Append one draft row to the QA Google Sheet.
     Returns the row number written, or -1 if Sheets is not configured.
     """
-    if not os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON") or not os.getenv("GOOGLE_SHEETS_ID"):
-        print("[sheets_service] Sheets not configured — skipping write.")
+    if not _sheets_configured(config.team_id):
+        print(f"[sheets_service] Sheets not configured for team '{config.team_id}' — skipping write.")
         return -1
 
     fai = config.sheets.form_responses_ai
-    sheet = _get_sheet()
+    sheet = _get_sheet(config)
 
     # Build section lookup by id
     sections_by_id = {s.id: s.model_dump() for s in scorecard.sections}
@@ -167,7 +180,7 @@ def update_scorecard_reasoning(
     the original AI draft scores are preserved as an audit trail.
     """
     fai = config.sheets.form_responses_ai
-    sheet = _get_sheet()
+    sheet = _get_sheet(config)
     sections_by_id = {s["id"]: s for s in sections}
 
     # --- Feedback columns N-O (needed for Analyst_History enrichment) ---
@@ -226,7 +239,7 @@ def write_approved_to_form_responses_1(
     """
     fai = config.sheets.form_responses_ai
     print("[sheets] write_approved: opening Form Responses 1...")
-    spreadsheet = _get_spreadsheet()
+    spreadsheet = _get_spreadsheet(config.team_id)
     form_1 = spreadsheet.worksheet(config.sheets.form_responses_1_tab)
 
     sections_by_id = {s["id"]: s for s in sections}
@@ -262,15 +275,16 @@ def write_approved_to_form_responses_1(
     return form_1_row
 
 
-def trigger_apps_script(form_1_row_num: int) -> dict:
+def trigger_apps_script(form_1_row_num: int, team_id: str) -> dict:
     """POST to the Apps Script web app to trigger the email pipeline."""
     import httpx
 
-    url = os.getenv("APPS_SCRIPT_WEBAPP_URL", "")
+    url = env_for_team("APPS_SCRIPT_WEBAPP_URL", team_id, legacy_ok=True)
     if not url:
         raise RuntimeError(
-            "APPS_SCRIPT_WEBAPP_URL not set — deploy Main.js as a web app "
-            "and add the URL to .env"
+            f"APPS_SCRIPT_WEBAPP_URL not set for team '{team_id}' — deploy "
+            f"Main.js as a web app and set APPS_SCRIPT_WEBAPP_URL"
+            f"{'' if team_id == 'member_support' else '_' + team_id.upper()}"
         )
 
     response = httpx.post(

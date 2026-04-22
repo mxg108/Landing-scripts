@@ -238,7 +238,7 @@
 <body>
   <div class="header">
     <div style="display:flex;align-items:center;gap:16px;">
-      <a href="/dashboard" style="color:rgba(255,255,255,0.7);text-decoration:none;font-size:0.8rem;border:1px solid rgba(255,255,255,0.3);padding:4px 12px;border-radius:6px;">Team View</a>
+      <a id="team-view-link" href="/dashboard/member_support" style="color:rgba(255,255,255,0.7);text-decoration:none;font-size:0.8rem;border:1px solid rgba(255,255,255,0.3);padding:4px 12px;border-radius:6px;">Team View</a>
       <h1 id="headerTitle">Agent Dashboard</h1>
     </div>
     <div class="header-controls">
@@ -320,7 +320,12 @@
       const key = getApiKey();
       return key ? { 'Authorization': 'Bearer ' + key } : {};
     }
-    const API_BASE = window.location.origin;
+    const TEAM_ID = (location.pathname.match(/^\/dashboard\/([^\/]+)\/agent\//) || [, 'member_support'])[1];
+    const API_BASE = `${window.location.origin}/api/${TEAM_ID}`;
+    document.addEventListener('DOMContentLoaded', () => {
+      const teamLink = document.getElementById('team-view-link');
+      if (teamLink) teamLink.href = `/dashboard/${TEAM_ID}`;
+    });
     let selectedDays = 30;
     let trendChartInstance = null;
     let sectionChartInstance = null;
@@ -387,14 +392,10 @@
       }
     }
 
-    // Extract agent name from URL: /dashboard/agent/{name}
+    // Extract agent name from URL: /dashboard/{team_id}/agent/{name}
     function getAgentFromURL() {
-      const path = window.location.pathname;
-      const prefix = '/dashboard/agent/';
-      if (path.startsWith(prefix)) {
-        return decodeURIComponent(path.substring(prefix.length));
-      }
-      return null;
+      const m = window.location.pathname.match(/^\/dashboard\/[^\/]+\/agent\/(.+)$/);
+      return m ? decodeURIComponent(m[1]) : null;
     }
 
     const currentAgent = getAgentFromURL();
@@ -414,7 +415,7 @@
       document.getElementById('footer').textContent = '';
 
       const history = await fetchJSON(
-        `${API_BASE}/api/agents/${encodeURIComponent(agentName)}/history?days=${selectedDays}`
+        `${API_BASE}/agents/${encodeURIComponent(agentName)}/history?days=${selectedDays}`
       );
 
       if (!history) {
@@ -481,7 +482,7 @@
       btn.textContent = 'Generating...';
 
       const progression = await fetchJSON(
-        `${API_BASE}/api/agents/${encodeURIComponent(currentAgent)}/progression?days=${selectedDays}`
+        `${API_BASE}/agents/${encodeURIComponent(currentAgent)}/progression?days=${selectedDays}`
       );
 
       if (progression) {
@@ -551,7 +552,7 @@
             if (activeElements.length) {
               const idx = activeElements[0].index;
               const rec = history[idx];
-              if (rec.eval_id) window.location.href = `/datapoint/${rec.eval_id}`;
+              if (rec.eval_id) window.location.href = `/datapoint/${TEAM_ID}/${rec.eval_id}`;
             }
           },
           scales: {

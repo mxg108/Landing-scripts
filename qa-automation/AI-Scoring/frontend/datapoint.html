@@ -217,7 +217,7 @@
       <div class="header-meta" id="headerMeta"></div>
     </div>
     <div class="nav-links">
-      <a href="/dashboard">Team View</a>
+      <a id="teamLink" href="/dashboard/member_support">Team View</a>
       <a href="#" id="agentLink">Agent View</a>
     </div>
   </div>
@@ -306,17 +306,19 @@
       return 'score-red';
     }
 
-    // Extract call_id from URL: /datapoint/{call_id}
-    function getCallIdFromURL() {
-      const path = window.location.pathname;
-      const prefix = '/datapoint/';
-      if (path.startsWith(prefix)) {
-        return decodeURIComponent(path.substring(prefix.length));
-      }
-      return null;
+    // Extract team_id and call_id from URL: /datapoint/{team_id}/{call_id}
+    function parseURL() {
+      const m = window.location.pathname.match(/^\/datapoint\/([^\/]+)\/(.+)$/);
+      if (m) return { teamId: m[1], callId: decodeURIComponent(m[2]) };
+      return { teamId: 'member_support', callId: null };
     }
 
-    const callId = getCallIdFromURL();
+    const { teamId: TEAM_ID, callId } = parseURL();
+    const API_BASE = `${window.location.origin}/api/${TEAM_ID}`;
+    document.addEventListener('DOMContentLoaded', () => {
+      const teamLink = document.getElementById('teamLink');
+      if (teamLink) teamLink.href = `/dashboard/${TEAM_ID}`;
+    });
 
     async function loadDataPoint() {
       if (!callId) {
@@ -324,8 +326,7 @@
         return;
       }
 
-      const API_BASE = window.location.origin;
-      const eval_ = await fetchJSON(`${API_BASE}/api/datapoints/${callId}`);
+      const eval_ = await fetchJSON(`${API_BASE}/datapoints/${callId}`);
 
       if (!eval_) {
         document.getElementById('placeholder').textContent = `No evaluation found for call ${callId}.`;
@@ -338,7 +339,7 @@
       document.getElementById('headerTitle').textContent = eval_.agent_name;
       document.getElementById('headerMeta').textContent =
         `Call ${callId}  |  ${new Date(eval_.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}  |  Evaluator: ${eval_.manager_email}`;
-      document.getElementById('agentLink').href = `/dashboard/agent/${encodeURIComponent(eval_.agent_name)}`;
+      document.getElementById('agentLink').href = `/dashboard/${TEAM_ID}/agent/${encodeURIComponent(eval_.agent_name)}`;
 
       // Info grid
       const infoCard = document.getElementById('infoCard');
@@ -414,7 +415,7 @@
       }
 
       // Mini progression history
-      const history = await fetchJSON(`${API_BASE}/api/agents/${encodeURIComponent(eval_.agent_name)}/history?days=90`);
+      const history = await fetchJSON(`${API_BASE}/agents/${encodeURIComponent(eval_.agent_name)}/history?days=90`);
       if (history && history.length > 0) {
         const last5 = history.slice(-5);
         let tbody = '';

@@ -3,7 +3,7 @@
 import os
 import secrets
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 
 
 def _build_key_map() -> dict[str, str]:
@@ -50,4 +50,31 @@ async def require_api_key(authorization: str = Header(None)) -> str:
     raise HTTPException(status_code=401, detail="Invalid API key")
 
 
+async def require_team_access(team_id: str, authorization: str = Header(None)) -> str:
+    """Validate the key *and* enforce it matches the team_id in the URL.
+
+    Binds ``team_id`` automatically from the path param of the route it
+    protects, so a Sales key cannot reach Member Support data (and vice
+    versa).  Returns the resolved team_id.
+    """
+    key_team = await require_api_key(authorization)
+    if key_team != team_id:
+        raise HTTPException(
+            status_code=403,
+            detail=f"API key not authorized for team '{team_id}'",
+        )
+    return team_id
+
+
 AUTH_DEPENDENCY = [Depends(require_api_key)]
+TEAM_AUTH_DEPENDENCY = [Depends(require_team_access)]
+
+
+def team_id_from_path(request: Request) -> str:
+    """Return team_id from the URL path.
+
+    For team-prefixed routes this resolves to the path param.  For legacy
+    routes (no ``{team_id}`` in the path) it defaults to ``member_support``
+    so the single-tenant form keeps working during the 30-day transition.
+    """
+    return request.path_params.get("team_id", "member_support")

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 
 from backend.config.team_config import get_team_config
+from backend.middleware.auth import team_id_from_path
 from backend.models.team_stats import (
     MailsEntry,
     TeamStatsResponse,
@@ -24,18 +25,20 @@ from backend.services.team_stats import (
     load_and_clean,
 )
 
-router = APIRouter(prefix="/api/team", tags=["team"])
+router = APIRouter(prefix="/team", tags=["team"])
 
 
 @router.get("/stats", response_model=TeamStatsResponse)
 async def team_stats(
+    request: Request,
     days: int = Query(default=90, ge=0, le=730),
     active_only: bool = Query(default=True),
     supervisor: str = Query(default=""),
 ):
     """Return all team-level statistical computations in one response."""
-    config = get_team_config()
-    provider = await get_provider()
+    team_id = team_id_from_path(request)
+    config = get_team_config(team_id)
+    provider = await get_provider(team_id)
 
     raw_history = provider._ws.get_all_values()
     raw_mails = provider._get_mails_sheet()
@@ -98,9 +101,10 @@ async def team_stats(
 
 
 @router.get("/mails", response_model=list[MailsEntry])
-async def team_mails():
+async def team_mails(request: Request):
     """Return active analyst roster from Mails sheet."""
-    provider = await get_provider()
+    team_id = team_id_from_path(request)
+    provider = await get_provider(team_id)
     raw_mails = provider._get_mails_sheet()
 
     entries = []
