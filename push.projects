@@ -1,0 +1,15 @@
+# push.projects — registry of Apps Script deployments managed by ./push.sh
+#
+# Format: one tab-separated record per line.
+#   name<TAB>clasp_dir<TAB>live<TAB>description
+#
+#   name         short slug passed to ./push.sh
+#   clasp_dir    directory containing the .clasp.json
+#   live         "yes" (warn loudly before push) or "no"
+#   description  human-readable label shown in the confirmation prompt
+#
+# Lines starting with '#' and blank lines are ignored.
+# Add a row when onboarding a new team or standing up a new script.
+#
+mass-notifications	mass-notifications/src	no	Mass Notifications
+qa-automation	qa-automation	yes	QA Automation — Member Support

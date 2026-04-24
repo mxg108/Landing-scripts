@@ -2,61 +2,179 @@
 # =============================================================================
 # push.sh — Safe deployment wrapper for Landing Scripts
 #
-# Usage:  ./push.sh [mass-notifications | qa-automation]
+# Usage:  ./push.sh <project> [--dry-run]
+#         ./push.sh --list
 #
-# Prevents accidentally pushing to the wrong Google Apps Script project by
-# showing the target Script ID and requiring explicit confirmation before
-# calling `clasp push`.
+# Projects are registered in ./push.projects (tab-separated).  The wrapper
+# shows the target Script ID, current branch/commit, and working-tree state
+# before requiring explicit "yes" confirmation.  Successful pushes are
+# appended to ./.push-log for local auditability.
 #
-# ⚠️  qa-automation is LIVE — its warning is intentionally louder.
+# ⚠️  Projects flagged `live` in push.projects get a louder warning.
 # =============================================================================
 
 set -euo pipefail
 
-SCRIPT="${1:-}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MANIFEST="$REPO_ROOT/push.projects"
+LOG_FILE="$REPO_ROOT/.push-log"
 
-# ── Usage guard ───────────────────────────────────────────────────────────────
-if [[ -z "$SCRIPT" ]]; then
-  echo ""
-  echo "  Usage: ./push.sh [mass-notifications | qa-automation]"
-  echo ""
-  echo "  mass-notifications   Push the Mass Notifications script (dev/staging)"
-  echo "  qa-automation        Push the QA Automation script  ⚠️  LIVE"
-  echo ""
+DRY_RUN=0
+ACTION=""
+
+# ── Arg parsing ───────────────────────────────────────────────────────────────
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY_RUN=1 ;;
+    --list)    ACTION="list" ;;
+    -h|--help) ACTION="help" ;;
+    -*)
+      echo "Unknown flag: $arg" >&2
+      exit 2
+      ;;
+    *)
+      if [[ -z "${TARGET:-}" ]]; then
+        TARGET="$arg"
+      else
+        echo "Unexpected extra argument: $arg" >&2
+        exit 2
+      fi
+      ;;
+  esac
+done
+
+# ── Manifest loader ───────────────────────────────────────────────────────────
+if [[ ! -f "$MANIFEST" ]]; then
+  echo "Error: manifest not found at $MANIFEST" >&2
   exit 1
 fi
 
-if [[ ! -d "$SCRIPT" ]]; then
-  echo "Error: directory '$SCRIPT' not found."
+# Bash 3.2 (macOS default) has no associative arrays — use parallel indexed
+# arrays and lookup-by-iteration helpers.
+PROJECT_NAMES=()
+PROJECT_DIRS=()
+PROJECT_LIVES=()
+PROJECT_DESCS=()
+
+while IFS=$'\t' read -r name dir live desc || [[ -n "$name" ]]; do
+  # Skip comments and blanks
+  [[ -z "$name" || "$name" =~ ^[[:space:]]*# ]] && continue
+  PROJECT_NAMES+=("$name")
+  PROJECT_DIRS+=("$dir")
+  PROJECT_LIVES+=("$live")
+  PROJECT_DESCS+=("$desc")
+done < "$MANIFEST"
+
+# Look up the index of a project by name; sets REPLY to the index or -1.
+find_project() {
+  local needle="$1"
+  local i
+  for i in "${!PROJECT_NAMES[@]}"; do
+    if [[ "${PROJECT_NAMES[$i]}" == "$needle" ]]; then
+      REPLY="$i"
+      return 0
+    fi
+  done
+  REPLY="-1"
+  return 1
+}
+
+# ── Help / list ───────────────────────────────────────────────────────────────
+print_usage() {
+  echo ""
+  echo "  Usage: ./push.sh <project> [--dry-run]"
+  echo "         ./push.sh --list"
+  echo ""
+  echo "  Projects registered in push.projects:"
+  local i marker
+  for i in "${!PROJECT_NAMES[@]}"; do
+    marker=""
+    [[ "${PROJECT_LIVES[$i]}" == "yes" ]] && marker="  ⚠️  LIVE"
+    printf "    %-22s %s%s\n" "${PROJECT_NAMES[$i]}" "${PROJECT_DESCS[$i]}" "$marker"
+  done
+  echo ""
+}
+
+if [[ "$ACTION" == "help" || ( -z "${TARGET:-}" && "$ACTION" != "list" ) ]]; then
+  print_usage
+  [[ "$ACTION" == "help" ]] && exit 0 || exit 1
+fi
+
+if [[ "$ACTION" == "list" ]]; then
+  print_usage
+  exit 0
+fi
+
+# ── Validate target against manifest ──────────────────────────────────────────
+if ! find_project "$TARGET"; then
+  echo "Error: unknown project '$TARGET'." >&2
+  echo "       Run './push.sh --list' to see registered projects." >&2
+  exit 1
+fi
+IDX="$REPLY"
+CLASP_DIR="${PROJECT_DIRS[$IDX]}"
+LIVE="${PROJECT_LIVES[$IDX]}"
+DESC="${PROJECT_DESCS[$IDX]}"
+
+if [[ ! -d "$REPO_ROOT/$CLASP_DIR" ]]; then
+  echo "Error: directory '$CLASP_DIR' (from manifest) does not exist." >&2
   exit 1
 fi
 
-if [[ ! -f "$SCRIPT/.clasp.json" ]]; then
-  echo "Error: $SCRIPT/.clasp.json not found."
+if [[ ! -f "$REPO_ROOT/$CLASP_DIR/.clasp.json" ]]; then
+  echo "Error: $CLASP_DIR/.clasp.json not found." >&2
   exit 1
 fi
 
-# ── Extract Script ID from .clasp.json (no Python/jq required) ───────────────
-SCRIPT_ID=$(grep -o '"scriptId"[[:space:]]*:[[:space:]]*"[^"]*"' "$SCRIPT/.clasp.json" \
+# ── Extract Script ID from .clasp.json (no jq dependency) ────────────────────
+SCRIPT_ID=$(grep -o '"scriptId"[[:space:]]*:[[:space:]]*"[^"]*"' "$REPO_ROOT/$CLASP_DIR/.clasp.json" \
             | head -1 \
             | sed 's/.*"\([^"]*\)"[[:space:]]*$/\1/')
 
+# ── Git pre-flight ────────────────────────────────────────────────────────────
+cd "$REPO_ROOT"
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "(not a git repo)")
+SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+SUBJECT=$(git log -1 --format='%s' 2>/dev/null || echo "")
+
+DIRTY=""
+if git status --porcelain 2>/dev/null | grep -q .; then
+  DIRTY="yes"
+fi
+
 # ── Confirmation prompt ───────────────────────────────────────────────────────
 echo ""
-echo "════════════════════════════════════════"
+echo "════════════════════════════════════════════════════════════"
 echo "  CLASP PUSH — CONFIRM DEPLOYMENT"
-echo "════════════════════════════════════════"
+[[ "$DRY_RUN" == "1" ]] && echo "  ── DRY RUN (no clasp push will execute) ──"
+echo "════════════════════════════════════════════════════════════"
 echo ""
-echo "  Project   : $SCRIPT"
-echo "  Script ID : $SCRIPT_ID"
+echo "  Project     : $TARGET"
+echo "  Description : $DESC"
+echo "  Directory   : $CLASP_DIR"
+echo "  Script ID   : $SCRIPT_ID"
+echo "  Branch      : $BRANCH  ($SHA)"
+echo "  Last commit : $SUBJECT"
+if [[ -n "$DIRTY" ]]; then
+  echo ""
+  echo "  ⚠️  WORKING TREE IS DIRTY — uncommitted changes may be pushed live."
+  git status --short | sed 's/^/       /'
+fi
 echo ""
 
-if [[ "$SCRIPT" == "qa-automation" ]]; then
-  echo "  ┌─────────────────────────────────────┐"
-  echo "  │  ⚠️  WARNING: QA Automation is LIVE  │"
-  echo "  │  Changes take effect immediately.   │"
-  echo "  └─────────────────────────────────────┘"
+if [[ "$LIVE" == "yes" ]]; then
+  echo "  ┌───────────────────────────────────────────────┐"
+  echo "  │  ⚠️  $TARGET is LIVE                          "
+  echo "  │  Changes take effect immediately.             "
+  echo "  └───────────────────────────────────────────────┘"
   echo ""
+fi
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "  [dry-run] Would execute: (cd $CLASP_DIR && clasp push)"
+  echo ""
+  exit 0
 fi
 
 read -rp "  Type 'yes' to confirm push: " CONFIRM
@@ -69,9 +187,18 @@ if [[ "$CONFIRM" != "yes" ]]; then
 fi
 
 # ── Push ──────────────────────────────────────────────────────────────────────
-echo "  Pushing $SCRIPT..."
+echo "  Pushing $TARGET..."
 echo ""
-(cd "$SCRIPT" && clasp push)
+PUSH_START=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+(cd "$CLASP_DIR" && clasp push)
+PUSH_END=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 echo ""
-echo "  Done."
+
+# ── Append to push log (local, gitignored) ───────────────────────────────────
+WHOAMI=$(git config user.email 2>/dev/null || whoami)
+printf "%s\tproject=%s\tscriptId=%s\tbranch=%s\tsha=%s\tdirty=%s\tuser=%s\n" \
+  "$PUSH_END" "$TARGET" "$SCRIPT_ID" "$BRANCH" "$SHA" "${DIRTY:-no}" "$WHOAMI" \
+  >> "$LOG_FILE"
+
+echo "  Done. Logged to .push-log ($PUSH_START → $PUSH_END)."
 echo ""
