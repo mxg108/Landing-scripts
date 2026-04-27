@@ -28,16 +28,75 @@ FILTERED_MOMENT_TYPES = {
 def _headers() -> Optional[dict]:
     token = os.getenv("DIALPAD_API_KEY")
     if not token:
-        return None  # caller checks for None and skips
-    # DEBUG: remove after confirming auth works
-    print(f"[dialpad_client] Token length: {len(token)}, starts: {token[:20]}..., ends: ...{token[-10:]}")
-    print(f"[dialpad_client] Token repr (check for quotes/whitespace): {repr(token[:30])}")
+        print("No API token")
+        return None
     return {"Authorization": f"Bearer {token}"}
 
 
 # ---------------------------------------------------------------------------
 # User / agent lookup
 # ---------------------------------------------------------------------------
+
+async def get_user_by_email(email: str) -> Optional[dict]:
+    """
+    Look up a Dialpad user by email via GET /users?email=.
+    Returns a parsed dict with the fields the frontend needs, or None.
+    """
+    hdrs = _headers()
+    if not hdrs:
+        return None
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{BASE_URL}/users",
+                headers=hdrs,
+                params={"email": email},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            items = resp.json().get("items", [])
+    except httpx.HTTPStatusError as e:
+        print(f"[dialpad_client] user lookup by email failed ({e.response.status_code}): {e}")
+        return None
+    except httpx.RequestError as e:
+        print(f"[dialpad_client] user lookup request error: {e}")
+        return None
+
+    if not items:
+        return None
+
+    u = items[0]
+    return {
+        "id": str(u.get("id", "")),
+        "display_name": u.get("display_name", ""),
+        "first_name": u.get("first_name", ""),
+        "last_name": u.get("last_name", ""),
+        "emails": u.get("emails", []),
+        "extension": u.get("extension", ""),
+        "phone_numbers": u.get("phone_numbers", []),
+        "job_title": u.get("job_title", ""),
+        "state": u.get("state", ""),
+        "license": u.get("license", ""),
+        "is_admin": u.get("is_admin", False),
+        "is_online": u.get("is_online", False),
+        "is_available": u.get("is_available", False),
+        "is_on_duty": u.get("is_on_duty", False),
+        "on_duty_status": u.get("on_duty_status", ""),
+        "timezone": u.get("timezone", ""),
+        "office_id": str(u.get("office_id", "")),
+        "date_added": u.get("date_added", ""),
+        "duty_status_started": u.get("duty_status_started", ""),
+        "groups": [
+            {
+                "group_id": str(g.get("group_id", "")),
+                "group_type": g.get("group_type", ""),
+                "role": g.get("role", ""),
+            }
+            for g in u.get("group_details", [])
+        ],
+    }
+
 
 async def get_user_id_by_name(agent_name: str) -> Optional[str]:
     """
@@ -66,8 +125,92 @@ async def get_user_id_by_name(agent_name: str) -> Optional[str]:
     return None
 
 
+async def list_calls_for_user(
+    user_id: str,
+    started_after_ms: Optional[int] = None,
+    started_before_ms: Optional[int] = None,
+    limit: int = 10,
+    cursor: Optional[str] = None,
+) -> tuple[list[dict], Optional[str]]:
+    """
+    Fetch recent calls for a user via GET /call?target_id=&target_type=user.
+    Timestamps are epoch milliseconds (UTC). Returns (parsed call dicts, next_cursor).
+    """
+    hdrs = _headers()
+    if not hdrs:
+        return [], None
+
+    params: dict = {
+        "target_id": user_id,
+        "target_type": "user",
+        "limit": limit,
+    }
+    if started_after_ms is not None:
+        params["started_after"] = started_after_ms
+    if started_before_ms is not None:
+        params["started_before"] = started_before_ms
+    if cursor:
+        params["cursor"] = cursor
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{BASE_URL}/call",
+                headers=hdrs,
+                params=params,
+                timeout=20,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            items = data.get("items", [])
+            next_cursor = data.get("cursor") or None
+    except httpx.HTTPStatusError as e:
+        print(f"[dialpad_client] list_calls_for_user failed ({e.response.status_code}): {e}")
+        return [], None
+    except httpx.RequestError as e:
+        print(f"[dialpad_client] list_calls_for_user request error: {e}")
+        return [], None
+
+    calls = []
+    for c in items:
+        duration = c.get("total_duration", 0) or c.get("duration", 0) or 0
+        calls.append({
+            "call_id": str(c.get("call_id", "")),
+            "date_started": _epoch_to_iso(c.get("date_started")),
+            "date_connected": _epoch_to_iso(c.get("date_connected")),
+            "date_ended": _epoch_to_iso(c.get("date_ended")),
+            "duration": duration,
+            "direction": c.get("direction", ""),
+            "was_recorded": bool(c.get("recording_details")),
+            "recording_id": str(c.get("recording_details", [{}])[0].get("id", "")) if c.get("recording_details") else "",
+            "recording_url": c.get("recording_details", [{}])[0].get("url", "") if c.get("recording_details") else "",
+            "recording_duration": int(c.get("recording_details", [{}])[0].get("duration", 0)) if c.get("recording_details") else 0,
+            "recording_type": c.get("recording_details", [{}])[0].get("recording_type", "") if c.get("recording_details") else "",
+            "is_transferred": c.get("is_transferred", False),
+            "external_number": c.get("external_number", ""),
+            "internal_number": c.get("internal_number", ""),
+            "contact_name": (c.get("contact") or {}).get("name", ""),
+            "contact_phone": (c.get("contact") or {}).get("phone", ""),
+            "mos_score": c.get("mos_score"),
+            "entry_point_call_id": str(c.get("entry_point_call_id", "")),
+            "_flagged_long_call": duration > CALL_DURATION_FLAG_MS,
+        })
+    return calls, next_cursor
+
+
+def _epoch_to_iso(val) -> str:
+    """Convert an epoch-ms timestamp (int or numeric string) to ISO string."""
+    if val is None:
+        return ""
+    try:
+        ts = int(val) / 1000
+        return datetime.fromtimestamp(ts).isoformat()
+    except (ValueError, TypeError, OSError):
+        return str(val)
+
+
 # ---------------------------------------------------------------------------
-# Call listing
+# Call listing (stats — used by scoring pipeline)
 # ---------------------------------------------------------------------------
 
 async def get_calls_for_agent(
@@ -110,8 +253,44 @@ async def get_calls_for_agent(
 
 
 def build_dialpad_link(call_id: str) -> str:
-    """Construct the Dialpad web link for a call."""
+    """Construct the Dialpad web link for a call (used by scoring pipeline)."""
     return f"https://dialpad.com/callhistory/callreview/{call_id}"
+
+
+async def get_recording_share_link(
+    recording_id: str,
+    recording_type: str = "admincallrecording",
+) -> Optional[str]:
+    """
+    Generate a shareable recording link via POST /recordingsharelink.
+    Returns the share URL, or None on failure.
+    """
+    hdrs = _headers()
+    if not hdrs or not recording_id:
+        return None
+
+    hdrs["Content-Type"] = "application/json"
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{BASE_URL}/recordingsharelink",
+                headers=hdrs,
+                json={
+                    "privacy": "company",
+                    "recording_type": recording_type,
+                    "recording_id": recording_id,
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("access_link") or None
+    except httpx.HTTPStatusError as e:
+        print(f"[dialpad_client] recording share link failed ({e.response.status_code}): {e}")
+        return None
+    except httpx.RequestError as e:
+        print(f"[dialpad_client] recording share link request error: {e}")
+        return None
 
 
 async def get_call_details(call_id: str) -> dict:
