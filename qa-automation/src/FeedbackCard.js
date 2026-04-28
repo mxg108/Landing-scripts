@@ -31,8 +31,17 @@ class FeedbackCard {
           + ';padding:12px 16px;font-size:16px;font-weight:bold;font-family:Arial,sans-serif;">'
           + 'Feedback</td></tr>';
 
+    // ── Call Summary (only when AI enrichment provided one) ──────
+    var hasSummary = !!(this.entry.callSummary || this.entry.callerName || this.entry.callerPhone);
+    if (hasSummary) {
+      html += '<tr><td style="padding:16px 16px 8px 16px;font-family:Arial,sans-serif;">';
+      html += this._renderSummary();
+      html += '</td></tr>';
+    }
+
     // ── Key Strengths ─────────────────────────────────────────────
-    html += '<tr><td style="padding:16px 16px 8px 16px;font-family:Arial,sans-serif;">';
+    var strengthsTopPad = hasSummary ? '8px' : '16px';
+    html += '<tr><td style="padding:' + strengthsTopPad + ' 16px 8px 16px;font-family:Arial,sans-serif;">';
     html += this._renderSection(
       'Key Strengths',
       this.entry.strengths,
@@ -93,8 +102,40 @@ class FeedbackCard {
          + '</td></tr></table>';
   }
 
+  /**
+   * Renders a Call Summary block with optional caller meta line.
+   * @private
+   * @return {string}
+   */
+  _renderSummary() {
+    var meta = '';
+    if (this.entry.callerName)  meta += this._esc(this.entry.callerName);
+    if (this.entry.callerPhone) {
+      if (meta) meta += ' &middot; ';
+      meta += this._esc(this.entry.callerPhone);
+    }
+
+    var body = this.entry.callSummary
+      ? this._esc(this.entry.callSummary)
+      : '<em style="color:#999;">No summary available.</em>';
+
+    return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="'
+         + 'border-left:4px solid ' + CONFIG.COLORS.TEXT_GRAY + ';background:#FAFAFA;'
+         + 'border-radius:0 4px 4px 0;">'
+         + '<tr><td style="padding:12px 16px;">'
+         + '<div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:'
+         + CONFIG.COLORS.TEXT_GRAY + ';margin-bottom:6px;font-weight:bold;">Call Summary</div>'
+         + (meta
+             ? '<div style="font-size:12px;color:' + CONFIG.COLORS.TEXT_GRAY
+               + ';margin-bottom:6px;">' + meta + '</div>'
+             : '')
+         + '<div style="font-size:14px;color:' + CONFIG.COLORS.DARK_NAVY + ';line-height:1.5;">'
+         + body + '</div>'
+         + '</td></tr></table>';
+  }
+
   /** @private */
   _esc(str) {
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return (str || '').toString().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 }

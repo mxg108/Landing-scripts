@@ -20,22 +20,44 @@ class AnalystHistory {
   // ────────────────────────────────────────────────────────────────
 
   /**
-   * Appends a QAEntry to the Analyst_History sheet.
+   * Appends a QAEntry to the Analyst_History sheet, looks up matching
+   * AI enrichment in Form Responses AI, writes it to the new row, and
+   * mutates `entry` so the email pipeline can render reasoning inline.
+   *
    * @param {QAEntry} entry
    */
   append(entry) {
     this.sheet.appendRow(entry.toHistoryRow());
 
-    // Enrich with AI reasoning from Form Responses AI (if available)
     var dialpadLink = entry.dialpadLink || '';
     Logger.log('[AnalystHistory] append — dialpadLink: "' + dialpadLink + '"');
-    if (dialpadLink) {
-      var lastRow = this.sheet.getLastRow();
-      Logger.log('[AnalystHistory] calling _enrichFromFormResponsesAI for row ' + lastRow);
-      this._enrichFromFormResponsesAI(lastRow, dialpadLink);
-    } else {
+    if (!dialpadLink) {
       Logger.log('[AnalystHistory] no dialpadLink — skipping enrichment');
+      return;
     }
+
+    var enrichment = this._lookupEnrichment(dialpadLink);
+    if (!enrichment) {
+      Logger.log('[AnalystHistory] no Form AI match for "' + dialpadLink + '"');
+      return;
+    }
+
+    var lastRow = this.sheet.getLastRow();
+    Logger.log('[AnalystHistory] writing enrichment to row ' + lastRow);
+    this._writeEnrichment(lastRow, enrichment);
+    this._attachToEntry(entry, enrichment);
+  }
+
+  /**
+   * Attaches AI enrichment to `entry` WITHOUT writing to the sheet.
+   * Used by the dry-run / draft path so previewed emails include reasoning.
+   *
+   * @param {QAEntry} entry
+   */
+  enrichEntry(entry) {
+    if (!entry.dialpadLink) return;
+    var enrichment = this._lookupEnrichment(entry.dialpadLink);
+    if (enrichment) this._attachToEntry(entry, enrichment);
   }
 
   /**
@@ -149,81 +171,132 @@ class AnalystHistory {
   }
 
   /**
-   * Looks up the matching row in Form Responses AI by Dialpad link
-   * and copies AI reasoning data (strengths, improvements, confidence,
-   * reasoning per section) into the extended columns (Q-AK) of the
-   * given Analyst_History row.
+   * Looks up the matching row in Form Responses AI by Dialpad link and
+   * returns a structured enrichment object. Pure read — no side effects.
    *
    * @private
-   * @param {number} historyRowNum — the row number in Analyst_History to enrich
-   * @param {string} dialpadLink — the Dialpad link to match on
+   * @param  {string} dialpadLink
+   * @return {Object|null} enrichment data, or null if no match / sheet missing
    */
-  _enrichFromFormResponsesAI(historyRowNum, dialpadLink) {
+  _lookupEnrichment(dialpadLink) {
     try {
       var formSheet = this.spreadsheet.getSheetByName(CONFIG.FORM_AI_SHEET_NAME);
-      if (!formSheet) return;  // Form Responses AI tab doesn't exist — skip silently
+      if (!formSheet) return null;
 
       var formData = formSheet.getDataRange().getValues();
       var FAC = CONFIG.FORM_AI_COL;
+      var C   = CONFIG.COL;
 
-      // Search for matching Dialpad link in Form Responses AI col P
+      // Search for matching Dialpad link in Form Responses AI col P.
+      // Strip any "[LONG CALL]" suffix on either side for comparison.
       var matchedRow = null;
+      var cleanHistLink = dialpadLink.replace(/\s*\[LONG CALL.*?\]/, '').trim();
       for (var i = 1; i < formData.length; i++) {
         var formLink = (formData[i][FAC.DIALPAD_LINK] || '').toString().trim();
-        // Strip any "[LONG CALL]" suffix for comparison
         var cleanFormLink = formLink.replace(/\s*\[LONG CALL.*?\]/, '').trim();
-        var cleanHistLink = dialpadLink.replace(/\s*\[LONG CALL.*?\]/, '').trim();
         if (cleanFormLink && cleanFormLink === cleanHistLink) {
           matchedRow = formData[i];
           break;
         }
       }
+      if (!matchedRow) return null;
 
-      if (!matchedRow) {
-        Logger.log('[AnalystHistory] _enrich: no match found for link "' + dialpadLink + '" in ' + formData.length + ' Form AI rows');
-        return;
-      }
-      Logger.log('[AnalystHistory] _enrich: matched! Writing extended cols to row ' + historyRowNum);
+      var s = function(v) { return (v || '').toString(); };
 
+      return {
+        keyStrengths: s(matchedRow[C.STRENGTHS]),
+        improvements: s(matchedRow[C.IMPROVEMENTS]),
+        source:       s(matchedRow[FAC.SOURCE]),
+        callSummary:  s(matchedRow[FAC.CALL_SUMMARY]),
+        callerName:   s(matchedRow[FAC.CALLER_NAME]),
+        callerPhone:  s(matchedRow[FAC.CALLER_PHONE]),
+        confidence: {
+          greeting:           s(matchedRow[FAC.GREETING_CONF]),
+          identityValidation: s(matchedRow[FAC.IDENTITY_CONF]),
+          callPurpose:        s(matchedRow[FAC.PURPOSE_CONF]),
+          matchMoment:        s(matchedRow[FAC.MATCHING_CONF]),
+          processAdherence:   s(matchedRow[FAC.PROCESS_CONF]),
+          callResolution:     s(matchedRow[FAC.RESOLUTION_CONF]),
+          communication:      s(matchedRow[FAC.COMMUNICATION_CONF]),
+          efficiency:         s(matchedRow[FAC.EFFICIENCY_CONF]),
+          customerResolution: s(matchedRow[FAC.CUSTOMER_RES_CONF]),
+          documentation:      'manual',
+        },
+        reasoning: {
+          greeting:           s(matchedRow[FAC.GREETING_REASON]),
+          identityValidation: s(matchedRow[FAC.IDENTITY_REASON]),
+          callPurpose:        s(matchedRow[FAC.PURPOSE_REASON]),
+          matchMoment:        s(matchedRow[FAC.MATCHING_REASON]),
+          processAdherence:   s(matchedRow[FAC.PROCESS_REASON]),
+          callResolution:     s(matchedRow[FAC.RESOLUTION_REASON]),
+          communication:      s(matchedRow[FAC.COMMUNICATION_REASON]),
+          efficiency:         s(matchedRow[FAC.EFFICIENCY_REASON]),
+          customerResolution: s(matchedRow[FAC.CUSTOMER_RES_REASON]),
+          documentation:      s(matchedRow[FAC.DOC_REASONING]),
+        },
+      };
+    } catch (err) {
+      Logger.log('[AnalystHistory] _lookupEnrichment failed: ' + err.message);
+      return null;
+    }
+  }
+
+  /**
+   * Writes a previously-fetched enrichment object to the given row's
+   * extended columns (Q–AP). Non-fatal on failure.
+   *
+   * @private
+   * @param {number} historyRowNum
+   * @param {Object} enrichment — shape returned by _lookupEnrichment()
+   */
+  _writeEnrichment(historyRowNum, enrichment) {
+    try {
       var HC = CONFIG.HISTORY_COL;
+      var r  = enrichment.reasoning;
+      var c  = enrichment.confidence;
 
-      // Build the extended values array for cols Q-AK (indices 16-36)
       var extendedValues = [
-        (matchedRow[13] || '').toString(),  // Q: Key Strengths (Form col N)
-        (matchedRow[14] || '').toString(),  // R: Improvements (Form col O)
-        (matchedRow[FAC.SOURCE] || '').toString(),                  // S: Source
-        (matchedRow[FAC.GREETING_CONF] || '').toString(),           // T
-        (matchedRow[FAC.GREETING_REASON] || '').toString(),         // U
-        (matchedRow[FAC.IDENTITY_CONF] || '').toString(),           // V
-        (matchedRow[FAC.IDENTITY_REASON] || '').toString(),         // W
-        (matchedRow[FAC.PURPOSE_CONF] || '').toString(),            // X
-        (matchedRow[FAC.PURPOSE_REASON] || '').toString(),          // Y
-        (matchedRow[FAC.MATCHING_CONF] || '').toString(),           // Z
-        (matchedRow[FAC.MATCHING_REASON] || '').toString(),         // AA
-        (matchedRow[FAC.PROCESS_CONF] || '').toString(),            // AB
-        (matchedRow[FAC.PROCESS_REASON] || '').toString(),          // AC
-        (matchedRow[FAC.RESOLUTION_CONF] || '').toString(),         // AD
-        (matchedRow[FAC.RESOLUTION_REASON] || '').toString(),       // AE
-        (matchedRow[FAC.COMMUNICATION_CONF] || '').toString(),      // AF
-        (matchedRow[FAC.COMMUNICATION_REASON] || '').toString(),    // AG
-        (matchedRow[FAC.EFFICIENCY_CONF] || '').toString(),         // AH
-        (matchedRow[FAC.EFFICIENCY_REASON] || '').toString(),       // AI
-        (matchedRow[FAC.CUSTOMER_RES_CONF] || '').toString(),       // AJ
-        (matchedRow[FAC.CUSTOMER_RES_REASON] || '').toString(),     // AK
-        (matchedRow[FAC.CALL_SUMMARY] || '').toString(),            // AL
-        (matchedRow[FAC.CALLER_NAME] || '').toString(),             // AM
-        (matchedRow[FAC.CALLER_PHONE] || '').toString(),            // AN
-        'manual',                                                   // AO: Documentation Confidence
-        (matchedRow[FAC.DOC_REASONING] || '').toString(),           // AP: Documentation Reasoning
+        enrichment.keyStrengths,    // Q
+        enrichment.improvements,    // R
+        enrichment.source,          // S
+        c.greeting,                 // T
+        r.greeting,                 // U
+        c.identityValidation,       // V
+        r.identityValidation,       // W
+        c.callPurpose,              // X
+        r.callPurpose,              // Y
+        c.matchMoment,              // Z
+        r.matchMoment,              // AA
+        c.processAdherence,         // AB
+        r.processAdherence,         // AC
+        c.callResolution,           // AD
+        r.callResolution,           // AE
+        c.communication,            // AF
+        r.communication,            // AG
+        c.efficiency,               // AH
+        r.efficiency,               // AI
+        c.customerResolution,       // AJ
+        r.customerResolution,       // AK
+        enrichment.callSummary,     // AL
+        enrichment.callerName,      // AM
+        enrichment.callerPhone,     // AN
+        c.documentation,            // AO ('manual')
+        r.documentation,            // AP
       ];
 
-      // Write to Analyst_History cols Q-AN (columns 17-40 in 1-indexed)
       this.sheet.getRange(historyRowNum, HC.KEY_STRENGTHS + 1, 1, extendedValues.length)
         .setValues([extendedValues]);
-
     } catch (err) {
-      // Non-fatal — log but don't block the append
-      Logger.log('[AnalystHistory] _enrichFromFormResponsesAI failed: ' + err.message);
+      Logger.log('[AnalystHistory] _writeEnrichment failed: ' + err.message);
     }
+  }
+
+  /** @private — copies enrichment fields onto a QAEntry. */
+  _attachToEntry(entry, enrichment) {
+    entry.aiReasoning  = enrichment.reasoning;
+    entry.aiConfidence = enrichment.confidence;
+    entry.callSummary  = enrichment.callSummary;
+    entry.callerName   = enrichment.callerName;
+    entry.callerPhone  = enrichment.callerPhone;
   }
 }

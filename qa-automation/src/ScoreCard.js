@@ -42,21 +42,34 @@ class ScoreCard {
       var color = QAEntry.colorForScore(score);
       var pct   = (score / 5 * 100).toFixed(0);
       var isLast = i === categories.length - 1;
+      var reasoning  = (this.entry.aiReasoning  && this.entry.aiReasoning[cat.key])  || '';
+      var confidence = (this.entry.aiConfidence && this.entry.aiConfidence[cat.key]) || '';
+      var hasReasoning = !!reasoning;
+
+      // Bottom border lives on whichever row is the LAST visual row for this category
+      var scoreRowBorder = (isLast || hasReasoning) ? '' : 'border-bottom:1px solid #F0F0F0;';
 
       html += '<tr>'
-            // Label
+            // Label + confidence chip
             + '<td style="padding:6px 8px 6px 0;font-size:13px;color:' + CONFIG.COLORS.TEXT_GRAY
-            + ';width:45%;' + (isLast ? '' : 'border-bottom:1px solid #F0F0F0;') + '">'
-            + this._esc(cat.label) + '</td>'
+            + ';width:45%;' + scoreRowBorder + '">'
+            + this._esc(cat.label) + this._renderConfidenceChip(confidence) + '</td>'
             // Bar
-            + '<td style="padding:6px 8px;width:40%;' + (isLast ? '' : 'border-bottom:1px solid #F0F0F0;') + '">'
+            + '<td style="padding:6px 8px;width:40%;' + scoreRowBorder + '">'
             + this._renderBar(pct, color)
             + '</td>'
             // Value
             + '<td style="padding:6px 0 6px 8px;font-size:14px;font-weight:bold;color:' + color
-            + ';text-align:right;width:15%;' + (isLast ? '' : 'border-bottom:1px solid #F0F0F0;') + '">'
+            + ';text-align:right;width:15%;' + scoreRowBorder + '">'
             + score.toFixed(1) + '/5</td>'
             + '</tr>';
+
+      if (hasReasoning) {
+        var reasoningBorder = isLast ? '' : 'border-bottom:1px solid #F0F0F0;';
+        html += '<tr><td colspan="3" style="padding:0 0 8px 0;font-size:12px;color:'
+              + CONFIG.COLORS.TEXT_GRAY + ';font-style:italic;line-height:1.4;'
+              + reasoningBorder + '">' + this._esc(reasoning) + '</td></tr>';
+      }
     }
 
     html += '</table></td></tr>';
@@ -68,15 +81,24 @@ class ScoreCard {
 
     var binaries = CONFIG.BINARY_CATEGORIES;
     for (var j = 0; j < binaries.length; j++) {
-      var bcat  = binaries[j];
+      var bcat   = binaries[j];
       var passed = this.entry.binaryChecks[bcat.key];
+      var bReasoning  = (this.entry.aiReasoning  && this.entry.aiReasoning[bcat.key])  || '';
+      var bConfidence = (this.entry.aiConfidence && this.entry.aiConfidence[bcat.key]) || '';
+
       html += '<tr>'
             + '<td style="padding:6px 8px 6px 0;font-size:13px;color:' + CONFIG.COLORS.TEXT_GRAY + ';">'
-            + this._esc(bcat.label) + '</td>'
+            + this._esc(bcat.label) + this._renderConfidenceChip(bConfidence) + '</td>'
             + '<td style="padding:6px 0;text-align:right;font-size:14px;font-weight:bold;color:'
             + (passed ? CONFIG.COLORS.GREEN : CONFIG.COLORS.RED) + ';">'
             + (passed ? '&#10003; Yes' : '&#10007; No') + '</td>'
             + '</tr>';
+
+      if (bReasoning) {
+        html += '<tr><td colspan="2" style="padding:0 0 8px 0;font-size:12px;color:'
+              + CONFIG.COLORS.TEXT_GRAY + ';font-style:italic;line-height:1.4;">'
+              + this._esc(bReasoning) + '</td></tr>';
+      }
     }
 
     html += '</table></td></tr>';
@@ -117,8 +139,33 @@ class ScoreCard {
          + '</tr></table>';
   }
 
+  /**
+   * Renders a small bordered pill showing AI confidence ("high" / "medium" /
+   * "low" / "manual"). Returns an empty string for empty / unrecognized values.
+   * @private
+   * @param  {string} confidence
+   * @return {string}
+   */
+  _renderConfidenceChip(confidence) {
+    var c = (confidence || '').toString().toLowerCase().trim();
+    if (!c) return '';
+
+    var color;
+    switch (c) {
+      case 'high':   color = CONFIG.COLORS.GREEN;     break;
+      case 'medium': color = CONFIG.COLORS.AMBER;     break;
+      case 'low':    color = CONFIG.COLORS.RED;       break;
+      case 'manual': color = CONFIG.COLORS.TEXT_GRAY; break;
+      default: return '';
+    }
+    return ' <span style="display:inline-block;border:1px solid ' + color
+         + ';color:' + color + ';font-size:9px;padding:1px 6px;border-radius:8px;'
+         + 'text-transform:uppercase;letter-spacing:0.5px;font-weight:bold;'
+         + 'vertical-align:middle;margin-left:4px;">' + this._esc(c) + '</span>';
+  }
+
   /** @private — HTML-escape a string. */
   _esc(str) {
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return (str || '').toString().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 }

@@ -37,6 +37,14 @@ class QAEntry {
     // ── Qualitative feedback ────────────────────────────────────
     this.strengths    = (row[C.STRENGTHS]    || '').toString().trim();
     this.improvements = (row[C.IMPROVEMENTS] || '').toString().trim();
+
+    // ── AI enrichment slots (populated post-construction by
+    //    AnalystHistory.append() / .enrichEntry() via Form Responses AI) ──
+    this.aiReasoning  = {};
+    this.aiConfidence = {};
+    this.callSummary  = '';
+    this.callerName   = '';
+    this.callerPhone  = '';
   }
 
   // ────────────────────────────────────────────────────────────────

@@ -135,6 +135,7 @@ function createDraftForLatest() {
     var history = new AnalystHistory(ss);
 
     var pastEntries = history.getHistory(entry.agentName);
+    history.enrichEntry(entry);  // attach AI reasoning without writing to sheet
 
     var scoreCard       = new ScoreCard(entry);
     var feedbackCard    = new FeedbackCard(entry);

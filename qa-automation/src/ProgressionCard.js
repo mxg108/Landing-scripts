@@ -11,7 +11,7 @@ class ProgressionCard {
   /**
    * @param {QAEntry}   currentEntry  — the QA that was just submitted
    * @param {Object[]}  history       — past entries from AnalystHistory.getHistory()
-   *                                     (newest-first, may include current if already appended)
+   *                                     (newest-first; current is prepended synthetically by Main._processRow)
    */
   constructor(currentEntry, history) {
     this.current = currentEntry;
