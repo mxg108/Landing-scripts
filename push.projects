@@ -12,4 +12,5 @@
 # Add a row when onboarding a new team or standing up a new script.
 #
 mass-notifications	mass-notifications/src	no	Mass Notifications
-qa-automation	qa-automation	yes	QA Automation — Member Support
+qa-member-support	qa-automation/teams/member_support	yes	QA Automation — Member Support
+qa-sales	qa-automation/teams/sales	no	QA Automation — Sales (staging until cutover)

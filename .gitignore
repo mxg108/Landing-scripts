@@ -5,6 +5,9 @@ Thumbs.db
 # Local deploy log written by push.sh
 .push-log
 
+# Staged build dirs created by push.sh for multi-team overlays
+.build/
+
 # Secrets
 .env
 *.env

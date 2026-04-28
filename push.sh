@@ -131,6 +131,28 @@ SCRIPT_ID=$(grep -o '"scriptId"[[:space:]]*:[[:space:]]*"[^"]*"' "$REPO_ROOT/$CL
             | head -1 \
             | sed 's/.*"\([^"]*\)"[[:space:]]*$/\1/')
 
+# ── Detect multi-team overlay layout ─────────────────────────────────────────
+# Convention: if clasp_dir matches "*/teams/*", treat as a multi-team project.
+# At push time we stage <project_root>/src/* into <project_root>/.build/<team>/
+# and overlay <project_root>/teams/<team>/* on top, then push from there.
+# This lets multiple teams share logic files while overriding Config.js (and
+# any other file they need) without forking the whole tree.
+BUILD_DIR=""
+BASE_DIR=""
+PUSH_FROM="$CLASP_DIR"
+if [[ "$CLASP_DIR" =~ ^(.*)/teams/([^/]+)$ ]]; then
+  PROJECT_ROOT="${BASH_REMATCH[1]}"
+  TEAM="${BASH_REMATCH[2]}"
+  BASE_DIR="$PROJECT_ROOT/src"
+  BUILD_DIR="$PROJECT_ROOT/.build/$TEAM"
+  PUSH_FROM="$BUILD_DIR"
+
+  if [[ ! -d "$REPO_ROOT/$BASE_DIR" ]]; then
+    echo "Error: shared base '$BASE_DIR' not found (required for multi-team layout)." >&2
+    exit 1
+  fi
+fi
+
 # ── Git pre-flight ────────────────────────────────────────────────────────────
 cd "$REPO_ROOT"
 
@@ -153,6 +175,11 @@ echo ""
 echo "  Project     : $TARGET"
 echo "  Description : $DESC"
 echo "  Directory   : $CLASP_DIR"
+if [[ -n "$BUILD_DIR" ]]; then
+  echo "  Layout      : multi-team overlay (shared base + team overrides)"
+  echo "  Base        : $BASE_DIR"
+  echo "  Build dir   : $BUILD_DIR"
+fi
 echo "  Script ID   : $SCRIPT_ID"
 echo "  Branch      : $BRANCH  ($SHA)"
 echo "  Last commit : $SUBJECT"
@@ -172,7 +199,12 @@ if [[ "$LIVE" == "yes" ]]; then
 fi
 
 if [[ "$DRY_RUN" == "1" ]]; then
-  echo "  [dry-run] Would execute: (cd $CLASP_DIR && clasp push)"
+  if [[ -n "$BUILD_DIR" ]]; then
+    echo "  [dry-run] Would stage:   $BASE_DIR/* + $CLASP_DIR/* -> $BUILD_DIR/"
+    echo "  [dry-run] Would execute: (cd $BUILD_DIR && clasp push)"
+  else
+    echo "  [dry-run] Would execute: (cd $CLASP_DIR && clasp push)"
+  fi
   echo ""
   exit 0
 fi
@@ -190,7 +222,19 @@ fi
 echo "  Pushing $TARGET..."
 echo ""
 PUSH_START=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-(cd "$CLASP_DIR" && clasp push)
+
+# For multi-team projects, stage shared base + team overlay into the build
+# dir before pushing. Hermetic: rm -rf the build dir first so a stale leftover
+# can't contaminate the next push.
+if [[ -n "$BUILD_DIR" ]]; then
+  echo "  Staging $BASE_DIR/ + $CLASP_DIR/ -> $BUILD_DIR/ ..."
+  rm -rf "$BUILD_DIR"
+  mkdir -p "$BUILD_DIR"
+  cp -R "$BASE_DIR/." "$BUILD_DIR/"
+  cp -R "$CLASP_DIR/." "$BUILD_DIR/"
+fi
+
+(cd "$PUSH_FROM" && clasp push)
 PUSH_END=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 echo ""
 
