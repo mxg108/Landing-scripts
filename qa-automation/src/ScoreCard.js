@@ -42,33 +42,30 @@ class ScoreCard {
       var color = QAEntry.colorForScore(score);
       var pct   = (score / 5 * 100).toFixed(0);
       var isLast = i === categories.length - 1;
-      var reasoning  = (this.entry.aiReasoning  && this.entry.aiReasoning[cat.key])  || '';
-      var confidence = (this.entry.aiConfidence && this.entry.aiConfidence[cat.key]) || '';
+      var reasoning = (this.entry.aiReasoning && this.entry.aiReasoning[cat.key]) || '';
       var hasReasoning = !!reasoning;
 
-      // Bottom border lives on whichever row is the LAST visual row for this category
+      // Score row gets a bottom separator only when this is the FINAL visual
+      // row for the section (no reasoning box below) AND it isn't the very
+      // last section in the card.
       var scoreRowBorder = (isLast || hasReasoning) ? '' : 'border-bottom:1px solid #F0F0F0;';
 
       html += '<tr>'
-            // Label + confidence chip
             + '<td style="padding:6px 8px 6px 0;font-size:13px;color:' + CONFIG.COLORS.TEXT_GRAY
             + ';width:45%;' + scoreRowBorder + '">'
-            + this._esc(cat.label) + this._renderConfidenceChip(confidence) + '</td>'
-            // Bar
+            + this._esc(cat.label) + '</td>'
             + '<td style="padding:6px 8px;width:40%;' + scoreRowBorder + '">'
             + this._renderBar(pct, color)
             + '</td>'
-            // Value
             + '<td style="padding:6px 0 6px 8px;font-size:14px;font-weight:bold;color:' + color
             + ';text-align:right;width:15%;' + scoreRowBorder + '">'
-            + score.toFixed(1) + '/5</td>'
+            + this._formatScore(score) + '/5</td>'
             + '</tr>';
 
       if (hasReasoning) {
-        var reasoningBorder = isLast ? '' : 'border-bottom:1px solid #F0F0F0;';
-        html += '<tr><td colspan="3" style="padding:0 0 8px 0;font-size:12px;color:'
-              + CONFIG.COLORS.TEXT_GRAY + ';font-style:italic;line-height:1.4;'
-              + reasoningBorder + '">' + this._esc(reasoning) + '</td></tr>';
+        html += '<tr><td colspan="3" style="padding:2px 0 ' + (isLast ? '0' : '12px') + ' 0;">'
+              + this._renderReasoningBox(reasoning)
+              + '</td></tr>';
       }
     }
 
@@ -83,21 +80,20 @@ class ScoreCard {
     for (var j = 0; j < binaries.length; j++) {
       var bcat   = binaries[j];
       var passed = this.entry.binaryChecks[bcat.key];
-      var bReasoning  = (this.entry.aiReasoning  && this.entry.aiReasoning[bcat.key])  || '';
-      var bConfidence = (this.entry.aiConfidence && this.entry.aiConfidence[bcat.key]) || '';
+      var bReasoning = (this.entry.aiReasoning && this.entry.aiReasoning[bcat.key]) || '';
 
       html += '<tr>'
             + '<td style="padding:6px 8px 6px 0;font-size:13px;color:' + CONFIG.COLORS.TEXT_GRAY + ';">'
-            + this._esc(bcat.label) + this._renderConfidenceChip(bConfidence) + '</td>'
+            + this._esc(bcat.label) + '</td>'
             + '<td style="padding:6px 0;text-align:right;font-size:14px;font-weight:bold;color:'
             + (passed ? CONFIG.COLORS.GREEN : CONFIG.COLORS.RED) + ';">'
             + (passed ? '&#10003; Yes' : '&#10007; No') + '</td>'
             + '</tr>';
 
       if (bReasoning) {
-        html += '<tr><td colspan="2" style="padding:0 0 8px 0;font-size:12px;color:'
-              + CONFIG.COLORS.TEXT_GRAY + ';font-style:italic;line-height:1.4;">'
-              + this._esc(bReasoning) + '</td></tr>';
+        html += '<tr><td colspan="2" style="padding:2px 0 8px 0;">'
+              + this._renderReasoningBox(bReasoning)
+              + '</td></tr>';
       }
     }
 
@@ -112,7 +108,7 @@ class ScoreCard {
           + '<span style="font-size:13px;color:' + CONFIG.COLORS.TEXT_GRAY + ';">Overall Score</span>'
           + '<br>'
           + '<span style="font-size:28px;font-weight:bold;color:' + overallColor + ';">'
-          + overall.toFixed(1) + '</span>'
+          + this._formatScore(overall) + '</span>'
           + '</td></tr>';
 
     html += '</table>';
@@ -140,28 +136,28 @@ class ScoreCard {
   }
 
   /**
-   * Renders a small bordered pill showing AI confidence ("high" / "medium" /
-   * "low" / "manual"). Returns an empty string for empty / unrecognized values.
+   * Renders the AI reasoning text wrapped in a subtle bordered box.
    * @private
-   * @param  {string} confidence
+   * @param  {string} reasoning
    * @return {string}
    */
-  _renderConfidenceChip(confidence) {
-    var c = (confidence || '').toString().toLowerCase().trim();
-    if (!c) return '';
+  _renderReasoningBox(reasoning) {
+    return '<div style="border:1px solid #EEEEEE;border-radius:4px;'
+         + 'background:#FAFAFA;padding:8px 12px;font-size:12px;color:'
+         + CONFIG.COLORS.TEXT_GRAY + ';font-style:italic;line-height:1.5;">'
+         + this._esc(reasoning) + '</div>';
+  }
 
-    var color;
-    switch (c) {
-      case 'high':   color = CONFIG.COLORS.GREEN;     break;
-      case 'medium': color = CONFIG.COLORS.AMBER;     break;
-      case 'low':    color = CONFIG.COLORS.RED;       break;
-      case 'manual': color = CONFIG.COLORS.TEXT_GRAY; break;
-      default: return '';
-    }
-    return ' <span style="display:inline-block;border:1px solid ' + color
-         + ';color:' + color + ';font-size:9px;padding:1px 6px;border-radius:8px;'
-         + 'text-transform:uppercase;letter-spacing:0.5px;font-weight:bold;'
-         + 'vertical-align:middle;margin-left:4px;">' + this._esc(c) + '</span>';
+  /**
+   * Formats a 1–5 score for display. Drops the trailing ".0" when the score
+   * is a whole number ("5" instead of "5.0") but preserves one decimal for
+   * fractional scores ("4.5").
+   * @private
+   * @param  {number} score
+   * @return {string}
+   */
+  _formatScore(score) {
+    return score % 1 === 0 ? String(score) : score.toFixed(1);
   }
 
   /** @private — HTML-escape a string. */

@@ -5,11 +5,16 @@ Placeholder until Sales' Apps Script is bound to their QA spreadsheet.
 ## Onboarding
 
 1. Create a new Apps Script project bound to the Sales QA Google Sheet.
-2. Drop `.clasp.json` here with the new scriptId:
+2. Drop `.clasp.json` here with the new scriptId. Use `rootDir: "./src"`
+   (NOT `"."`) — `push.sh` rewrites it to `"."` automatically in the build
+   dir. Keeping `"./src"` here is a deliberate foot-gun guard: if anyone
+   runs `clasp push` directly from this directory, clasp resolves into a
+   non-existent `src/` and no-ops safely instead of half-deploying only
+   `Config.js`.
    ```json
    {
      "scriptId": "<sales-script-id>",
-     "rootDir": "."
+     "rootDir": "./src"
    }
    ```
 3. Drop `Config.js` here — copy from `../member_support/Config.js` and edit
