@@ -232,6 +232,19 @@ if [[ -n "$BUILD_DIR" ]]; then
   mkdir -p "$BUILD_DIR"
   cp -R "$BASE_DIR/." "$BUILD_DIR/"
   cp -R "$CLASP_DIR/." "$BUILD_DIR/"
+
+  # Files land flat at the build-dir root after overlay, so rootDir must be
+  # "." here. The team's source .clasp.json deliberately keeps a different
+  # rootDir (e.g. "./src") as a foot-gun guard: a stray `clasp push` from
+  # teams/<team>/ then resolves to a non-existent dir and no-ops safely
+  # instead of partially deploying only Config.js. We rewrite rootDir for
+  # the build dir specifically so clasp finds the staged files here.
+  cat > "$BUILD_DIR/.clasp.json" <<EOF
+{
+  "scriptId": "$SCRIPT_ID",
+  "rootDir": "."
+}
+EOF
 fi
 
 (cd "$PUSH_FROM" && clasp push)
