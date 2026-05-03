@@ -22,10 +22,23 @@ function archiveAndClearRecipients() {
  * Used by the Looker sync pipeline so it doesn't interrupt the flow
  * with an intermediate dialog.
  *
+ * Mode-aware: in MOVE_IN mode, archives/clears the Move_In_Flow tab and
+ * skips the PostgreSQL archive (the DB schema is resident-shaped — Run_Log
+ * RowStates JSON is the audit fallback). TODO: extend archiveCampaignToDb_
+ * with a Move-In schema if we want DB archival for B2B campaigns too.
+ *
  * @return {string} The name of the recipients sheet that was archived.
  */
 function archiveAndClearRecipientsQuiet_() {
   const cfg  = loadConfig_();
+
+  if (String(cfg.sendMode).toUpperCase() === 'MOVE_IN') {
+    const sh   = getMoveInSheet_(cfg);
+    const last = sh.getLastRow();
+    if (last >= 2) sh.getRange(2, 1, last - 1, MOVEIN_COL_MAX).clearContent();
+    return sh.getName();
+  }
+
   const sh   = getRecipientsSheet_(cfg);
   const last = sh.getLastRow();
 
@@ -48,15 +61,21 @@ function archiveAndClearRecipientsQuiet_() {
 }
 
 /**
- * Clears only Status and Last Sent columns — leaves email/name/unit intact.
+ * Clears only Status and Last Sent columns — leaves identifying data intact.
+ * Mode-aware: targets the Move_In_Flow tab when send_mode is MOVE_IN.
  */
 function resetStatusesOnly() {
-  const cfg  = loadConfig_();
-  const sh   = getRecipientsSheet_(cfg);
+  const cfg = loadConfig_();
+  const isMoveIn = String(cfg.sendMode).toUpperCase() === 'MOVE_IN';
+
+  const sh         = isMoveIn ? getMoveInSheet_(cfg)   : getRecipientsSheet_(cfg);
+  const statusCol  = isMoveIn ? MOVEIN_COL.STATUS      : COL.STATUS;
+  const lastCol    = isMoveIn ? MOVEIN_COL.LAST_SENT   : COL.LAST_SENT;
+
   const last = sh.getLastRow();
   if (last >= 2) {
-    sh.getRange(2, COL.STATUS,    last - 1, 1).clearContent();
-    sh.getRange(2, COL.LAST_SENT, last - 1, 1).clearContent();
+    sh.getRange(2, statusCol, last - 1, 1).clearContent();
+    sh.getRange(2, lastCol,   last - 1, 1).clearContent();
   }
   safeAlert_('Statuses and "Last Sent" cleared.');
 }
@@ -98,6 +117,8 @@ function fullResetForNextUse() {
     'window_start', 'window_end', 'manager_email','manager_name', 'property_name', 'event_name',
     'reply_to', 'cc_extra', 'bcc_extra', 'body_full_html', 'attachment_file_ids',
     'test_email', 'notification_card',
+    // Branded wrapper resets too — fullReset returns to plain resident mode.
+    'email_background_color', 'email_header_image_url',
   ].forEach(k => setConfigValue_(k, ''));
 
   // Restore safe defaults
@@ -137,18 +158,29 @@ function undoLastRunFromLog() {
       const sh     = SpreadsheetApp.getActive().getSheetByName(shName);
       if (!sh) return safeAlert_(`Recipients sheet "${shName}" no longer exists.`);
 
+      // Schema-aware: Move-In runs record their own status/lastSent column
+      // indices in the cfgSnapshot. Older runs (pre-schema) fall back to
+      // the resident-sheet COL.* defaults.
+      let statusCol   = COL.STATUS;
+      let lastSentCol = COL.LAST_SENT;
+      try {
+        const snap = cfgSnap ? JSON.parse(cfgSnap) : {};
+        if (snap.statusCol)   statusCol   = snap.statusCol;
+        if (snap.lastSentCol) lastSentCol = snap.lastSentCol;
+      } catch (_) { /* fall through with defaults */ }
+
       let reverted = 0;
       states.forEach(s => {
         if (!s || !s.row) return;
         if (s.prevStatus === undefined && s.prevLastSent === undefined) return;
 
         (s.prevStatus == null)
-          ? sh.getRange(s.row, COL.STATUS).clearContent()
-          : sh.getRange(s.row, COL.STATUS).setValue(s.prevStatus);
+          ? sh.getRange(s.row, statusCol).clearContent()
+          : sh.getRange(s.row, statusCol).setValue(s.prevStatus);
 
         (!s.prevLastSent)
-          ? sh.getRange(s.row, COL.LAST_SENT).clearContent()
-          : sh.getRange(s.row, COL.LAST_SENT).setValue(new Date(s.prevLastSent));
+          ? sh.getRange(s.row, lastSentCol).clearContent()
+          : sh.getRange(s.row, lastSentCol).setValue(new Date(s.prevLastSent));
 
         reverted++;
       });

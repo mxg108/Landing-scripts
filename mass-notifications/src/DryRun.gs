@@ -240,6 +240,176 @@ function dryRunCreateDraftsBCC() {
 }
 
 
+// ── MOVE_IN dry runs ──────────────────────────────────────────────────────────
+
+function dryRunPreviewMoveIn() {
+  const cfg     = loadConfig_();
+  const sh      = getMoveInSheet_(cfg);
+  const limit   = Number(cfg.dryRunLimit || 10);
+  const targets = getMoveInTargetRows_(sh, limit);
+  if (!targets.length) return safeAlert_('No eligible Move-In rows (check Property Email/Status).');
+
+  const cfgAttachIds = parseIdList_(cfg.attachmentFileIds);
+
+  const cards = targets.map(t => {
+    const tokens   = buildMoveInTokens_(cfg, t);
+    const subject  = renderWithTokens_(cfg.subjectTemplate, tokens);
+    const htmlBody = buildHtmlBody_(cfg, tokens, null);
+
+    const rowIds   = parseIdList_(t.attachIds);
+    const allIds   = [...cfgAttachIds, ...rowIds];
+    const { names, notes } = summarizeAttachmentNames_(allIds);
+
+    const attachHtml = allIds.length
+      ? `<div><strong>Attachments (${allIds.length}):</strong><br>${names.map(n => escapeHtml_(n)).join('<br>')}</div>`
+      : `<div><strong>Attachments:</strong> (none)</div>`;
+
+    const warnHtml = notes.length
+      ? `<div style="color:#a33;margin-top:6px;"><strong>Attachment issues:</strong><br>${notes.map(n => escapeHtml_(n)).join('<br>')}</div>`
+      : '';
+
+    const safeBody = makePreviewSafe_(htmlBody);
+
+    return `
+      <div style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:10px 0;">
+        <div><strong>To (Property):</strong> ${escapeHtml_(t.propertyEmails.join(', '))}</div>
+        <div><strong>Property:</strong> ${escapeHtml_(t.propertyName || '(blank)')}</div>
+        <div><strong>Member:</strong> ${escapeHtml_(t.memberName || '')} &nbsp; <strong>Apt:</strong> ${escapeHtml_(t.aptNumber || '')}</div>
+        <div><strong>CC:</strong> ${escapeHtml_(cfg.ccExtra || '(none)')}</div>
+        <div><strong>Subject:</strong> ${escapeHtml_(subject)}</div>
+        ${attachHtml}${warnHtml}
+        <hr style="margin:10px 0;">
+        <div>${safeBody}</div>
+      </div>`;
+  }).join('');
+
+  showHtmlOrDraft_(`
+    <div style="font-family:Arial,Helvetica,sans-serif;padding:10px;">
+      <h2 style="margin:0 0 6px;">Dry Run – Move-In Preview</h2>
+      <div style="color:#555;margin-bottom:12px;">Showing the first ${targets.length} of up to ${limit}. No emails were sent.</div>
+      ${cards}
+    </div>`, 'Dry Run – Move-In Preview');
+}
+
+
+function dryRunCreateDraftsMoveIn() {
+  const cfg     = loadConfig_();
+  const sh      = getMoveInSheet_(cfg);
+  const limit   = Number(cfg.dryRunLimit || 10);
+  const targets = getMoveInTargetRows_(sh, limit);
+  if (!targets.length) return safeAlert_('No eligible Move-In rows (check Property Email/Status).');
+
+  const run = logRunStart_({
+    mode:   'DRYRUN_DRAFTS_MOVE_IN',
+    cfg,    shName: sh.getName(),
+    subject:'(move-in drafts)',
+    rows:   targets.map(t => t.row),
+    emails: targets.map(t => t.propertyEmails.join(',')),
+    schema: moveInRunSchema_(),
+  });
+
+  const cfgAttachIds = parseIdList_(cfg.attachmentFileIds);
+  let created = 0;
+
+  for (const t of targets) {
+    const tokens   = buildMoveInTokens_(cfg, t);
+    const subject  = '[DRAFT] ' + renderWithTokens_(cfg.subjectTemplate, tokens);
+    const htmlBody = buildHtmlBody_(cfg, tokens, null);
+
+    const rowIds = parseIdList_(t.attachIds);
+    const allIds = [...cfgAttachIds, ...rowIds];
+    let   attachments = [];
+
+    if (allIds.length) {
+      try {
+        attachments = getBlobsForIds_(allIds, { exportGoogleToPdf: true, maxBytes: MAX_ATTACH_BYTES });
+      } catch (e) {
+        sh.getRange(t.row, MOVEIN_COL.STATUS).setValue('REVIEW');
+        sh.getRange(t.row, MOVEIN_COL.NOTES ).setValue(e.message);
+        run.rowAfter.push({ row: t.row, status: 'REVIEW', lastSent: null });
+        continue;
+      }
+    }
+
+    GmailApp.createDraft(t.propertyEmails.join(','), subject, '', {
+      cc:       cfg.ccExtra  || '',
+      bcc:      cfg.bccExtra || '',
+      replyTo:  cfg.replyTo  || '',
+      htmlBody, name: cfg.senderDisplayName || 'Landing Notifications',
+      attachments,
+    });
+
+    const now = new Date();
+    sh.getRange(t.row, MOVEIN_COL.STATUS   ).setValue('DRAFT');
+    sh.getRange(t.row, MOVEIN_COL.LAST_SENT).setValue(now);
+    run.rowAfter.push({ row: t.row, status: 'DRAFT', lastSent: now });
+    created++;
+    Utilities.sleep(100);
+  }
+
+  logRunComplete_(run, created, null);
+  safeAlert_(`Created ${created} Move-In Gmail draft(s). No emails were sent.`);
+}
+
+
+function dryRunTestSendToMeMoveIn() {
+  const cfg     = loadConfig_();
+  const sh      = getMoveInSheet_(cfg);
+  const targets = getMoveInTargetRows_(sh, 1);
+  if (!targets.length) return safeAlert_('No eligible Move-In rows (check Property Email/Status).');
+
+  const t        = targets[0];
+  const tokens   = buildMoveInTokens_(cfg, t);
+  const subject  = 'TEST — ' + renderWithTokens_(cfg.subjectTemplate, tokens);
+  const body     = buildHtmlBody_(cfg, tokens, null);
+
+  const cfgIds = parseIdList_(cfg.attachmentFileIds);
+  const rowIds = parseIdList_(t.attachIds);
+  const allIds = [...cfgIds, ...rowIds];
+  let   attachments = [];
+
+  if (allIds.length) {
+    try {
+      attachments = getBlobsForIds_(allIds, { exportGoogleToPdf: true, maxBytes: MAX_ATTACH_BYTES });
+    } catch (e) {
+      return safeAlert_('Attachments error for test row: ' + e.message);
+    }
+  }
+
+  const preface = `
+    <div style="border:1px dashed #aaa;padding:10px;margin-bottom:12px;font-family:Arial,Helvetica,sans-serif;">
+      <div><strong>Simulated To (Property):</strong> ${escapeHtml_(t.propertyEmails.join(', '))}</div>
+      ${cfg.ccExtra  ? `<div><strong>Simulated CC:</strong> ${escapeHtml_(cfg.ccExtra)}</div>`   : ''}
+      ${cfg.bccExtra ? `<div><strong>Simulated BCC:</strong> ${escapeHtml_(cfg.bccExtra)}</div>` : ''}
+      <div><strong>Member:</strong> ${escapeHtml_(t.memberName || '')} (Apt ${escapeHtml_(t.aptNumber || '')})</div>
+    </div>`;
+
+  const dest = (cfg.testEmail && String(cfg.testEmail).trim()) || Session.getActiveUser().getEmail();
+  GmailApp.sendEmail(dest, subject, '', {
+    htmlBody: preface + body,
+    replyTo:  cfg.replyTo || '',
+    name:     cfg.senderDisplayName || 'Landing Notifications',
+    attachments,
+  });
+
+  safeAlert_(`Move-In test email sent to ${dest}.`);
+}
+
+
+function previewMoveInRecipients() {
+  try {
+    const { count, properties } = collectMoveInForCount_();
+    const propLine = properties.length
+      ? `Properties: ${properties.slice(0, 8).join(', ')}${properties.length > 8 ? ` (+${properties.length - 8} more)` : ''}`
+      : 'Properties: (none yet)';
+    safeAlert_(`Eligible Move-In rows: ${count}\n${propLine}`);
+  } catch (e) {
+    safeAlert_('Move-In preview failed: ' + e.message);
+  }
+}
+
+// ── BCC dry runs (test send) ──────────────────────────────────────────────────
+
 function dryRunTestSendToMeBCC() {
   const cfg        = loadConfig_();
   const sh         = getRecipientsSheet_(cfg);

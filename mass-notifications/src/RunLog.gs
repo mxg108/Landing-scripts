@@ -41,22 +41,40 @@ function getRunLogSheet_() {
  * Opens a new log entry (Completed = FALSE) and captures the BEFORE state of
  * every affected row.  Returns a run object to be passed to logRunComplete_().
  *
- * @param {{ mode, cfg, shName, subject, rows, emails }} params
- * @return {{ runId, mode, shName, cfgSnapshot, rowBefore, rowAfter }}
+ * The optional `schema` parameter selects which sheet columns to capture for
+ * the "before" snapshot. Move-In Flow rows have a different column layout
+ * than the resident sheet, so callers pass a per-mode schema.
+ *
+ * @param {{ mode, cfg, shName, subject, rows, emails, schema? }} params
+ * @return {{ runId, mode, shName, cfgSnapshot, rowBefore, rowAfter, schema }}
  */
-function logRunStart_({ mode, cfg, shName, subject, rows, emails }) {
+function logRunStart_({ mode, cfg, shName, subject, rows, emails, schema }) {
   const ss    = SpreadsheetApp.getActive();
   const sh    = ss.getSheetByName(shName);
   const runId = `${mode}-${Utilities.formatDate(new Date(), cfg.timezone, 'yyyyMMdd_HHmmss')}`;
 
-  const before = rows.map(r => ({
-    row:          r,
-    email:        sh ? (sh.getRange(r, COL.EMAIL    ).getValue() || '')   : '',
-    name:         sh ? (sh.getRange(r, COL.NAME     ).getValue() || '')   : '',
-    unit:         sh ? (sh.getRange(r, COL.UNIT     ).getValue() || '')   : '',
-    prevStatus:   sh ? (sh.getRange(r, COL.STATUS   ).getValue() || null) : null,
-    prevLastSent: sh ? (sh.getRange(r, COL.LAST_SENT).getValue() || null) : null,
-  }));
+  // Default schema = original resident layout (INDIVIDUAL/BCC modes).
+  const sch = schema || {
+    statusCol:   COL.STATUS,
+    lastSentCol: COL.LAST_SENT,
+    fields: [
+      { name: 'email', col: COL.EMAIL },
+      { name: 'name',  col: COL.NAME  },
+      { name: 'unit',  col: COL.UNIT  },
+    ],
+  };
+
+  const before = rows.map(r => {
+    const rec = {
+      row:          r,
+      prevStatus:   sh ? (sh.getRange(r, sch.statusCol  ).getValue() || null) : null,
+      prevLastSent: sh ? (sh.getRange(r, sch.lastSentCol).getValue() || null) : null,
+    };
+    sch.fields.forEach(f => {
+      rec[f.name] = sh ? (sh.getRange(r, f.col).getValue() || '') : '';
+    });
+    return rec;
+  });
 
   const cfgSnapshot = JSON.stringify({
     version:       VERSION,
@@ -69,6 +87,8 @@ function logRunStart_({ mode, cfg, shName, subject, rows, emails }) {
       Utilities.formatDate(cfg.end,   cfg.timezone, 'yyyy-MM-dd'),
     ],
     timezone:      cfg.timezone,
+    statusCol:     sch.statusCol,
+    lastSentCol:   sch.lastSentCol,
   });
 
   appendRunLogRow_({
@@ -85,7 +105,26 @@ function logRunStart_({ mode, cfg, shName, subject, rows, emails }) {
     completed:    false,
   });
 
-  return { runId, mode, shName, cfgSnapshot, rowBefore: before, rowAfter: [] };
+  return { runId, mode, shName, cfgSnapshot, rowBefore: before, rowAfter: [], schema: sch };
+}
+
+/**
+ * Move-In Flow schema for logRunStart_ — captures property/member identifiers
+ * instead of resident email/name/unit, and points status/lastSent at the
+ * Move-In column indices.
+ */
+function moveInRunSchema_() {
+  return {
+    statusCol:   MOVEIN_COL.STATUS,
+    lastSentCol: MOVEIN_COL.LAST_SENT,
+    fields: [
+      { name: 'reservation_id', col: MOVEIN_COL.RESERVATION_ID },
+      { name: 'property_name',  col: MOVEIN_COL.PROPERTY_NAME  },
+      { name: 'property_email', col: MOVEIN_COL.PROPERTY_EMAIL },
+      { name: 'member_name',    col: MOVEIN_COL.MEMBER_NAME    },
+      { name: 'apt_number',     col: MOVEIN_COL.APT_NUMBER     },
+    ],
+  };
 }
 
 /**
@@ -99,15 +138,12 @@ function logRunComplete_(run, count, errorMsg) {
   const log     = getRunLogSheet_();
   const lastRow = log.getLastRow();
 
+  // Spread `b` so per-mode schemas pass through (resident email/name/unit
+  // OR move-in reservation_id/property_email/etc.) without explicit mapping.
   const rowStates = run.rowBefore.map(b => {
     const after = run.rowAfter.find(a => a.row === b.row) || {};
     return {
-      row:          b.row,
-      email:        b.email,
-      name:         b.name         ?? '',
-      unit:         b.unit         ?? '',
-      prevStatus:   b.prevStatus   ?? null,
-      prevLastSent: b.prevLastSent ?? null,
+      ...b,
       newStatus:    after.status   ?? null,
       newLastSent:  after.lastSent ?? null,
     };

@@ -14,11 +14,63 @@
 
 const MAX_ATTACH_BYTES = 20 * 1024 * 1024; // 20 MB
 
+// ── ID resolution (files + folders) ───────────────────────────────────────────
+
+const DRIVE_FOLDER_MIME = 'application/vnd.google-apps.folder';
+
+/**
+ * Resolves a single Drive ID to one or more Files. If the ID is a folder,
+ * returns its direct children (subfolders are ignored — Move-In flow uses
+ * a flat folder of attachments per reservation).
+ *
+ * Throws if the ID is unreadable or doesn't exist.
+ *
+ * @param {string} id
+ * @return {GoogleAppsScript.Drive.File[]}
+ */
+function expandSingleIdToFiles_(id) {
+  // Advanced Drive (v2) gives the cleanest type check without a try/catch
+  // dance between getFileById/getFolderById.
+  const meta = Drive.Files.get(id);
+
+  if (meta.mimeType === DRIVE_FOLDER_MIME) {
+    const folder = DriveApp.getFolderById(id);
+    const out    = [];
+    const it     = folder.getFiles();
+    while (it.hasNext()) out.push(it.next());
+    return out;
+  }
+
+  return [DriveApp.getFileById(id)];
+}
+
+/**
+ * Resolves an array of Drive IDs (files OR folders) to a flat list of Files.
+ * Wraps any underlying error as ATTACH_NOT_FOUND so callers can surface a
+ * row-level review status without leaking Drive API internals.
+ *
+ * @param {string[]} ids
+ * @return {GoogleAppsScript.Drive.File[]}
+ * @throws {Error} ATTACH_NOT_FOUND
+ */
+function expandIdsToFiles_(ids) {
+  const files = [];
+  ids.forEach(id => {
+    try {
+      expandSingleIdToFiles_(id).forEach(f => files.push(f));
+    } catch (_) {
+      throw new Error(`ATTACH_NOT_FOUND id=${id}`);
+    }
+  });
+  return files;
+}
+
 // ── Blob resolution ───────────────────────────────────────────────────────────
 
 /**
- * Resolves an array of Drive file IDs to Blob objects, exporting Google-native
- * files to PDF when requested.
+ * Resolves an array of Drive file/folder IDs to Blob objects, exporting
+ * Google-native files to PDF when requested. Folder IDs expand to their
+ * direct children before blob conversion.
  *
  * @param {string[]} ids
  * @param {{ exportGoogleToPdf?: boolean, maxBytes?: number }} opts
@@ -30,25 +82,22 @@ function getBlobsForIds_(ids, opts = {}) {
   const blobs    = [];
   let   total    = 0;
 
-  ids.forEach(id => {
-    try {
-      const f    = DriveApp.getFileById(id);
-      const mime = f.getMimeType();
-      let blob;
+  const files = expandIdsToFiles_(ids);
 
-      if (opts.exportGoogleToPdf && /^application\/vnd\.google\-apps\./.test(mime)) {
-        // Requires Advanced Drive service
-        const exported = Drive.Files.export(id, 'application/pdf');
-        blob = Utilities.newBlob(exported.getBytes(), 'application/pdf', f.getName() + '.pdf');
-      } else {
-        blob = f.getBlob();
-      }
+  files.forEach(f => {
+    const mime = f.getMimeType();
+    let blob;
 
-      total += blob.getBytes().length;
-      blobs.push(blob);
-    } catch (_) {
-      throw new Error(`ATTACH_NOT_FOUND id=${id}`);
+    if (opts.exportGoogleToPdf && /^application\/vnd\.google\-apps\./.test(mime)) {
+      // Requires Advanced Drive service.
+      const exported = Drive.Files.export(f.getId(), 'application/pdf');
+      blob = Utilities.newBlob(exported.getBytes(), 'application/pdf', f.getName() + '.pdf');
+    } else {
+      blob = f.getBlob();
     }
+
+    total += blob.getBytes().length;
+    blobs.push(blob);
   });
 
   if (total > maxBytes) throw new Error(`ATTACH_TOO_LARGE total=${total}`);
@@ -59,7 +108,8 @@ function getBlobsForIds_(ids, opts = {}) {
 
 /**
  * Resolves file names from Drive IDs without downloading blobs.
- * Used in dry-run previews to list attachment names without triggering exports.
+ * Folder IDs expand to their direct children. Used in dry-run previews
+ * so the operator can sanity-check what's about to attach.
  *
  * @param {string[]} ids
  * @return {{ names: string[], notes: string[] }}
@@ -71,10 +121,21 @@ function summarizeAttachmentNames_(ids) {
 
   ids.forEach(id => {
     try {
-      const f    = DriveApp.getFileById(id);
-      const mime = f.getMimeType();
-      const isGoogle = /^application\/vnd\.google\-apps\./.test(mime);
-      names.push(f.getName() + (isGoogle ? ' (Google file → PDF at send)' : ''));
+      const meta     = Drive.Files.get(id);
+      const isFolder = meta.mimeType === DRIVE_FOLDER_MIME;
+      const files    = expandSingleIdToFiles_(id);
+
+      if (isFolder && !files.length) {
+        notes.push(`Folder is empty: id=${id}`);
+        return;
+      }
+
+      // v2 Drive uses `title` for the human-readable name.
+      const folderLabel = isFolder ? ` — from folder "${meta.title || id}"` : '';
+      files.forEach(f => {
+        const isGoogle = /^application\/vnd\.google\-apps\./.test(f.getMimeType());
+        names.push(f.getName() + (isGoogle ? ' (Google file → PDF at send)' : '') + folderLabel);
+      });
     } catch (_) {
       notes.push(`ATTACH_NOT_FOUND id=${id}`);
     }

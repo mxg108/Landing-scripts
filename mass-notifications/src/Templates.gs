@@ -31,6 +31,15 @@ const TEMPLATE_BLANK_KEYS = [
   'test_email',
   'attachment_file_ids',
   'body_full_html',
+  // recipients_sheet_name resets to the default (Mass_Notification) on every
+  // template load unless the template itself sets it (e.g. Move-In Notification
+  // sets it to Move_In_Flow). This keeps modes from leaking between templates.
+  'recipients_sheet_name',
+  // Branded wrapper config — clear on every template load so the cream Move-In
+  // wrapper doesn't leak into resident-mode notifications. Move-In sets these
+  // explicitly so they survive the blanking pass.
+  'email_background_color',
+  'email_header_image_url',
 ];
 
 // ── Template registry ─────────────────────────────────────────────────────────
@@ -127,6 +136,70 @@ const EMAIL_TEMPLATES = {
       'Dates are optional for live outages — {{today}} in the subject will\n' +
       'automatically reflect the send date.\n\n' +
       'Run Dry Run → Preview to verify before sending.',
+  },
+
+  'Move-In Notification': {
+    event_name:           'New Landing Member Approved',
+    recipients_sheet_name:'Move_In_Flow',
+    send_mode:            'MOVE_IN',
+    subject_template:     'New Landing Member Approved — {{member_name}} (Apt {{apartment_number}})',
+    greeting_template:
+      '<p>Hello {{property_name}},</p>' +
+      '<p>A new Landing member has been approved!</p>' +
+      '<p>Please see information below:</p>',
+    include_disclaimer:   'NO',
+    disclaimer_html:      '',
+    notification_card:    'MOVE_IN',
+    body_intro_html:      '',
+    include_unit_line:    'NO',
+    // The MoveInCard already includes the area-manager sign-off. We need a
+    // truthy-but-empty value here so loadConfig_'s `||` fallback doesn't
+    // inject the generic "Thank you for your cooperation…" default closing.
+    closing_html:         '<!--noop-->',
+    // Brand wrapper — cream background + LANDING wordmark mirror the
+    // official Move-In template. Operators can swap the URL in the Config
+    // sheet's `email_header_image_url` row if Landing rehosts the asset.
+    email_background_color: '#F5F1E8',
+    email_header_image_url: 'https://i.imgur.com/APD3YVb.png',
+    signature_html:
+      // Thank-you closing + Landing-branded footer (logo, phone, address,
+      // copyright). Mirrors the official Move-In template; swap signature_html
+      // in the Config sheet if a property requires a different footer.
+      '<p style="margin:18px 0 4px 0;">Thank you,</p>' +
+      '<p style="margin:0 0 14px 0;">The Landing Team</p>' +
+      '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" ' +
+      'style="background:' + LANDING.DARK_NAVY + ';color:' + LANDING.WHITE + ';' +
+      'border-radius:6px;font-family:Arial,Helvetica,sans-serif;">' +
+        '<tr><td align="center" style="padding:22px 16px 8px;">' +
+          '<img src="https://www.hellolanding.com/blog/wp-content/uploads/2025/08/landing_logomark_landing-bright-blue.png" ' +
+          'alt="Landing" width="36" height="38" style="display:block;border:0;outline:none;">' +
+        '</td></tr>' +
+        '<tr><td align="center" style="padding:6px 16px;color:' + LANDING.WHITE + ';font-size:13px;">' +
+          '<a href="tel:' + LANDING_IVR_PHONE + '" style="color:' + LANDING.WHITE + ';text-decoration:underline;">' +
+          LANDING_IVR_PHONE_DISPLAY + '</a>' +
+          ' &nbsp;|&nbsp; 17 20th Street North, Suite 315, Birmingham, AL 35203' +
+        '</td></tr>' +
+        '<tr><td align="center" style="padding:4px 16px 22px;color:' + LANDING.WHITE + ';font-size:12px;">' +
+          '© Copyright Landing 2025. All rights reserved' +
+        '</td></tr>' +
+      '</table>',
+    _hint:
+      'Move-In Notification template loaded.\n\n' +
+      'Switch to the "Move_In_Flow" tab and fill in one row per approved\n' +
+      'reservation. Required per row: Property Email, Apt Number, Member Name,\n' +
+      'Member Email/Phone, Move-In Date, Area Manager fields, Attachment IDs.\n\n' +
+      'Attachment IDs accept either:\n' +
+      '  - Comma-separated Drive file IDs (background check, ID scan, etc.), OR\n' +
+      '  - A single Drive FOLDER ID — every file in that folder is attached.\n' +
+      'Folder mode is the recommended workflow: drop all per-reservation\n' +
+      'documents into a Google Drive folder and paste the folder ID once.\n\n' +
+      'Optional: Vehicle Info, Pet/ESA Info (blank renders as "N/A"),\n' +
+      'Move-Out Date, Occupants (pipe-delimited:\n' +
+      '  "Name|Phone|Email; Name|Phone|Email").\n\n' +
+      'Branded wrapper: cream background is on by default. To add the LANDING\n' +
+      'wordmark, paste a public PNG URL into the Config sheet field\n' +
+      '"email_header_image_url".\n\n' +
+      'Then run Dry Run -> Move-In mode -> Preview to verify before sending.',
   },
 
   'WiFi Outage': {

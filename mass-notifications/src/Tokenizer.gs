@@ -85,6 +85,54 @@ function buildPerRowTokens_(cfg, t) {
   };
 }
 
+/**
+ * Builds the token map for a Move-In Flow row.
+ *
+ * Includes all global tokens plus per-row Move-In fields used by
+ * MoveInCard, the subject template, and the greeting.
+ *
+ * `_occupants` is the parsed occupants array — consumed directly by
+ * MoveInCard.render(); not intended for {{}} substitution.
+ *
+ * @param {Object} cfg — result of loadConfig_()
+ * @param {Object} rec — record from getMoveInTargetRows_()
+ * @return {Object}
+ */
+function buildMoveInTokens_(cfg, rec) {
+  const moveIn  = formatMoveInDate_(rec.moveInDate,  cfg.timezone);
+  const moveOut = formatMoveInDate_(rec.moveOutDate, cfg.timezone);
+  return {
+    ...buildGlobalTokens_(cfg),
+    property_name:    rec.propertyName    || '',
+    apartment_number: rec.aptNumber       || '',
+    member_name:      rec.memberName      || '',
+    member_email:     rec.memberEmail     || '',
+    member_phone:     rec.memberPhone     || '',
+    move_in_date:     moveIn,
+    move_out_date:    moveOut,
+    vehicle_info:     rec.vehicleInfo     || '',
+    pet_info:         rec.petInfo         || '',
+    area_mgr_name:    rec.areaMgrName     || '',
+    area_mgr_phone:   rec.areaMgrPhone    || '',
+    area_mgr_email:   rec.areaMgrEmail    || '',
+    reservation_id:   rec.reservationId   || '',
+    _occupants:       rec.occupants       || [],
+  };
+}
+
+/**
+ * Formats a Move-In date as MM/dd/yyyy. Accepts Date objects, ISO strings,
+ * and pre-formatted strings (passed through). Empty input → empty string.
+ */
+function formatMoveInDate_(val, tz) {
+  if (val == null || val === '') return '';
+  if (Object.prototype.toString.call(val) === '[object Date]' && !isNaN(val)) {
+    return Utilities.formatDate(val, tz, 'MM/dd/yyyy');
+  }
+  // Already a string (e.g. operator typed "04/06/2025") — pass through.
+  return String(val).trim();
+}
+
 // ── Body composer ─────────────────────────────────────────────────────────────
 
 /**
@@ -108,7 +156,10 @@ function buildPerRowTokens_(cfg, t) {
 function buildHtmlBody_(cfg, tokens, unitStr) {
   // Fast path: full override
   if (cfg.bodyFullHtml && String(cfg.bodyFullHtml).trim()) {
-    return normalizeTelLinks_(renderWithTokens_(cfg.bodyFullHtml, tokens) + (cfg.signatureHtml || ''));
+    return wrapWithBranding_(
+      cfg,
+      normalizeTelLinks_(renderWithTokens_(cfg.bodyFullHtml, tokens) + (cfg.signatureHtml || ''))
+    );
   }
 
   const parts = [];
@@ -143,7 +194,48 @@ function buildHtmlBody_(cfg, tokens, unitStr) {
   const body = parts.filter(Boolean).join('')
     .replace(/<p>/gi, '<p style="margin:0 0 0.8em 0;">');
 
-  return normalizeTelLinks_(body + (cfg.signatureHtml || ''));
+  return wrapWithBranding_(cfg, normalizeTelLinks_(body + (cfg.signatureHtml || '')));
+}
+
+/**
+ * Wraps the rendered email in an optional cream (or other) background and
+ * header logo. Both are opt-in via Config:
+ *   email_background_color — e.g. "#F5F1E8"
+ *   email_header_image_url — public URL of a Landing wordmark .png
+ *
+ * When neither is set, returns the body unchanged. Used by buildHtmlBody_
+ * (incl. the body_full_html fast path) so every send mode picks it up if
+ * the operator opts in. Move-In Notification ships with cream on by default.
+ */
+function wrapWithBranding_(cfg, html) {
+  const bg     = cfg.emailBackgroundColor || '';
+  const imgUrl = cfg.emailHeaderImageUrl  || '';
+  if (!bg && !imgUrl) return html;
+
+  const header = imgUrl
+    ? `<div style="text-align:center;padding:0 0 16px 0;">` +
+        `<img src="${escapeHtml_(imgUrl)}" alt="Landing" ` +
+        `style="max-width:240px;height:auto;border:0;display:inline-block;">` +
+      `</div>`
+    : '';
+
+  // Two nested tables — the outer is full-width transparent (so the user's
+  // mail client renders its own page background), the inner is the cream
+  // content block, capped at 640px and centered for readability.
+  // 640 is the de facto standard for B2B/transactional email content width.
+  return [
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:transparent;">`,
+      `<tr><td align="center" style="padding:0;">`,
+        `<table role="presentation" cellpadding="0" cellspacing="0" border="0" `,
+        `style="max-width:640px;width:100%;background-color:${bg || '#FFFFFF'};border-radius:8px;">`,
+          `<tr><td style="padding:32px 36px;font-family:Arial,Helvetica,sans-serif;">`,
+            header,
+            `<div>`, html, `</div>`,
+          `</td></tr>`,
+        `</table>`,
+      `</td></tr>`,
+    `</table>`,
+  ].join('');
 }
 
 // ── Misc composition helpers ──────────────────────────────────────────────────

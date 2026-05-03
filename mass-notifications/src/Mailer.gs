@@ -26,9 +26,10 @@ function sendMassNotifications() {
     }
   }
 
-  String(cfg.sendMode).toUpperCase() === 'BCC'
-    ? sendModeBcc_(cfg)
-    : sendModeIndividual_(cfg);
+  const mode = String(cfg.sendMode).toUpperCase();
+  if (mode === 'BCC')      return sendModeBcc_(cfg);
+  if (mode === 'MOVE_IN')  return sendModeMoveIn_(cfg);
+  return sendModeIndividual_(cfg);
 }
 
 // ── Validation HTML ───────────────────────────────────────────────────────────
@@ -188,6 +189,92 @@ function sendModeBcc_(cfg) {
     safeAlert_(`Sent to ${totalSent} recipient(s) in BCC mode.`);
   } catch (e) {
     logRunComplete_(run, totalSent, String(e && e.message || e));
+    throw e;
+  }
+}
+
+// ── MOVE_IN mode ──────────────────────────────────────────────────────────────
+
+/**
+ * Sends one email per Move-In Flow row to that row's property contacts,
+ * with the member's background check + ID scan attached. The body is
+ * rendered from the Move-In Notification template (per-row card with
+ * apartment/member/vehicle/pet/occupants/area-manager block).
+ *
+ * Recipients are taken from PROPERTY_EMAIL (comma-separated). manager_email
+ * is intentionally NOT CC'd — the per-row area manager is in the body, and
+ * Move-In is a property-facing B2B email rather than a member notification.
+ *
+ * @param {Object} cfg — result of loadConfig_()
+ */
+function sendModeMoveIn_(cfg) {
+  const sh         = getMoveInSheet_(cfg);
+  const maxPerRun  = Number(cfg.maxPerRun || 500);
+  const targets    = getMoveInTargetRows_(sh, maxPerRun);
+
+  if (!targets.length) return safeAlert_('No eligible Move-In rows (check Property Email/Status).');
+
+  const subjectPreview = renderWithTokens_(cfg.subjectTemplate, {
+    ...buildMoveInTokens_(cfg, targets[0]),
+    member_name:      '<member>',
+    apartment_number: '<apt>',
+  });
+
+  const run = logRunStart_({
+    mode:    'SEND_MOVE_IN',
+    cfg,     shName:  sh.getName(),
+    subject: subjectPreview,
+    rows:    targets.map(t => t.row),
+    emails:  targets.map(t => t.propertyEmails.join(',')),
+    schema:  moveInRunSchema_(),
+  });
+
+  const cfgAttachIds = parseIdList_(cfg.attachmentFileIds);
+  let   sent = 0;
+
+  try {
+    for (const t of targets) {
+      const tokens  = buildMoveInTokens_(cfg, t);
+      const subject = renderWithTokens_(cfg.subjectTemplate, tokens);
+      const body    = buildHtmlBody_(cfg, tokens, null);
+
+      const rowIds = parseIdList_(t.attachIds);
+      const allIds = [...cfgAttachIds, ...rowIds];
+      let   attachments = [];
+
+      if (allIds.length) {
+        try {
+          attachments = getBlobsForIds_(allIds, { exportGoogleToPdf: true, maxBytes: MAX_ATTACH_BYTES });
+        } catch (e) {
+          sh.getRange(t.row, MOVEIN_COL.STATUS).setValue('REVIEW');
+          sh.getRange(t.row, MOVEIN_COL.NOTES ).setValue(e.message);
+          run.rowAfter.push({ row: t.row, status: 'REVIEW', lastSent: null });
+          continue;
+        }
+      }
+
+      GmailApp.sendEmail(t.propertyEmails.join(','), subject, '', {
+        cc:          cfg.ccExtra  || '',
+        bcc:         cfg.bccExtra || '',
+        replyTo:     cfg.replyTo  || '',
+        htmlBody:    body,
+        name:        cfg.senderDisplayName || 'Landing Notifications',
+        attachments,
+      });
+
+      const now = new Date();
+      sh.getRange(t.row, MOVEIN_COL.STATUS   ).setValue('SENT');
+      sh.getRange(t.row, MOVEIN_COL.LAST_SENT).setValue(now);
+      run.rowAfter.push({ row: t.row, status: 'SENT', lastSent: now });
+
+      sent++;
+      Utilities.sleep(100);
+    }
+
+    logRunComplete_(run, sent, null);
+    safeAlert_(`Sent ${sent} Move-In notification(s) to property contacts.`);
+  } catch (e) {
+    logRunComplete_(run, sent, String(e && e.message || e));
     throw e;
   }
 }
