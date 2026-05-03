@@ -18,7 +18,13 @@ const KNOWN_CONFIG_KEYS = [
   'timezone', 'window_start', 'window_end',
   'dry_run_limit', 'max_per_run', 'batch_size',
   'attachment_file_ids',
+  // Branded email wrapper (used by Move-In Notification; opt-in for others).
+  'email_background_color', 'email_header_image_url',
 ];
+
+// Send modes recognized by the dispatcher. Add new modes here so the
+// Config dropdown stays in sync with the Mailer routing in sendMassNotifications().
+const SEND_MODES = ['INDIVIDUAL', 'BCC', 'MOVE_IN'];
 
 // ── Config loading ────────────────────────────────────────────────────────────
 
@@ -68,6 +74,8 @@ function loadConfig_() {
     bodyFullHtml:        kv['body_full_html']  || '',
     signatureHtml:       kv['signature_html']  || '',
     notificationCard:    (kv['notification_card'] || '').trim().toUpperCase(),
+    emailBackgroundColor:(kv['email_background_color'] || '').trim(),
+    emailHeaderImageUrl: (kv['email_header_image_url']  || '').trim(),
     dryRunLimit:         Number(kv['dry_run_limit'] || 10),
     maxPerRun:           Number(kv['max_per_run']   || 500),
     batchSize:           Number(kv['batch_size']    || 90),
@@ -135,6 +143,32 @@ function validateConfig_(cfg) {
     );
   }
 
+  // Move-In mode sanity checks
+  if (String(cfg.sendMode).toUpperCase() === 'MOVE_IN') {
+    const sheetName = String(cfg.recipientsSheetName || '').trim();
+    if (sheetName && sheetName !== MOVE_IN_SHEET) {
+      warnings.push(
+        `MOVE_IN mode is configured but <code>recipients_sheet_name</code> is ` +
+        `<code>${escapeHtml_(sheetName)}</code>. The Move-In schema expects ` +
+        `<code>${MOVE_IN_SHEET}</code>.`
+      );
+    }
+    if (/\{\{\s*(first_name|unit)\b/i.test(tmplText)) {
+      warnings.push(
+        'MOVE_IN templates should use Move-In tokens (<code>member_name</code>, ' +
+        '<code>apartment_number</code>, …); resident-mode tokens like ' +
+        '<code>first_name</code>/<code>unit</code> will resolve to empty.'
+      );
+    }
+    if (String(cfg.notificationCard || '').toUpperCase() !== 'MOVE_IN') {
+      warnings.push(
+        'MOVE_IN mode without <code>notification_card = MOVE_IN</code> will skip ' +
+        'the per-row member/occupants/area-manager block. Re-load the template ' +
+        'or set the card manually.'
+      );
+    }
+  }
+
   return { errors, warnings };
 }
 
@@ -185,7 +219,7 @@ function ensureConfigUI() {
                     ensureRow('manager_name',         '');
 
   const dvMode    = SpreadsheetApp.newDataValidation()
-                      .requireValueInList(['INDIVIDUAL', 'BCC'], true).build();
+                      .requireValueInList(SEND_MODES, true).build();
   const dvYesNo   = SpreadsheetApp.newDataValidation()
                       .requireValueInList(['YES', 'NO'], true).build();
   const dvDate    = SpreadsheetApp.newDataValidation().requireDate().build();
@@ -205,5 +239,58 @@ function ensureConfigUI() {
   sh.setColumnWidths(2, 1, 1000);
   sh.getRange('A1:B1').setFontWeight('bold').setBackground('#f1f3f4');
 
+  ensureMoveInSheet_();
+
   safeAlert_('Config UI ensured.');
+}
+
+// ── Move-In Flow tab scaffolding ──────────────────────────────────────────────
+
+/**
+ * Idempotently ensures the Move_In_Flow tab exists with header row, status
+ * dropdown, and date validations on the Move-In / Move-Out date columns.
+ * Safe to re-run; never destroys existing data.
+ */
+function ensureMoveInSheet_() {
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName(MOVE_IN_SHEET) || ss.insertSheet(MOVE_IN_SHEET);
+
+  const headers = [
+    'Reservation ID', 'Property Name', 'Property Email(s)', 'Apt Number',
+    'Member Name', 'Member Email', 'Member Phone',
+    'Move-In Date', 'Move-Out Date',
+    'Vehicle Info', 'Pet/ESA Info',
+    'Occupants (Name|Phone|Email; …)',
+    'Area Manager Name', 'Area Manager Phone', 'Area Manager Email',
+    'Attachment File IDs', 'Status', 'Last Sent', 'Notes',
+  ];
+
+  // Write headers if missing or stale (only when row 1 is blank in column A).
+  if (String(sh.getRange(1, 1).getValue()).trim() === '') {
+    sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sh.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#f1f3f4');
+    sh.setFrozenRows(1);
+  }
+
+  // Status dropdown (PENDING/READY/SENT/REVIEW) on the Status column.
+  const dvStatus = SpreadsheetApp.newDataValidation()
+                     .requireValueInList(['', 'PENDING', 'READY', 'SENT', 'REVIEW'], true)
+                     .build();
+  const dvDate   = SpreadsheetApp.newDataValidation().requireDate().build();
+
+  // Apply validations to a generous row range so newly-pasted rows inherit.
+  const dvRows = Math.max(200, sh.getMaxRows() - 1);
+  sh.getRange(2, MOVEIN_COL.STATUS,        dvRows, 1).setDataValidation(dvStatus);
+  sh.getRange(2, MOVEIN_COL.MOVE_IN_DATE,  dvRows, 1)
+    .setDataValidation(dvDate).setNumberFormat('mm/dd/yyyy');
+  sh.getRange(2, MOVEIN_COL.MOVE_OUT_DATE, dvRows, 1)
+    .setDataValidation(dvDate).setNumberFormat('mm/dd/yyyy');
+
+  // Reasonable column widths for readability.
+  sh.setColumnWidth(MOVEIN_COL.RESERVATION_ID, 130);
+  sh.setColumnWidth(MOVEIN_COL.PROPERTY_NAME,  220);
+  sh.setColumnWidth(MOVEIN_COL.PROPERTY_EMAIL, 260);
+  sh.setColumnWidth(MOVEIN_COL.OCCUPANTS,      360);
+  sh.setColumnWidth(MOVEIN_COL.ATTACH_IDS,     280);
+  sh.setColumnWidth(MOVEIN_COL.NOTES,          260);
 }

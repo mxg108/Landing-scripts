@@ -10,7 +10,8 @@ function onOpen() {
   const ui   = SpreadsheetApp.getUi();
   const main = ui.createMenu('Mass Notify');
 
-  main.addItem('Preview recipients (count only)', 'previewRecipients');
+  main.addItem('Preview recipients (count only)',         'previewRecipients');
+  main.addItem('Preview Move-In recipients (count only)', 'previewMoveInRecipients');
   main.addSeparator();
 
   // ── Load Template submenu ────────────────────────────────────────────────
@@ -39,6 +40,12 @@ function onOpen() {
   dryBcc.addItem('Create BCC draft',      'dryRunCreateDraftsBCC');
   dryBcc.addItem('Test send to me',       'dryRunTestSendToMeBCC');
   dry.addSubMenu(dryBcc);
+
+  const dryMoveIn = ui.createMenu('Move-In mode');
+  dryMoveIn.addItem('Preview Move-In (HTML)',           'dryRunPreviewMoveIn');
+  dryMoveIn.addItem('Create Move-In drafts (first N)',  'dryRunCreateDraftsMoveIn');
+  dryMoveIn.addItem('Test Move-In send to me',          'dryRunTestSendToMeMoveIn');
+  dry.addSubMenu(dryMoveIn);
   main.addSubMenu(dry);
   main.addSeparator();
 
@@ -103,6 +110,7 @@ function _loadTemplate_General_Maintenance()     { loadTemplate_('General Mainte
 function _loadTemplate_Weather_Alert()           { loadTemplate_('Weather Alert');           }
 function _loadTemplate_Power_Outage()            { loadTemplate_('Power Outage');            }
 function _loadTemplate_WiFi_Outage()             { loadTemplate_('WiFi Outage');             }
+function _loadTemplate_Move_In_Notification()    { loadTemplate_('Move-In Notification');    }
 
 // ── About ─────────────────────────────────────────────────────────────────────
 

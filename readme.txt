@@ -5,8 +5,13 @@
 
   Maintained by: [Maximiliano Pérez / Member Support Management]
   Department:    Operations
-  Last Updated:  April 2026
+  Last Updated:  May 2026
   Status:        Active — all systems live and in use
+
+  Component versions (current):
+    - Mass Notifications (Apps Script):     v3.3.0
+    - QA Automation     (Apps Script):     v1.2.0
+    - AI-Scoring        (Python backend):  v2.0   (Railway)
 
 --------------------------------------------------------------------------------
   OVERVIEW
@@ -165,8 +170,19 @@ HOW IT WORKS (HIGH LEVEL)
 
 KEY SHEETS
   - Config          Key-value configuration table. Controls all runtime behavior.
-  - Recipients      One row per resident: email, name, unit, status, attachments.
+  - Mass_Notification  One row per resident: email, name, unit, status,
+                       attachments. Used by Individual and BCC modes.
+  - Move_In_Flow    (v3.3.0+) One row per approved reservation: reservation
+                    ID, property name + email(s), apartment number, member
+                    contact, move-in/out dates, vehicle/pet, occupants,
+                    area-manager block, attachment IDs (file or folder),
+                    status, last-sent, notes. Used by Move-In Flow mode.
   - Run_Log         Audit trail. Captures every send with before/after state.
+                    The captured columns are now schema-aware: resident sends
+                    log email/name/unit; Move-In sends log reservation_id /
+                    property_email / member_name / apt_number. Status and
+                    last-sent column indices are persisted in the snapshot
+                    so "Undo last run" works across both layouts.
 
 DATABASE (PostgreSQL on Railway)
   Campaign and recipient data is now archived to a PostgreSQL database instead
@@ -190,9 +206,20 @@ SENDING MODES
   - Individual      One personalized email per recipient (uses first name, unit).
   - BCC             Batched sends with all recipients in BCC (less personalized,
                     useful for very large lists).
+  - Move-In Flow    (v3.3.0+) Property-facing notifications. One email per row
+                    in the dedicated "Move_In_Flow" tab, sent to that row's
+                    Property Email contacts (not to the member). Each email
+                    carries the approved member's apartment, contact info,
+                    move-in date, vehicle/pet info (optional → renders as N/A),
+                    additional occupants (pipe-delimited "Name|Phone|Email"),
+                    and a per-row Landing area-manager sign-off block.
+                    Background-check + ID-scan PDFs travel as attachments.
+                    Renders inside the official Landing branded wrapper
+                    (cream background, LANDING wordmark header, dark-navy
+                    footer with phone/address/copyright).
 
 TEMPLATES
-  Six pre-built templates are included. Each populates the Config sheet
+  Seven pre-built templates are included. Each populates the Config sheet
   with appropriate subject, body, greeting, and disclaimer HTML:
     - Annual Fire Inspection
     - Water Outage
@@ -200,15 +227,29 @@ TEMPLATES
     - Weather Alert
     - Power Outage
     - WiFi Outage
+    - Move-In Notification    (v3.3.0+, switches send_mode to MOVE_IN and
+                               points the recipients sheet at "Move_In_Flow")
 
   Templates support dynamic tokens: {{first_name}}, {{unit}}, {{property_name}},
   {{event_name}}, {{date_range}}, {{today}}. Fallback syntax: {{first_name | Resident}}
   uses "Resident" if the field is empty.
 
+  Move-In Notification additionally exposes per-row tokens:
+  {{member_name}}, {{member_email}}, {{member_phone}}, {{apartment_number}},
+  {{move_in_date}}, {{move_out_date}}, {{vehicle_info}}, {{pet_info}},
+  {{area_mgr_name}}, {{area_mgr_phone}}, {{area_mgr_email}}.
+
 ATTACHMENTS
   Attachments can be added at the Config level (sent to all recipients) or
-  per-row in the Recipients sheet (sent only to that recipient). Files are
-  retrieved from Google Drive by ID. Google Docs are auto-exported as PDFs.
+  per-row in the Recipients / Move_In_Flow sheet (sent only to that row).
+  Files are retrieved from Google Drive by ID. Google Docs are auto-exported
+  as PDFs.
+
+  As of v3.3.0, the Attachment IDs cell accepts either a comma-separated list
+  of file IDs OR a single Drive FOLDER ID — every direct file in the folder
+  is attached automatically (subfolders are not recursed). The 20 MB Gmail
+  per-message cap still applies to the expanded list; rows that exceed it
+  are flagged REVIEW with the offending total in Notes.
 
 SAFETY FEATURES
   - Dry Run mode: preview HTML, create Gmail drafts, or test-send to yourself.
@@ -322,6 +363,16 @@ DRY RUN / MANUAL TRIGGERS
     - Process Latest Row   — manually processes the most recent form response
     - Create Draft         — generates a Gmail draft instead of sending (safe review)
     - Rebuild History      — reconstructs Analyst_History from scratch from form data
+
+WHAT'S NEW IN v1.2.0
+  - AI reasoning + confidence are now surfaced inline in the agent email's
+    score breakdown (one row per scored section).
+  - Multi-team support: rubric and scoring config moved out of code and into
+    qa-automation/AI-Scoring/backend/config/teams/<team>.json. Push.sh stages
+    a per-team build dir from a shared base + team overrides.
+  - QA email scorecard polish (consistent typography, color contrast, spacing).
+  - Documentation section in progression + reasoning textbox carry into the
+    Analyst_History enrichment columns and the agent email.
 
 CURRENT LIMITATIONS / KNOWN ISSUES
     - Columns with ARRAYFORMULAs (Overall Score, Agent Email) may not resolve

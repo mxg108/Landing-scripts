@@ -197,6 +197,82 @@ class WiFiOutageCard extends NotificationCard {
   }
 }
 
+// ── Move-In Notification (matches Landing's official template 1:1) ───────────
+//
+// Unlike the cards above, this one does NOT use _shell — the official template
+// is plain text on a cream background, no colored header bar.  It also needs
+// JS-level access to the per-row tokens to render the variadic occupants list,
+// so render() takes the tokens map directly (other cards ignore it).
+//
+class MoveInCard extends NotificationCard {
+  render(tokens) {
+    const t = tokens || {};
+
+    // Inline-styled rows render as one <div> with <br> separators so the
+    // buildHtmlBody_ post-processor (which adds margin to bare <p>) leaves
+    // them alone — keeps spacing tight inside the info block.
+    const memberBlock = `
+<div style="margin:0 0 14px 0;font-size:14px;color:${LANDING.DARK_NAVY};line-height:1.5;">
+  <strong>Apartment Number:</strong> ${escapeHtml_(t.apartment_number || '')}<br>
+  <strong>Member Name:</strong> ${escapeHtml_(t.member_name || '')}<br>
+  <strong>Move In Date:</strong> ${escapeHtml_(t.move_in_date || '')}<br>
+  <strong>Phone Number:</strong> ${this._telLink(t.member_phone)}<br>
+  <strong>Contact Email:</strong> ${this._mailtoLink(t.member_email)}
+</div>`.trim();
+
+    const vehicle = `
+<p style="margin:0 0 4px 0;"><strong>Vehicle Information</strong></p>
+<p style="margin:0 0 14px 0;">${escapeHtml_(t.vehicle_info || 'N/A')}</p>`.trim();
+
+    const pet = `
+<p style="margin:0 0 4px 0;"><strong>Pet Information</strong></p>
+<p style="margin:0 0 14px 0;">${escapeHtml_(t.pet_info || 'N/A')}</p>`.trim();
+
+    const occupantsList = (t._occupants || []).map(o => `
+<div style="margin:0 0 10px 0;font-size:14px;color:${LANDING.DARK_NAVY};line-height:1.5;">
+  <strong>Name:</strong> ${escapeHtml_(o.name || '')}<br>
+  <strong>Phone Number:</strong> ${this._telLink(o.phone)}<br>
+  <strong>Email Address:</strong> ${this._mailtoLink(o.email)}
+</div>`.trim()).join('');
+
+    const occupants = occupantsList
+      ? `<p style="margin:0 0 6px 0;"><strong>All additional occupants listed below:</strong></p>${occupantsList}`
+      : '';
+
+    const bgCheck =
+      `<p>A copy of the member&#39;s background check is attached. ` +
+      `If your property requires additional information about the member, ` +
+      `you will receive it in a follow-up email.</p>`;
+
+    const reachOut =
+      `<p>Please reach out to your Landing area manager ` +
+      `with any additional questions or concerns.</p>`;
+
+    const areaMgr = `
+<div style="margin:0 0 14px 0;font-size:14px;color:${LANDING.DARK_NAVY};line-height:1.5;">
+  <strong>Name:</strong> ${escapeHtml_(t.area_mgr_name || '')}<br>
+  <strong>Phone:</strong> ${this._telLink(t.area_mgr_phone)}<br>
+  <strong>Email address:</strong> ${this._mailtoLink(t.area_mgr_email)}
+</div>`.trim();
+
+    return [memberBlock, vehicle, pet, occupants, bgCheck, reachOut, areaMgr]
+      .filter(Boolean).join('');
+  }
+
+  _telLink(raw) {
+    const display = String(raw || '').trim();
+    if (!display) return '';
+    // normalizeTelLinks_ strips non-digits from the href at composition time.
+    return `<a href="tel:${escapeHtml_(display)}" style="color:${LANDING.ACCENT_BLUE};">${escapeHtml_(display)}</a>`;
+  }
+
+  _mailtoLink(addr) {
+    const display = String(addr || '').trim();
+    if (!display) return '';
+    return `<a href="mailto:${escapeHtml_(display)}" style="color:${LANDING.ACCENT_BLUE};">${escapeHtml_(display)}</a>`;
+  }
+}
+
 // ── Registry & factory ────────────────────────────────────────────────────────
 
 /**
@@ -210,6 +286,7 @@ const CARD_REGISTRY = {
   WEATHER_ALERT:   WeatherAlertCard,
   POWER_OUTAGE:    PowerOutageCard,
   WIFI_OUTAGE:     WiFiOutageCard,
+  MOVE_IN:         MoveInCard,
 };
 
 /**
@@ -217,12 +294,15 @@ const CARD_REGISTRY = {
  * Returns an empty string for unknown or empty card types.
  *
  * @param {string} cardType — value from cfg.notificationCard
- * @param {Object} tokens   — result of buildPerRowTokens_() or buildGlobalTokens_()
+ * @param {Object} tokens   — result of buildPerRowTokens_(), buildGlobalTokens_(),
+ *                            or buildMoveInTokens_(). Passed to render() so cards
+ *                            with non-trivial structure (variadic lists, etc.)
+ *                            can consume tokens directly; existing cards ignore it.
  * @return {string}
  */
 function buildCard_(cardType, tokens) {
   const CardClass = CARD_REGISTRY[String(cardType || '').toUpperCase()];
   if (!CardClass) return '';
-  const rawHtml = new CardClass().render();
+  const rawHtml = new CardClass().render(tokens);
   return renderWithTokens_(rawHtml, tokens);
 }
