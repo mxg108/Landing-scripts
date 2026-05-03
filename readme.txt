@@ -210,7 +210,13 @@ SENDING MODES
                     in the dedicated "Move_In_Flow" tab, sent to that row's
                     Property Email contacts (not to the member). Each email
                     carries the approved member's apartment, contact info,
-                    move-in date, vehicle/pet info (optional → renders as N/A),
+                    move-in date, vehicle info (pipe-delimited
+                    "Year|Make|Model|Color|License Plate|State"; multi-vehicle
+                    rows separated by ";"; blank renders as N/A; legacy free
+                    text falls through unchanged), pet/ESA info (pipe-delimited
+                    "Animal|Breed|Weight|ESA?|Name"; multi-pet rows separated
+                    by ";"; blank renders as N/A; legacy free text falls
+                    through unchanged),
                     additional occupants (pipe-delimited "Name|Phone|Email"),
                     and a per-row Landing area-manager sign-off block.
                     Background-check + ID-scan PDFs travel as attachments.

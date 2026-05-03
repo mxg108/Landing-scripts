@@ -154,6 +154,80 @@ function parseOccupants_(raw) {
 }
 
 /**
+ * Parses the Vehicle Info cell, formatted as pipe-delimited records separated
+ * by ';' or newline. Field order matches the operator-facing template hint:
+ *
+ *   "Year|Make|Model|Color|License Plate|State"
+ *
+ *   "2018|Toyota|4Runner|Black|LCS3767|TX; 2021|Honda|Civic|White||"
+ *
+ * Returns an empty array when no '|' is present anywhere — the caller falls
+ * back to rendering the raw cell value, preserving backward compatibility
+ * with rows that were entered as free-text before this format existed.
+ *
+ * @param {*} raw
+ * @return {Array<{year:string, make:string, model:string, color:string,
+ *                 plate:string, state:string}>}
+ */
+function parseVehicles_(raw) {
+  if (raw == null) return [];
+  const text = String(raw);
+  if (!text.trim() || text.indexOf('|') === -1) return [];
+  return text
+    .split(/[;\n]+/)
+    .map(chunk => chunk.trim())
+    .filter(Boolean)
+    .map(chunk => {
+      const parts = chunk.split('|').map(p => p.trim());
+      return {
+        year:  parts[0] || '',
+        make:  parts[1] || '',
+        model: parts[2] || '',
+        color: parts[3] || '',
+        plate: parts[4] || '',
+        state: parts[5] || '',
+      };
+    })
+    .filter(v => v.year || v.make || v.model || v.color || v.plate || v.state);
+}
+
+/**
+ * Parses the Pet/ESA Info cell, formatted as pipe-delimited records separated
+ * by ';' or newline. Field order matches the operator-facing template hint:
+ *
+ *   "Animal|Breed|Weight|ESA?|Name"
+ *
+ *   "Dog|Golden Retriever|65 lbs|Yes|Buddy; Cat|Tabby|10 lbs|No|Whiskers"
+ *
+ * Returns [] when no '|' is present (caller falls back to raw rendering),
+ * matching parseVehicles_ semantics for backward compatibility.
+ *
+ * @param {*} raw
+ * @return {Array<{animal:string, breed:string, weight:string,
+ *                 esa:string, name:string}>}
+ */
+function parsePets_(raw) {
+  if (raw == null) return [];
+  const text = String(raw);
+  if (!text.trim() || text.indexOf('|') === -1) return [];
+  return text
+    .split(/[;\n]+/)
+    .map(chunk => chunk.trim())
+    .filter(Boolean)
+    .map(chunk => {
+      const parts = chunk.split('|').map(p => p.trim());
+      return {
+        animal: parts[0] || '',
+        breed:  parts[1] || '',
+        weight: parts[2] || '',
+        esa:    parts[3] || '',
+        name:   parts[4] || '',
+      };
+    })
+    .filter(p => p.animal || p.breed || p.weight || p.esa || p.name);
+}
+
+/**
  * Parses the Property Email cell into an array of valid email addresses.
  * Accepts comma, semicolon, whitespace, or newline as separators.
  */
@@ -202,7 +276,9 @@ function getMoveInTargetRows_(sh, limit) {
       moveInDate:     r[MOVEIN_COL.MOVE_IN_DATE  - 1],   // raw — formatter handles Date or string
       moveOutDate:    r[MOVEIN_COL.MOVE_OUT_DATE - 1],
       vehicleInfo:    String(r[MOVEIN_COL.VEHICLE_INFO  - 1] || '').trim(),
+      vehicles:       parseVehicles_(r[MOVEIN_COL.VEHICLE_INFO - 1]),
       petInfo:        String(r[MOVEIN_COL.PET_INFO      - 1] || '').trim(),
+      pets:           parsePets_(r[MOVEIN_COL.PET_INFO - 1]),
       occupants:      parseOccupants_(r[MOVEIN_COL.OCCUPANTS - 1]),
       areaMgrName:    String(r[MOVEIN_COL.AREA_MGR_NAME  - 1] || '').trim(),
       areaMgrPhone:   String(r[MOVEIN_COL.AREA_MGR_PHONE - 1] || '').trim(),
