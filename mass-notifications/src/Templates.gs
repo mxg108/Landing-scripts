@@ -193,9 +193,17 @@ const EMAIL_TEMPLATES = {
       '  - A single Drive FOLDER ID — every file in that folder is attached.\n' +
       'Folder mode is the recommended workflow: drop all per-reservation\n' +
       'documents into a Google Drive folder and paste the folder ID once.\n\n' +
-      'Optional: Vehicle Info, Pet/ESA Info (blank renders as "N/A"),\n' +
-      'Move-Out Date, Occupants (pipe-delimited:\n' +
-      '  "Name|Phone|Email; Name|Phone|Email").\n\n' +
+      'Optional: Move-Out Date.\n\n' +
+      'Vehicle Info (optional) is pipe-delimited:\n' +
+      '  "Year|Make|Model|Color|License Plate|State"\n' +
+      '  e.g. "2018|Toyota|4Runner|Black|LCS3767|TX"\n' +
+      'Multiple vehicles separated by ";". Blank cell renders as "N/A".\n\n' +
+      'Pet/ESA Info (optional) is pipe-delimited:\n' +
+      '  "Animal|Breed|Weight|ESA?|Name"\n' +
+      '  e.g. "Dog|Golden Retriever|65 lbs|Yes|Buddy"\n' +
+      'Multiple pets separated by ";". Blank cell renders as "N/A".\n\n' +
+      'Occupants (optional) is pipe-delimited similarly:\n' +
+      '  "Name|Phone|Email; Name|Phone|Email"\n\n' +
       'Branded wrapper: cream background is on by default. To add the LANDING\n' +
       'wordmark, paste a public PNG URL into the Config sheet field\n' +
       '"email_header_image_url".\n\n' +

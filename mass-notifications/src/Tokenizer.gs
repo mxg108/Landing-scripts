@@ -117,6 +117,8 @@ function buildMoveInTokens_(cfg, rec) {
     area_mgr_email:   rec.areaMgrEmail    || '',
     reservation_id:   rec.reservationId   || '',
     _occupants:       rec.occupants       || [],
+    _vehicles:        rec.vehicles        || [],
+    _pets:            rec.pets            || [],
   };
 }
 

@@ -6,7 +6,7 @@
  * here is available project-wide without imports.
  */
 
-const VERSION                    = 'v3.3.0';
+const VERSION                    = 'v3.3.1';
 const LANDING_IVR_PHONE          = '+14152311701';
 const LANDING_IVR_PHONE_DISPLAY  = '(415) 231-1701';
 const CONFIG_SHEET               = 'Config';

@@ -220,13 +220,46 @@ class MoveInCard extends NotificationCard {
   <strong>Contact Email:</strong> ${this._mailtoLink(t.member_email)}
 </div>`.trim();
 
-    const vehicle = `
-<p style="margin:0 0 4px 0;"><strong>Vehicle Information</strong></p>
-<p style="margin:0 0 14px 0;">${escapeHtml_(t.vehicle_info || 'N/A')}</p>`.trim();
+    // Vehicles render structured (labeled per field) when the cell is
+    // pipe-delimited "Year|Make|Model|Color|License Plate|State". Multiple
+    // vehicles can be ';'-separated. Falls back to the raw cell value (or
+    // "N/A") for legacy rows that were entered as free text.
+    const vehiclesList = (t._vehicles || []).map(v => {
+      const rows = [];
+      if (v.year)  rows.push(`<strong>Year:</strong> ${escapeHtml_(v.year)}`);
+      if (v.make)  rows.push(`<strong>Make:</strong> ${escapeHtml_(v.make)}`);
+      if (v.model) rows.push(`<strong>Model:</strong> ${escapeHtml_(v.model)}`);
+      if (v.color) rows.push(`<strong>Color:</strong> ${escapeHtml_(v.color)}`);
+      if (v.plate) rows.push(`<strong>License Plate:</strong> ${escapeHtml_(v.plate)}`);
+      if (v.state) rows.push(`<strong>State:</strong> ${escapeHtml_(v.state)}`);
+      if (!rows.length) return '';
+      return `<div style="margin:0 0 10px 0;font-size:14px;color:${LANDING.DARK_NAVY};line-height:1.5;">${rows.join('<br>')}</div>`;
+    }).filter(Boolean).join('');
 
-    const pet = `
-<p style="margin:0 0 4px 0;"><strong>Pet Information</strong></p>
-<p style="margin:0 0 14px 0;">${escapeHtml_(t.pet_info || 'N/A')}</p>`.trim();
+    const vehicleHeader = `<p style="margin:0 0 4px 0;"><strong>Vehicle Information</strong></p>`;
+    const vehicle = vehiclesList
+      ? `${vehicleHeader}<div style="margin:0 0 14px 0;">${vehiclesList}</div>`
+      : `${vehicleHeader}<p style="margin:0 0 14px 0;">${escapeHtml_(t.vehicle_info || 'N/A')}</p>`;
+
+    // Pets render structured (labeled per field) when the cell is
+    // pipe-delimited "Animal|Breed|Weight|ESA?|Name". Multiple pets can be
+    // ';'-separated. Falls back to the raw cell value (or "N/A") for legacy
+    // rows entered as free text.
+    const petsList = (t._pets || []).map(p => {
+      const rows = [];
+      if (p.animal) rows.push(`<strong>Animal:</strong> ${escapeHtml_(p.animal)}`);
+      if (p.breed)  rows.push(`<strong>Breed:</strong> ${escapeHtml_(p.breed)}`);
+      if (p.weight) rows.push(`<strong>Weight:</strong> ${escapeHtml_(p.weight)}`);
+      if (p.esa)    rows.push(`<strong>ESA:</strong> ${escapeHtml_(p.esa)}`);
+      if (p.name)   rows.push(`<strong>Name:</strong> ${escapeHtml_(p.name)}`);
+      if (!rows.length) return '';
+      return `<div style="margin:0 0 10px 0;font-size:14px;color:${LANDING.DARK_NAVY};line-height:1.5;">${rows.join('<br>')}</div>`;
+    }).filter(Boolean).join('');
+
+    const petHeader = `<p style="margin:0 0 4px 0;"><strong>Pet Information</strong></p>`;
+    const pet = petsList
+      ? `${petHeader}<div style="margin:0 0 14px 0;">${petsList}</div>`
+      : `${petHeader}<p style="margin:0 0 14px 0;">${escapeHtml_(t.pet_info || 'N/A')}</p>`;
 
     const occupantsList = (t._occupants || []).map(o => `
 <div style="margin:0 0 10px 0;font-size:14px;color:${LANDING.DARK_NAVY};line-height:1.5;">
