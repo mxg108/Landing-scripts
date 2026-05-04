@@ -60,26 +60,33 @@ class QAEntry {
     );
   }
 
-  /** Returns a flat object suitable for writing to the Analyst_History sheet. */
+  /**
+   * Returns a flat object suitable for writing to the Analyst_History sheet.
+   * Numeric and binary slots are emitted in CONFIG.NUMERIC_CATEGORIES /
+   * BINARY_CATEGORIES order so each team's rubric drives the column layout.
+   */
   toHistoryRow() {
-    return [
-      this.agentName,
-      this.agentEmail,
-      this.timestamp,
-      this.overallScore,
-      this.numericScores.greeting,
-      this.numericScores.callPurpose,
-      this.numericScores.matchMoment,
-      this.numericScores.processAdherence,
-      this.numericScores.callResolution,
-      this.numericScores.communication,
-      this.numericScores.efficiency,
-      this.numericScores.documentation,
-      this.binaryChecks.identityValidation  ? 'Y' : 'N',
-      this.binaryChecks.customerResolution  ? 'Y' : 'N',
-      this.managerEmail,
-      this.dialpadLink,     // P  (Dialpad link — used as lookup key for AI reasoning)
+    var row = [
+      this.agentName,        // A
+      this.agentEmail,       // B
+      this.timestamp,        // C
+      this.overallScore,     // D
     ];
+
+    // Numeric scores (1–5) in rubric order
+    CONFIG.NUMERIC_CATEGORIES.forEach(function(cat) {
+      row.push(this.numericScores[cat.key]);
+    }, this);
+
+    // Binary checks (Y/N) in rubric order
+    CONFIG.BINARY_CATEGORIES.forEach(function(cat) {
+      row.push(this.binaryChecks[cat.key] ? 'Y' : 'N');
+    }, this);
+
+    row.push(this.managerEmail);  // O
+    row.push(this.dialpadLink);   // P  (Dialpad link — used as lookup key for AI reasoning)
+
+    return row;
   }
 
   /**

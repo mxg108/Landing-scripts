@@ -163,4 +163,32 @@ const CONFIG = {
     CALLER_PHONE:       37,  // AL
     DOC_REASONING:      38,  // AM
   },
+
+  // ── Extended-block layout (drives AnalystHistory header + enrichment) ──
+  // Single ordered descriptor for the per-section reasoning/meta block that
+  // appears after Source on Analyst_History (col T+) and after Source on
+  // Form Responses AI (col R+). New teams override this list to declare
+  // their rubric ordering instead of forking AnalystHistory.js.
+  //
+  // Slot types:
+  //   'reasoning' — AI-scored category. Two cols on both tabs (Conf + Reason).
+  //   'meta'      — single-column metadata (caller details). Same on both tabs.
+  //   'manual'    — manual-scored category (e.g. Documentation). Two cols on
+  //                 Analyst_History (Conf set to 'manual' + Reason); one col
+  //                 on Form AI (Reason only — the manager types it in).
+  HISTORY_EXTENDED_LAYOUT: [
+    { type: 'reasoning', key: 'greeting',           label: 'Greeting' },
+    { type: 'reasoning', key: 'identityValidation', label: 'Identity Validation' },
+    { type: 'reasoning', key: 'callPurpose',        label: 'Purpose of Call' },
+    { type: 'reasoning', key: 'matchMoment',        label: 'Matching the Moment' },
+    { type: 'reasoning', key: 'processAdherence',   label: 'Process Adherence' },
+    { type: 'reasoning', key: 'callResolution',     label: 'Call Resolution' },
+    { type: 'reasoning', key: 'communication',      label: 'Communication' },
+    { type: 'reasoning', key: 'efficiency',         label: 'Efficiency' },
+    { type: 'reasoning', key: 'customerResolution', label: 'Customer Resolution' },
+    { type: 'meta',      key: 'callSummary',        label: 'Call Summary' },
+    { type: 'meta',      key: 'callerName',         label: 'Caller Name' },
+    { type: 'meta',      key: 'callerPhone',        label: 'Caller Phone' },
+    { type: 'manual',    key: 'documentation',      label: 'Documentation' },
+  ],
 };

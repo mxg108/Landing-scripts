@@ -1,0 +1,290 @@
+{
+  "team_id": "sales",
+  "display_name": "Sales",
+  "company": "Landing Living LLC",
+  "rubric_version": "1.0",
+
+  "excluded_test_agents": [],
+
+  "stats": {
+    "min_evals_for_outlier": 5,
+    "outlier_z_threshold": 3.5,
+    "ewma_span": 5,
+    "ewma_min_evals": 3,
+    "ewma_trend_delta": 3.0,
+    "spc_sigma_multiplier": 2.0
+  },
+
+  "gemini": {
+    "scoring_model": "gemini-2.5-flash",
+    "scoring_temperature": 0.2,
+    "scoring_max_output_tokens": 65536,
+    "progression_model": "gemini-2.5-flash",
+    "progression_temperature": 0.3,
+    "progression_max_output_tokens": 16384
+  },
+
+  "sheets": {
+    "form_responses_ai": {
+      "tab_name_default": "QA Scores",
+      "column_map": {
+        "A": "timestamp",
+        "B": "manager_email",
+        "C": "agent_name",
+        "D": "greeting",
+        "E": "contact_verification",
+        "F": "discovery",
+        "G": "tone_alignment",
+        "H": "process_adherence",
+        "I": "objection_handling",
+        "J": "communication",
+        "K": "closing",
+        "L": "crm_documentation",
+        "M": "next_step_commitment",
+        "N": "key_strengths",
+        "O": "opportunities",
+        "P": "dialpad_link"
+      },
+      "scored_section_columns": {
+        "D": "greeting",
+        "E": "contact_verification",
+        "F": "discovery",
+        "G": "tone_alignment",
+        "H": "process_adherence",
+        "I": "objection_handling",
+        "J": "communication",
+        "K": "closing",
+        "M": "next_step_commitment"
+      },
+      "reasoning_start_col": "Q",
+      "caller_metadata_cols": {
+        "call_summary": "AJ",
+        "caller_name": "AK",
+        "caller_phone": "AL"
+      },
+      "doc_reasoning_col": "AM"
+    },
+    "analyst_history": {
+      "tab_name_default": "Analyst_History",
+      "col_agent_name": 0,
+      "col_agent_email": 1,
+      "col_timestamp": 2,
+      "col_overall_score": 3,
+      "section_columns": {
+        "greeting": 4,
+        "discovery": 5,
+        "tone_alignment": 6,
+        "process_adherence": 7,
+        "objection_handling": 8,
+        "communication": 9,
+        "closing": 10,
+        "crm_documentation": 11
+      },
+      "yn_columns": {
+        "contact_verification": 12,
+        "next_step_commitment": 13
+      },
+      "col_manager_email": 14,
+      "col_dialpad_link": 15,
+      "col_key_strengths": 16,
+      "col_improvements": 17,
+      "col_source": 18,
+      "extended_columns": {
+        "greeting": [19, 20],
+        "contact_verification": [21, 22],
+        "discovery": [23, 24],
+        "tone_alignment": [25, 26],
+        "process_adherence": [27, 28],
+        "objection_handling": [29, 30],
+        "communication": [31, 32],
+        "closing": [33, 34],
+        "next_step_commitment": [35, 36],
+        "crm_documentation": [40, 41]
+      },
+      "col_call_summary": 37,
+      "col_caller_name": 38,
+      "col_caller_phone": 39
+    },
+    "form_responses_1_tab": "Form Responses 1",
+    "mails_tab": "Mails"
+  },
+
+  "sections": [
+    {
+      "id": "greeting",
+      "history_id": "greeting",
+      "name": "Greeting & Rapport",
+      "section_number": 1,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "audio_dependent": false,
+      "rubric_question": "Did the rep open with a professional greeting and establish rapport quickly?",
+      "score_descriptions": {
+        "1": "Cold open, no name introduction, abrupt tone",
+        "2": "Introduced self but rushed, no attempt at connection",
+        "3": "Standard greeting, professional but transactional",
+        "4": "Warm greeting plus light rapport (acknowledged timing, role, or context)",
+        "5": "Authentic warmth, used prospect's name, set a positive tone for the call"
+      },
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "contact_verification",
+      "history_id": "contact_verification",
+      "name": "Contact Verification",
+      "section_number": 2,
+      "score_type": "yn",
+      "audio_dependent": false,
+      "rubric_question": "Did the rep confirm they were speaking with the intended decision-maker or qualified contact?",
+      "na_applicable": true,
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "discovery",
+      "history_id": "discovery",
+      "name": "Discovery & Needs Analysis",
+      "section_number": 3,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "audio_dependent": false,
+      "rubric_question": "Did the rep ask open-ended discovery questions and uncover prospect needs?",
+      "score_descriptions": {
+        "1": "Pitched immediately, no discovery questions",
+        "2": "Surface-level questions, accepted first answer without probing",
+        "3": "Asked basic discovery questions, missed root cause",
+        "4": "Multiple probing questions, surfaced specific pain points",
+        "5": "Layered discovery — uncovered budget, timeline, decision criteria, and emotional drivers"
+      },
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "tone_alignment",
+      "history_id": "tone_alignment",
+      "name": "Tone Alignment",
+      "section_number": 4,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "audio_dependent": true,
+      "rubric_question": "Did the rep match the prospect's energy, pace, and communication style appropriately?",
+      "score_descriptions": {
+        "1": "Tone clash — pushy when prospect was hesitant, or flat when prospect was excited",
+        "2": "Inconsistent tone, talked over prospect or left long awkward gaps",
+        "3": "Adequate tone, no major mismatches",
+        "4": "Good adaptation to prospect's mood",
+        "5": "Mirrored pace and emotion expertly — prospect noticeably opened up"
+      },
+      "confidence_cap": "medium",
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "process_adherence",
+      "history_id": "process_adherence",
+      "name": "Process Adherence",
+      "section_number": 5,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "audio_dependent": false,
+      "rubric_question": "Did the rep follow the documented Sales SOP (qualification framework, pricing rules, compliance disclosures)?",
+      "score_descriptions": {
+        "1": "Skipped multiple SOP steps, made off-script claims",
+        "2": "Followed parts of SOP but missed compliance items",
+        "3": "Followed SOP with minor deviations",
+        "4": "Followed SOP, included required disclosures",
+        "5": "Fully adhered to SOP plus best-practice extras (pricing caveats, ROI framing)"
+      },
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "objection_handling",
+      "history_id": "objection_handling",
+      "name": "Objection Handling",
+      "section_number": 6,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "audio_dependent": false,
+      "rubric_question": "When the prospect raised concerns, did the rep acknowledge, understand, and respond effectively?",
+      "score_descriptions": {
+        "1": "Ignored objections or argued back",
+        "2": "Addressed objection with a generic scripted answer",
+        "3": "Acknowledged objection and provided a reasonable response",
+        "4": "Acknowledged plus clarified the underlying concern, then addressed it directly",
+        "5": "Reframed the objection as a benefit, validated prospect, secured agreement to move forward"
+      },
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "communication",
+      "history_id": "communication",
+      "name": "Communication",
+      "section_number": 7,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "audio_dependent": false,
+      "rubric_question": "Was the rep clear, concise, and professional?",
+      "score_descriptions": {
+        "1": "Confusing, jargon-heavy, frequent fillers",
+        "2": "Some clarity, lots of internal lingo or rambling",
+        "3": "Clear basic communication",
+        "4": "Polished and professional, appropriate vocabulary for the prospect",
+        "5": "Crisp, persuasive, built credibility through language"
+      },
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "closing",
+      "history_id": "closing",
+      "name": "Closing & Call Control",
+      "section_number": 8,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "audio_dependent": true,
+      "rubric_question": "Did the rep drive the call toward a clear next step and manage the timing well?",
+      "score_descriptions": {
+        "1": "Lost control of the call, no defined next step, drifted to a vague follow-up",
+        "2": "Suggested next step but didn't confirm prospect commitment",
+        "3": "Set a next step but did not secure it on the calendar",
+        "4": "Secured a next step with a date/time committed",
+        "5": "Calendar invite sent live on call, mutual close-plan agreed"
+      },
+      "confidence_cap": "medium",
+      "special_reasoning_instructions": "ALWAYS include timestamps if the prospect explicitly committed to a meeting or signed up live during the call"
+    },
+    {
+      "id": "crm_documentation",
+      "history_id": "crm_documentation",
+      "name": "CRM Documentation",
+      "section_number": 9,
+      "score_type": "manual",
+      "score_range": [1, 5],
+      "audio_dependent": false,
+      "rubric_question": null,
+      "score_descriptions": null,
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "next_step_commitment",
+      "history_id": "next_step_commitment",
+      "name": "Next Step Commitment",
+      "section_number": 10,
+      "score_type": "yn",
+      "audio_dependent": false,
+      "rubric_question": "Did the prospect verbally commit to a specific next step (meeting, demo, decision call, signed agreement)?",
+      "na_applicable": true,
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    }
+  ],
+
+  "scoring_prompt": {
+    "system_prompt_template": "You are a QA evaluator for the Sales team at {company}.\nYou will listen to a full sales call recording and score it using the rubric provided.\n\nCRITICAL OUTPUT RULES:\n- Return ONLY a valid JSON object. No markdown fences, no prose, no explanations outside the JSON.\n- All string values must have apostrophes and internal quotes escaped.\n- Never use raw newlines inside string values — use a space instead.\n- The JSON must be parseable by Python json.loads() without modification.\n- Use the Second person (\"you\") when referring to the rep in the reasoning AND feedback sections, as if you are directly addressing them with a personal tone, DO NOT use the Third person (\"they/them\") anywhere in your outputs.",
+    "confidence_levels_note": "- \"high\": Clear evidence in audio, no ambiguity\n- \"medium\": Reasonable inference, some ambiguity or audio-dependent nuance\n- \"low\": Insufficient signal, heavy guessing required",
+    "sop_sections": [5]
+  }
+}
