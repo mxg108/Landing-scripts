@@ -1,6 +1,7 @@
 from __future__ import annotations
+from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AgentRosterEntry(BaseModel):
@@ -10,8 +11,10 @@ class AgentRosterEntry(BaseModel):
     std: float
     ewma: Optional[float] = None
     trend: str  # "improving", "declining", "flat"
-    id_val_pct: float
-    cust_res_pct: float
+    binary_pcts: dict[str, float] = Field(
+        default_factory=dict,
+        description="section_id -> Y%. Keys map to team_config.yn_history_ids.",
+    )
     status: str  # "excellent", "good", "watch", "at_risk"
     weak_sections: list[str]
     is_active: bool
@@ -73,13 +76,10 @@ class BinaryAgentBreakdown(BaseModel):
 
 
 class BinarySectionStats(BaseModel):
+    section_id: str
+    label: str
     team_pct: float
     agents: list[BinaryAgentBreakdown]
-
-
-class BinaryStats(BaseModel):
-    identity_validation: BinarySectionStats
-    customer_resolution: BinarySectionStats
 
 
 class EWMAEntry(BaseModel):
@@ -102,13 +102,59 @@ class MailsEntry(BaseModel):
 
 
 class TeamStatsResponse(BaseModel):
-    kpis: dict  # total_evals, avg_score, std_score, analyst_count
+    """Envelope for /api/{team_id}/team/stats.
+
+    Top-level metadata fields are load-bearing for the predictive era —
+    they let downstream consumers (forecasters, drift detectors, parquet
+    exporters) reason about whether two responses are comparable.
+
+    schema_version: bump on any breaking shape change to this envelope.
+    rubric_version: from team_config; bump when the rubric itself changes.
+    coverage_regime: 'manager_sample' today (curated subset of calls);
+                     'full_coverage' once Local AI scores 100% of calls.
+                     Mixing the two regimes in one analysis will skew
+                     statistics — consumers must check this field.
+    """
+    schema_version: str = "1.1"
+    team_id: str
+    rubric_version: str
+    generated_at: datetime
+    coverage_regime: str  # "manager_sample" | "full_coverage"
+
+    kpis: dict
     roster: list[AgentRosterEntry]
     outliers: list[OutlierRecord]
     spc: SPCData
     section_analysis: SectionStats
-    binary_stats: BinaryStats
+    binary_stats: list[BinarySectionStats]
     supervisor_stats: list[SupervisorStats]
     ewma: list[EWMAEntry]
     distribution: list[DistributionBin]
     filters_applied: dict  # days, active_only, supervisor
+
+
+class LongFormRow(BaseModel):
+    """One row of the canonical long-form analytical shape.
+
+    Long form is what every predictive / ML / cohort analysis will start
+    from. Returned by GET /api/{team_id}/team/long_form.
+    """
+    agent: str
+    eval_id: str
+    timestamp: datetime
+    supervisor: str = ""
+    manager_email: str = ""
+    section_id: str
+    section_name: str
+    score_type: str  # "numeric" | "yn" | "manual"
+    score: object    # float for numeric/manual, str for yn
+
+
+class LongFormResponse(BaseModel):
+    schema_version: str = "1.1"
+    team_id: str
+    rubric_version: str
+    generated_at: datetime
+    coverage_regime: str
+    rows: list[LongFormRow]
+    filters_applied: dict

@@ -160,11 +160,11 @@
   <div class="tab-panel" id="panel-roster">
     <div class="card">
       <h3>Agent Roster</h3>
-      <div style="overflow-x:auto"><table id="rosterTable"><thead><tr>
+      <div style="overflow-x:auto"><table id="rosterTable"><thead><tr id="rosterHeaderRow">
         <th data-col="agent">Agent</th><th data-col="n">Evals</th>
         <th data-col="mean">Mean</th><th data-col="std">Std</th>
         <th data-col="ewma">EWMA</th><th data-col="trend">Trend</th>
-        <th data-col="id_val_pct">ID Val %</th><th data-col="cust_res_pct">Cust Res %</th>
+        <!-- One <th> per Y/N section is injected here at render time, between Trend and Status. -->
         <th data-col="status">Status</th><th>Weak Sections</th>
       </tr></thead><tbody></tbody></table></div>
     </div>
@@ -346,6 +346,12 @@ function priorityBadge(p) {
 }
 
 // --- Sort ---
+// data-col supports dot-paths (e.g. "binary_pcts.contact_verification")
+// so dynamically-injected nested columns (Y/N percentages per section)
+// sort the same way as flat fields.
+function _readPath(obj, path) {
+  return path.split('.').reduce((o, k) => (o == null ? null : o[k]), obj);
+}
 function attachSort(tableId, data, renderFn) {
   const table = document.getElementById(tableId);
   if (!table) return;
@@ -356,7 +362,7 @@ function attachSort(tableId, data, renderFn) {
       const asc = sortState[key] === 'asc' ? 'desc' : 'asc';
       sortState[key] = asc;
       data.sort((a, b) => {
-        let va = a[col], vb = b[col];
+        let va = _readPath(a, col), vb = _readPath(b, col);
         if (va == null) return 1; if (vb == null) return -1;
         if (typeof va === 'string') return asc === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
         return asc === 'asc' ? va - vb : vb - va;
@@ -535,20 +541,54 @@ function renderEwmaChart() {
 }
 
 // --- Roster ---
+// Roster columns are partially dynamic: every Y/N section configured for
+// the team gets its own column between Trend and Status. The (section_id,
+// label) pairs come from teamData.binary_stats so the table adapts to
+// whichever rubric is loaded.
+function rosterBinaryColumns() {
+  return (teamData?.binary_stats || []).map(b => ({
+    sectionId: b.section_id,
+    label: b.label,
+  }));
+}
+
+function rebuildRosterHeader() {
+  const headerRow = document.getElementById('rosterHeaderRow');
+  if (!headerRow) return;
+  // Strip any previously-injected binary headers (data-binary marker)
+  Array.from(headerRow.querySelectorAll('th[data-binary]')).forEach(th => th.remove());
+  const statusTh = headerRow.querySelector('th[data-col="status"]');
+  if (!statusTh) return;
+  for (const col of rosterBinaryColumns()) {
+    const th = document.createElement('th');
+    th.dataset.col = `binary_pcts.${col.sectionId}`;
+    th.dataset.binary = '1';
+    th.textContent = `${col.label} %`;
+    headerRow.insertBefore(th, statusTh);
+  }
+}
+
 function renderRoster() {
   const roster = teamData.roster || [];
+  rebuildRosterHeader();
   attachSort('rosterTable', roster, fillRoster);
   fillRoster(roster);
 }
 
 function fillRoster(data) {
-  document.querySelector('#rosterTable tbody').innerHTML = data.map(r => `<tr>
-    <td><a href="/dashboard/${TEAM_ID}/agent/${encodeURIComponent(r.agent)}">${escapeHtml(r.agent)}</a></td>
-    <td>${r.n ?? ''}</td><td style="color:${scoreColor(r.mean)}">${fmt(r.mean)}</td><td>${fmt(r.std)}</td>
-    <td style="color:${scoreColor(r.ewma)}">${fmt(r.ewma)}</td><td>${trendHtml(r.trend)}</td>
-    <td>${pctFmt(r.id_val_pct)}</td><td>${pctFmt(r.cust_res_pct)}</td>
-    <td>${statusBadge(r.status)}</td><td>${(r.weak_sections || []).join(', ')}</td>
-  </tr>`).join('');
+  const binCols = rosterBinaryColumns();
+  document.querySelector('#rosterTable tbody').innerHTML = data.map(r => {
+    const binCells = binCols
+      .map(c => `<td>${pctFmt((r.binary_pcts || {})[c.sectionId])}</td>`)
+      .join('');
+    return `<tr>
+      <td><a href="/dashboard/${TEAM_ID}/agent/${encodeURIComponent(r.agent)}">${escapeHtml(r.agent)}</a></td>
+      <td>${r.n ?? ''}</td><td style="color:${scoreColor(r.mean)}">${fmt(r.mean)}</td><td>${fmt(r.std)}</td>
+      <td style="color:${scoreColor(r.ewma)}">${fmt(r.ewma)}</td><td>${trendHtml(r.trend)}</td>
+      ${binCells}
+      <td>${statusBadge(r.status)}</td><td>${(r.weak_sections || []).join(', ')}</td>
+    </tr>`;
+  }).join('');
 }
 
 // --- Outliers ---
@@ -604,16 +644,20 @@ function renderSectionVarChart() {
 }
 
 function renderBinaryStats() {
-  const bs = teamData.binary_stats || {};
-  const idPct = bs.identity_validation ? bs.identity_validation.team_pct : null;
-  const crPct = bs.customer_resolution ? bs.customer_resolution.team_pct : null;
-  document.getElementById('binaryStats').innerHTML = [
-    { label: 'Identity Validation %', value: pctFmt(idPct), color: scoreColor(idPct || 0) },
-    { label: 'Customer Resolution %', value: pctFmt(crPct), color: scoreColor(crPct || 0) }
-  ].map(kpi => `<div class="kpi-box">
-    <div class="label">${kpi.label}</div>
-    <div class="value" style="color:${kpi.color}">${kpi.value}</div>
-  </div>`).join('');
+  const bs = teamData.binary_stats || [];
+  const container = document.getElementById('binaryStats');
+  if (!bs.length) {
+    container.innerHTML = '';
+    return;
+  }
+  container.style.gridTemplateColumns = `repeat(${bs.length}, 1fr)`;
+  container.innerHTML = bs.map(section => {
+    const pct = section.team_pct;
+    return `<div class="kpi-box">
+      <div class="label">${escapeHtml(section.label)} %</div>
+      <div class="value" style="color:${scoreColor(pct || 0)}">${pctFmt(pct)}</div>
+    </div>`;
+  }).join('');
 }
 
 function renderTraining() {

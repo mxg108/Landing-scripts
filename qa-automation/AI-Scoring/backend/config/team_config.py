@@ -16,7 +16,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +78,25 @@ class ScoringPromptConfig(BaseModel):
     sop_sections: list[int]                  # section_numbers that need SOP context
 
 
+class StatsConfig(BaseModel):
+    """Per-team statistical thresholds.
+
+    Today every team uses the same defaults — these became magic numbers
+    when the engine was MS-only.  Lifted to config so a low-volume team
+    (e.g. Sales during ramp) can loosen sensitivity without forking code.
+
+    When 100% Local AI scoring goes live, these defaults will need to
+    change again (much higher N → tighter thresholds, longer EWMA spans).
+    Kept here so that change is one config edit, not a code release.
+    """
+    min_evals_for_outlier: int = 5
+    outlier_z_threshold: float = 3.5      # Modified-Z cutoff (MAD-based)
+    ewma_span: int = 5
+    ewma_min_evals: int = 3
+    ewma_trend_delta: float = 3.0          # |Δ| to trigger improving/declining
+    spc_sigma_multiplier: float = 2.0      # Shewhart control limits
+
+
 class SectionDef(BaseModel):
     """Definition of a single rubric section."""
     id: str                                  # canonical scoring ID
@@ -103,10 +122,16 @@ class TeamConfig(BaseModel):
     team_id: str
     display_name: str
     company: str
+    rubric_version: str = "1.0"  # bump when sections / score_descriptions / SOP refs change
+    excluded_test_agents: list[str] = Field(
+        default_factory=list,
+        description="Canonical agent names to exclude from analytics (e.g. dev/test users).",
+    )
     gemini: GeminiConfig
     sheets: SheetsConfig
     sections: list[SectionDef]
     scoring_prompt: ScoringPromptConfig
+    stats: StatsConfig = Field(default_factory=StatsConfig)
 
     # --- Computed properties ------------------------------------------------
 
@@ -124,6 +149,20 @@ class TeamConfig(BaseModel):
     def yn_sections(self) -> list[SectionDef]:
         """Binary Y/N sections."""
         return [s for s in self.sections if s.score_type == "yn"]
+
+    @property
+    def yn_history_ids(self) -> list[str]:
+        """history_id list for Y/N sections — used as DataFrame column names."""
+        return [s.history_id for s in self.yn_sections]
+
+    @property
+    def yn_section_labels(self) -> dict[str, str]:
+        """history_id -> display name for Y/N sections.
+
+        Used by the dashboard to title binary-stats KPI cards and
+        roster-table columns.
+        """
+        return {s.history_id: s.name for s in self.yn_sections}
 
     @property
     def numeric_history_ids(self) -> list[str]:
