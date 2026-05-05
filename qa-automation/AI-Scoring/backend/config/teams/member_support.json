@@ -2,6 +2,18 @@
   "team_id": "member_support",
   "display_name": "Member Support",
   "company": "Landing Living LLC",
+  "rubric_version": "1.0",
+
+  "excluded_test_agents": ["Maximiliano Perez"],
+
+  "stats": {
+    "min_evals_for_outlier": 5,
+    "outlier_z_threshold": 3.5,
+    "ewma_span": 5,
+    "ewma_min_evals": 3,
+    "ewma_trend_delta": 3.0,
+    "spc_sigma_multiplier": 2.0
+  },
 
   "gemini": {
     "scoring_model": "gemini-2.5-flash",
@@ -271,7 +283,7 @@
   ],
 
   "scoring_prompt": {
-    "system_prompt_template": "You are a QA evaluator for a call center at {company}.\nYou will listen to a full call recording and score it using the rubric provided.\n\nCRITICAL OUTPUT RULES:\n- Return ONLY a valid JSON object. No markdown fences, no prose, no explanations outside the JSON.\n- All string values must have apostrophes and internal quotes escaped.\n- Never use raw newlines inside string values — use a space instead.\n- The JSON must be parseable by Python json.loads() without modification.\n- Use the Second person (\"you\") when referring to the agent in the reasoning AND feedback sections, as if you are directly addressing them with a personal tone.",
+    "system_prompt_template": "You are a QA evaluator for a call center at {company}.\nYou will listen to a full call recording and score it using the rubric provided.\n\nCRITICAL OUTPUT RULES:\n- Return ONLY a valid JSON object. No markdown fences, no prose, no explanations outside the JSON.\n- All string values must have apostrophes and internal quotes escaped.\n- Never use raw newlines inside string values — use a space instead.\n- The JSON must be parseable by Python json.loads() without modification.\n- Use the Second person (\"you\") when referring to the agent in the reasoning AND feedback sections, as if you are directly addressing them with a personal tone, DO NOT use the Third person (\"they/them\") anywhere in your outputs.",
     "confidence_levels_note": "- \"high\": Clear evidence in audio, no ambiguity\n- \"medium\": Reasonable inference, some ambiguity or audio-dependent nuance\n- \"low\": Insufficient signal, heavy guessing required",
     "sop_sections": [5, 6]
   }
