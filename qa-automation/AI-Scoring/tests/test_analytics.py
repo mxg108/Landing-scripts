@@ -1,0 +1,177 @@
+"""End-to-end test of team_stats functions against synthetic Sheets data.
+
+Phase 2 / Phase B (b) complete: ``load_and_clean`` and the ``compute_*``
+functions consume ``config.history_layout``. Skip markers removed; the
+two former failure-point xfails (#7 priority-threshold scaling, #8
+``len(row) < 15`` literal) are now regular passing tests guarding
+against regression.
+"""
+
+from __future__ import annotations
+
+from backend.config.team_config import TeamConfig
+from backend.services.team_stats import (
+    compute_agent_roster,
+    compute_binary_stats,
+    compute_distribution,
+    compute_ewma,
+    compute_long_form,
+    compute_monthly_spc,
+    compute_outliers,
+    compute_section_analysis,
+    compute_supervisor_stats,
+    load_and_clean,
+)
+
+from tests.conftest import make_history_row, make_history_sheet, make_mails_sheet
+
+
+# ---------------------------------------------------------------------------
+# Things that work today
+# ---------------------------------------------------------------------------
+
+def test_load_and_clean_produces_dataframe(config: TeamConfig):
+    history = make_history_sheet(config)
+    mails = make_mails_sheet([
+        "Star Rep", "Decline Rep", "Improve Rep", "Steady Rep", "Junior Rep"
+    ])
+    df = load_and_clean(history, mails, config)
+    assert not df.empty
+    agents = set(df["agent"].unique())
+    assert {"Star Rep", "Decline Rep", "Improve Rep", "Steady Rep", "Junior Rep"} <= agents
+
+
+def test_excluded_test_agents_are_filtered_when_listed(sales: TeamConfig):
+    """Real Sales config excludes 'Maximiliano Perez'."""
+    history = make_history_sheet(sales)
+    mails = make_mails_sheet(["Star Rep", "Maximiliano Perez"])
+    df = load_and_clean(history, mails, sales)
+    assert "Maximiliano Perez" not in set(df["agent"].unique())
+
+
+def test_compute_long_form_sections_match_config(config: TeamConfig):
+    history = make_history_sheet(config)
+    mails = make_mails_sheet(["Star Rep", "Decline Rep", "Improve Rep", "Steady Rep", "Junior Rep"])
+    df = load_and_clean(history, mails, config)
+    long_df = compute_long_form(df, config)
+    assert not long_df.empty
+    seen = set(long_df["section_id"].unique())
+    expected = set(config.numeric_history_ids) | set(config.yn_history_ids)
+    assert seen == expected
+
+
+def test_outlier_detection_finds_intentional_outlier(config: TeamConfig):
+    history = make_history_sheet(config)
+    mails = make_mails_sheet(["Star Rep", "Decline Rep", "Improve Rep", "Steady Rep", "Junior Rep"])
+    df = load_and_clean(history, mails, config)
+    outliers = compute_outliers(df, config.stats)
+    star_outliers = [o for o in outliers if o["agent"] == "Star Rep"]
+    assert star_outliers, (
+        "Star Rep's intentional 60-overall call should register as a "
+        "concerning outlier"
+    )
+    assert any(o["classification"] == "concerning" for o in star_outliers)
+
+
+def test_ewma_detects_declining_and_improving_trends(config: TeamConfig):
+    history = make_history_sheet(config)
+    mails = make_mails_sheet(["Star Rep", "Decline Rep", "Improve Rep", "Steady Rep", "Junior Rep"])
+    df = load_and_clean(history, mails, config)
+    ewma = compute_ewma(df, config.stats)
+    by_agent = {e["agent"]: e for e in ewma}
+    assert by_agent["Decline Rep"]["trend"] == "declining"
+    assert by_agent["Improve Rep"]["trend"] == "improving"
+
+
+def test_binary_stats_returns_entry_per_yn_section(config: TeamConfig):
+    history = make_history_sheet(config)
+    mails = make_mails_sheet(["Star Rep", "Decline Rep", "Improve Rep", "Steady Rep", "Junior Rep"])
+    df = load_and_clean(history, mails, config)
+    binary = compute_binary_stats(df, config.yn_section_labels)
+    assert len(binary) == len(config.yn_history_ids)
+    seen_ids = {b["section_id"] for b in binary}
+    assert seen_ids == set(config.yn_history_ids)
+
+
+def test_all_compute_functions_run_without_error(config: TeamConfig):
+    history = make_history_sheet(config)
+    mails = make_mails_sheet(["Star Rep", "Decline Rep", "Improve Rep", "Steady Rep", "Junior Rep"])
+    df = load_and_clean(history, mails, config)
+    compute_outliers(df, config.stats)
+    compute_ewma(df, config.stats)
+    compute_monthly_spc(df, config.stats)
+    compute_section_analysis(df, config)
+    compute_binary_stats(df, config.yn_section_labels)
+    compute_supervisor_stats(df)
+    compute_agent_roster(df, config)
+    compute_distribution(df)
+
+
+def test_binary_stats_empty_when_no_yn_sections(sales_lite: TeamConfig):
+    """sales_lite has no Y/N sections — binary_stats should return []."""
+    history = make_history_sheet(sales_lite)
+    mails = make_mails_sheet(["Steady Rep"])
+    df = load_and_clean(history, mails, sales_lite)
+    binary = compute_binary_stats(df, sales_lite.yn_section_labels)
+    assert binary == []
+
+
+# ---------------------------------------------------------------------------
+# Former failure points — now regular regression-guard tests
+# ---------------------------------------------------------------------------
+
+def test_section_analysis_priority_thresholds_scale_with_range(sales_decimal: TeamConfig):
+    """FAILURE POINT #7 fixed in Phase B (b): priority thresholds scale
+    with each section's score_range. A moderate gap on a 1-10 scale must
+    not register as 'high priority' the way the legacy 1.5 cutoff did."""
+    from datetime import datetime, timedelta
+
+    base = datetime(2026, 4, 1)
+    rows = [["Agent Name"] + [""] * 100]  # header
+
+    # Strong cohort: scores 9 across the board
+    for agent in ["Strong A", "Strong B", "Strong C", "Strong D"]:
+        for i in range(4):
+            rows.append(make_history_row(
+                sales_decimal, agent=agent, when=base + timedelta(days=i),
+                overall=85,
+                section_scores={hid: 9 for hid in sales_decimal.numeric_history_ids},
+                yn_scores={y: "Y" for y in sales_decimal.yn_history_ids},
+            ))
+
+    # Mediocre Rep: scores 7 on one section — gap of ~2 on a 1-10 scale.
+    # Proportionally equivalent to a 0.8 gap on 1-5 — should be "low".
+    target_section = sales_decimal.numeric_history_ids[0]
+    for i in range(4):
+        scores = {hid: 9 for hid in sales_decimal.numeric_history_ids}
+        scores[target_section] = 7
+        rows.append(make_history_row(
+            sales_decimal, agent="Mediocre Rep", when=base + timedelta(days=i),
+            overall=80, section_scores=scores,
+            yn_scores={y: "Y" for y in sales_decimal.yn_history_ids},
+        ))
+
+    mails = make_mails_sheet(["Strong A", "Strong B", "Strong C", "Strong D", "Mediocre Rep"])
+    df = load_and_clean(rows, mails, sales_decimal)
+    out = compute_section_analysis(df, sales_decimal)
+    mediocre_high = [
+        op for op in out["training_opportunities"]
+        if op["agent"] == "Mediocre Rep" and op["priority"] == "high"
+    ]
+    assert not mediocre_high, (
+        f"Mediocre Rep flagged 'high' priority on a 1-10 scale — priority "
+        f"thresholds did not scale with score_range"
+    )
+
+
+def test_history_parse_row_min_width_derives_from_layout(sales_lite: TeamConfig):
+    """FAILURE POINT #8 fixed in Phase B (b): _parse_row's minimum width
+    derives from history_layout.col_overall_score + 1 (= 6 cells), not
+    the magic literal 15. Guard against regression."""
+    from backend.services.history_service import SheetsProvider
+    import inspect
+    src = inspect.getsource(SheetsProvider._parse_row)
+    assert "len(row) < 15" not in src, (
+        "history_service.SheetsProvider._parse_row re-introduced the "
+        "literal len(row) < 15 — minimum width must derive from the layout"
+    )

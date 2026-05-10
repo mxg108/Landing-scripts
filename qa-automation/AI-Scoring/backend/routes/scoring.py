@@ -17,9 +17,11 @@ from backend.middleware.auth import team_id_from_path
 from backend.models.scorecard import ApprovalRequest
 from backend.services.scoring_service import score_call
 from backend.services.sheets_service import (
-    append_scorecard_row,
-    update_scorecard_reasoning,
-    write_approved_to_form_responses_1,
+    write_draft_to_fr_ai,
+    apply_analyst_edits_to_fr_ai,
+    write_to_score_destination,
+    read_score_and_writeback,
+    finalize_to_analyst_history,
     trigger_apps_script,
 )
 from backend.services.dialpad_client import get_user_id_by_name, get_calls_for_agent
@@ -112,7 +114,7 @@ async def score_single_call(
                 config=config,
                 duration_ms=duration_ms,
             )
-            row_num = append_scorecard_row(scorecard, config)
+            row_num = write_draft_to_fr_ai(scorecard, config)
             _jobs[key]["status"] = "complete"
             _jobs[key]["sheets_row"] = row_num
             _jobs[key]["scorecard"] = scorecard.model_dump()
@@ -180,7 +182,7 @@ async def score_batch(
                     config=config,
                     duration_ms=dur,
                 )
-                row_num = append_scorecard_row(scorecard, config)
+                row_num = write_draft_to_fr_ai(scorecard, config)
                 _jobs[k]["status"] = "complete"
                 _jobs[k]["sheets_row"] = row_num
                 _jobs[k]["scorecard"] = scorecard.model_dump()
@@ -225,52 +227,66 @@ async def approve_scorecard(request: Request, job_id: str, approval: ApprovalReq
 
     try:
         sections_dicts = [s.model_dump() for s in approval.sections]
-
-        # 1. Update reasoning columns in Form AI (for enrichment),
-        #    but preserve original AI scores as audit trail
-        print(f"[approve] Step 1: updating reasoning in Form AI row {sheets_row}...")
-        update_scorecard_reasoning(
-            row_num=sheets_row,
-            sections=sections_dicts,
-            config=config,
-            key_strengths=approval.key_strengths,
-            opportunities=approval.opportunities,
-        )
-        print("[approve] Step 1 complete.")
-
-        # 2. Write approved scores directly to Form Responses 1
-        #    Metadata comes from the stored scorecard — no Sheets read needed
         sc = job["scorecard"]
-        print(f"[approve] Step 2: writing approved row to Form Responses 1...")
-        form_1_row = write_approved_to_form_responses_1(
+        # Treat the scoring-time manager_email as the evaluator at approval
+        # time. Future: replace with authenticated session user.
+        evaluator_email = sc.get("manager_email", "")
+
+        # Stage 1.5 — apply analyst edits (sections + feedback) to FR-AI
+        print(f"[approve] Stage 1.5: applying analyst edits to FR-AI row {sheets_row}...")
+        apply_analyst_edits_to_fr_ai(
+            fr_ai_row_num=sheets_row,
             sections=sections_dicts,
             config=config,
             key_strengths=approval.key_strengths,
             opportunities=approval.opportunities,
-            timestamp=datetime.now().strftime("%m/%d/%Y %H:%M:%S"),
-            manager_email=sc.get("manager_email", ""),
-            agent_name=sc.get("agent_name", ""),
-            dialpad_link=sc.get("dialpad_link", ""),
         )
-        print(f"[approve] Step 2 complete. Form 1 row: {form_1_row}")
+        print("[approve] Stage 1.5 complete.")
 
-        # 3. Wait for ARRAYFORMULA (col Q overall score, col V agent email)
-        print("[approve] Step 3: waiting 2s for ARRAYFORMULA...")
-        await asyncio.sleep(2)
+        # Stage 2 — write to per-team score destination tab
+        print(f"[approve] Stage 2: writing to score destination ({config.sheets.score_destination.tab_name})...")
+        dest_row = write_to_score_destination(
+            fr_ai_row_num=sheets_row,
+            config=config,
+            evaluator_email=evaluator_email,
+        )
+        print(f"[approve] Stage 2 complete. Destination row: {dest_row}")
 
-        # 4. Trigger Apps Script email pipeline
-        print(f"[approve] Step 4: triggering Apps Script doPost for row {form_1_row}...")
-        script_response = trigger_apps_script(form_1_row, config.team_id)
-        print(f"[approve] Step 4 complete: {script_response}")
+        # Stage 3 — poll readback col, write overall_score back to FR-AI col F
+        print(f"[approve] Stage 3: polling {config.sheets.score_destination.score_readback_col}{dest_row} for ARRAYFORMULA result...")
+        overall_score = await read_score_and_writeback(
+            dest_row_num=dest_row,
+            fr_ai_row_num=sheets_row,
+            config=config,
+        )
+        print(f"[approve] Stage 3 complete. Overall score: '{overall_score}'")
 
-        # 5. Mark as approved
+        # Stage 4 — finalize to Analyst_History
+        print(f"[approve] Stage 4: finalizing to Analyst_History...")
+        history_row = finalize_to_analyst_history(
+            fr_ai_row_num=sheets_row,
+            evaluator_email=evaluator_email,
+            config=config,
+        )
+        print(f"[approve] Stage 4 complete. Analyst_History row: {history_row}")
+
+        # Trigger Apps Script (Phase B (a): still passes destination row;
+        # Apps Script reads from FR1 / Scores until Phase C).
+        print(f"[approve] Triggering Apps Script doPost for destination row {dest_row}...")
+        script_response = trigger_apps_script(dest_row, config.team_id)
+        print(f"[approve] Apps Script response: {script_response}")
+
         job["status"] = "approved"
-        job["form_responses_1_row"] = form_1_row
+        job["destination_row"] = dest_row
+        job["history_row"] = history_row
+        job["overall_score"] = overall_score
 
         return {
             "status": "approved",
-            "form_ai_row": sheets_row,
-            "form_1_row": form_1_row,
+            "fr_ai_row": sheets_row,
+            "destination_row": dest_row,
+            "history_row": history_row,
+            "overall_score": overall_score,
             "script_response": script_response,
         }
 

@@ -4,9 +4,10 @@ All functions are pure computation — they take raw data (lists or DataFrames)
 plus a TeamConfig / StatsConfig and return plain dicts/lists. No I/O, no
 Sheets API calls.
 
-Section keys, Y/N section IDs, and statistical thresholds are all driven
-by config — no rubric strings hardcoded here. The DataFrame schema is
-the contract between load_and_clean() and the compute_* functions.
+Schema v2.0 (Phase 2): Analyst_History column positions are derived from
+``team_config.history_layout`` (no per-team col_* fields). Priority
+thresholds in ``compute_section_analysis`` scale with each section's
+score_range so 1-10 teams aren't over-flagged by 1-5-calibrated cutoffs.
 
 DataFrame schema (wide form, one row per evaluation):
     agent              str             canonicalized agent name
@@ -29,6 +30,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from backend.config import history_layout
 from backend.services.data_normalization import (
     is_excluded_test_row,
     parse_timestamp,
@@ -37,6 +39,28 @@ from backend.services.data_normalization import (
 
 if TYPE_CHECKING:
     from backend.config.team_config import StatsConfig, TeamConfig
+
+
+# ---------------------------------------------------------------------------
+# Priority threshold helpers — scale with each section's score_range
+# ---------------------------------------------------------------------------
+
+# Priority bands as a fraction of each section's score range:
+#   gap > _GAP_LOW_FRAC * range → at least "low" (registers as a training opp)
+#   gap >= _GAP_MED_FRAC * range → "medium"
+#   gap >= _GAP_HIGH_FRAC * range → "high"
+# Calibrated to match the legacy 1-5 cutoffs (0.5 / 1.0 / 1.5).
+_GAP_LOW_FRAC = 0.125
+_GAP_MED_FRAC = 0.25
+_GAP_HIGH_FRAC = 0.375
+
+
+def _section_range_size(team_config: TeamConfig, history_id: str, default: int = 4) -> int:
+    """Return (max - min) of a section's score range, or *default*."""
+    sec = team_config.history_id_to_section.get(history_id)
+    if sec and sec.score_range:
+        return sec.score_range[1] - sec.score_range[0]
+    return default
 
 
 # ---------------------------------------------------------------------------
@@ -54,16 +78,31 @@ def load_and_clean(
         history_rows: Raw rows from Analyst_History (including header).
         mails_rows: Raw rows from Mails sheet (including header).
             Col A = Agent Name, B = Email, C = Supervisor, D = Canonical Name.
-        team_config: Active team config (drives column layout, Y/N section
-            ids, and the test-agent exclusion list).
+        team_config: Active team config — drives column layout via
+            ``history_layout``, the test-agent exclusion list, and Y/N
+            section ids.
 
     Returns:
         DataFrame with the schema documented at the top of this module.
         Empty DataFrame if no valid rows.
     """
-    ah_config = team_config.sheets.analyst_history
+    L = team_config.history_layout
     yn_section_ids = team_config.yn_history_ids
     excluded_agents = team_config.excluded_test_agents
+
+    # Pre-compute (history_id -> col_index) mappings from the derived layout.
+    section_col_by_id = {
+        s.history_id: L.col_score(i)
+        for i, s in enumerate(team_config.sections_by_number)
+    }
+    numeric_section_cols = {
+        s.history_id: section_col_by_id[s.history_id]
+        for s in team_config.numeric_sections
+    }
+    yn_section_cols = {
+        s.history_id: section_col_by_id[s.history_id]
+        for s in team_config.yn_sections
+    }
 
     # Build maps from Mails sheet
     canonical_map: dict[str, str] = {}    # raw_name_lower -> canonical
@@ -82,24 +121,25 @@ def load_and_clean(
         supervisor_map[canonical.lower()] = supervisor
         active_set.add(canonical.lower())
 
-    # Minimum row length to be parseable: must reach manager_email column.
-    min_cols = ah_config.col_manager_email + 1
+    # Minimum row width: just the prefix (cols A-F = 6 cells). Anything
+    # narrower can't have agent name + overall_score + dialpad_link.
+    min_cols = history_layout.COL_OVERALL_SCORE + 1
 
     records = []
     for row in history_rows[1:]:  # skip header
         if len(row) < min_cols:
             continue
 
-        agent_raw = str(row[ah_config.col_agent_name]).strip()
+        agent_raw = str(row[history_layout.COL_AGENT_NAME]).strip()
         if not agent_raw:
             continue
 
-        ts = parse_timestamp(row[ah_config.col_timestamp])
+        ts = parse_timestamp(row[history_layout.COL_TIMESTAMP])
         if ts is None or ts.year < 2020:
             continue
 
         try:
-            overall = float(row[ah_config.col_overall_score])
+            overall = float(row[history_layout.COL_OVERALL_SCORE])
         except (ValueError, TypeError):
             continue
 
@@ -114,29 +154,28 @@ def load_and_clean(
 
         # Numeric section scores — keyed by history_id
         section_scores = {}
-        for sec_name, col_idx in ah_config.section_columns.items():
+        for sec_name, col_idx in numeric_section_cols.items():
             try:
                 section_scores[sec_name] = float(row[col_idx])
             except (ValueError, TypeError, IndexError):
                 section_scores[sec_name] = np.nan
 
         # Y/N section values — keyed by history_id (no rename layer).
-        # Downstream consumers must reference these by team_config.yn_history_ids.
         yn_scores = {}
         for yn_name in yn_section_ids:
-            yn_idx = ah_config.yn_columns.get(yn_name)
+            yn_idx = yn_section_cols.get(yn_name)
             if yn_idx is None or len(row) <= yn_idx:
                 yn_scores[yn_name] = ""
                 continue
             yn_scores[yn_name] = str(row[yn_idx]).strip().upper()[:1]
 
         manager = (
-            str(row[ah_config.col_manager_email]).strip().lower()
-            if len(row) > ah_config.col_manager_email else ""
+            str(row[history_layout.COL_EVALUATOR_EMAIL]).strip().lower()
+            if len(row) > history_layout.COL_EVALUATOR_EMAIL else ""
         )
         dialpad_link = (
-            str(row[ah_config.col_dialpad_link]).strip()
-            if len(row) > ah_config.col_dialpad_link else ""
+            str(row[history_layout.COL_DIALPAD_LINK]).strip()
+            if len(row) > history_layout.COL_DIALPAD_LINK else ""
         )
 
         # Extract eval_id from dialpad link (strip query params + [LONG CALL] suffix)
@@ -179,25 +218,19 @@ def compute_long_form(df: pd.DataFrame, team_config: TeamConfig) -> pd.DataFrame
     Columns: agent, eval_id, timestamp, supervisor, manager_email,
              section_id, section_name, score_type, score
         score is float for numeric sections, str ('Y'/'N'/'NA'/'') for yn.
-
-    Numeric and Y/N rows are concatenated; downstream consumers should
-    filter on score_type. Manual-only sections (e.g. Documentation) are
-    included if and only if they appear in section_columns — i.e. are
-    persisted to the history sheet as numeric values.
     """
+    base_cols = ["agent", "eval_id", "timestamp", "supervisor", "manager_email"]
+
     if df.empty:
         return pd.DataFrame(columns=[
-            "agent", "eval_id", "timestamp", "supervisor", "manager_email",
-            "section_id", "section_name", "score_type", "score",
+            *base_cols, "section_id", "section_name", "score_type", "score",
         ])
 
     section_lookup = team_config.history_id_to_section
-    base_cols = ["agent", "eval_id", "timestamp", "supervisor", "manager_email"]
-
     pieces = []
 
-    # Numeric section_columns appear in load_and_clean's output as float cols.
-    for sec_id in team_config.sheets.analyst_history.section_columns.keys():
+    # Numeric + manual sections (load_and_clean writes them as float cols)
+    for sec_id in team_config.numeric_history_ids:
         if sec_id not in df.columns:
             continue
         sec = section_lookup.get(sec_id)
@@ -363,12 +396,18 @@ def compute_monthly_spc(df: pd.DataFrame, stats_config: StatsConfig) -> dict:
 # compute_section_analysis
 # ---------------------------------------------------------------------------
 
-def compute_section_analysis(
-    df: pd.DataFrame,
-    numeric_sections: list[str],
-    section_labels: dict[str, str],
-) -> dict:
-    """Team section stats + per-agent weakness detection."""
+def compute_section_analysis(df: pd.DataFrame, team_config: TeamConfig) -> dict:
+    """Team section stats + per-agent weakness detection.
+
+    Priority bands scale with each section's score_range so 1-10 teams
+    aren't over-flagged by cutoffs calibrated for 1-5. Bands:
+      gap > 0.125 * range → at least "low"
+      gap >= 0.25  * range → "medium"
+      gap >= 0.375 * range → "high"
+    """
+    numeric_sections = team_config.numeric_history_ids
+    section_labels = team_config.section_labels
+
     if df.empty:
         return {"team_means": {}, "team_stds": {}, "training_opportunities": []}
 
@@ -380,7 +419,6 @@ def compute_section_analysis(
             team_means[sec] = round(float(vals.mean()), 2) if len(vals) > 0 else 0
             team_stds[sec] = round(float(vals.std(ddof=1)), 2) if len(vals) > 1 else 0
 
-    # Per-agent weakness detection
     opportunities = []
     for agent, group in df.groupby("agent"):
         for sec in numeric_sections:
@@ -392,10 +430,16 @@ def compute_section_analysis(
             agent_avg = float(agent_vals.mean())
             t_avg = team_means.get(sec, 0)
             gap = t_avg - agent_avg
-            if gap > 0.5:
-                if gap >= 1.5:
+
+            range_size = _section_range_size(team_config, sec)
+            gap_low = _GAP_LOW_FRAC * range_size
+            gap_medium = _GAP_MED_FRAC * range_size
+            gap_high = _GAP_HIGH_FRAC * range_size
+
+            if gap > gap_low:
+                if gap >= gap_high:
                     priority = "high"
-                elif gap >= 1.0:
+                elif gap >= gap_medium:
                     priority = "medium"
                 else:
                     priority = "low"
@@ -513,30 +557,30 @@ def _compute_binary_pct(series: pd.Series) -> float:
 # compute_agent_roster
 # ---------------------------------------------------------------------------
 
-def compute_agent_roster(
-    df: pd.DataFrame,
-    numeric_sections: list[str],
-    section_labels: dict[str, str],
-    yn_section_ids: list[str],
-    stats_config: StatsConfig,
-) -> list[dict]:
+def compute_agent_roster(df: pd.DataFrame, team_config: TeamConfig) -> list[dict]:
     """Summary row per agent for the roster table.
 
     binary_pcts is a dict {section_id: pct} — one entry per configured
     Y/N section. The frontend renders these dynamically; old keys
     (id_val_pct / cust_res_pct) no longer exist.
+
+    Weakness detection uses the same scaled threshold as
+    ``compute_section_analysis`` (gap > 0.125 * section_range).
     """
     if df.empty:
         return []
 
-    # Pre-compute team means for weakness detection
+    numeric_sections = team_config.numeric_history_ids
+    section_labels = team_config.section_labels
+    yn_section_ids = team_config.yn_history_ids
+    stats_config = team_config.stats
+
     team_means = {}
     for sec in numeric_sections:
         if sec in df.columns:
             vals = df[sec].dropna()
             team_means[sec] = float(vals.mean()) if len(vals) > 0 else 0
 
-    # Pre-compute EWMA for all agents
     ewma_lookup = {entry["agent"]: entry for entry in compute_ewma(df, stats_config)}
 
     results = []
@@ -549,7 +593,6 @@ def compute_agent_roster(
         ewma_val = ewma_data["current_ewma"] if ewma_data else None
         trend = ewma_data["trend"] if ewma_data else "flat"
 
-        # Status based on EWMA (or mean if no EWMA)
         ref = ewma_val if ewma_val is not None else mean_score
         if ref >= 90:
             status = "excellent"
@@ -560,7 +603,6 @@ def compute_agent_roster(
         else:
             status = "at_risk"
 
-        # Per-section Y/N percentages, keyed by section_id
         binary_pcts = {}
         for yn_id in yn_section_ids:
             if yn_id in group.columns:
@@ -568,7 +610,6 @@ def compute_agent_roster(
             else:
                 binary_pcts[yn_id] = 0.0
 
-        # Weak sections
         weak = []
         for sec in numeric_sections:
             if sec not in df.columns:
@@ -577,7 +618,8 @@ def compute_agent_roster(
             if len(agent_vals) < 2:
                 continue
             agent_avg = float(agent_vals.mean())
-            if team_means.get(sec, 0) - agent_avg > 0.5:
+            range_size = _section_range_size(team_config, sec)
+            if team_means.get(sec, 0) - agent_avg > _GAP_LOW_FRAC * range_size:
                 weak.append(section_labels.get(sec, sec))
 
         is_active = bool(group["is_active"].iloc[0]) if "is_active" in group.columns else False

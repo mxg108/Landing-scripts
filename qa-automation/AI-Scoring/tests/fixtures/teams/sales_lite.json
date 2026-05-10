@@ -1,0 +1,143 @@
+{
+  "team_id": "sales_lite",
+  "display_name": "Sales (lite — 5 sections, no Y/N, 1-5 scale)",
+  "company": "Landing Living LLC",
+  "rubric_version": "test-2.0",
+
+  "excluded_test_agents": [],
+
+  "stats": {
+    "min_evals_for_outlier": 5,
+    "outlier_z_threshold": 3.5,
+    "ewma_span": 5,
+    "ewma_min_evals": 3,
+    "ewma_trend_delta": 3.0,
+    "spc_sigma_multiplier": 2.0
+  },
+
+  "gemini": {
+    "scoring_model": "gemini-2.5-flash",
+    "scoring_temperature": 0.2,
+    "scoring_max_output_tokens": 65536,
+    "progression_model": "gemini-2.5-flash",
+    "progression_temperature": 0.3,
+    "progression_max_output_tokens": 16384
+  },
+
+  "sheets": {
+    "form_responses_ai": {
+      "tab_name": "QA Scores"
+    },
+    "analyst_history": {
+      "tab_name": "Analyst_History"
+    },
+    "score_destination": {
+      "tab_name": "Form Responses 1",
+      "section_score_columns": {
+        "D": "greeting",
+        "E": "discovery",
+        "F": "communication",
+        "G": "closing",
+        "H": "crm_documentation"
+      },
+      "score_readback_col": "I",
+      "arrayformula_buffer_seconds": 4,
+      "metadata_cols": {
+        "timestamp": "A",
+        "manager_email": "B",
+        "agent_name": "C",
+        "key_strengths": "J",
+        "opportunities": "K",
+        "dialpad_link": "L"
+      }
+    },
+    "mails_tab": "Mails"
+  },
+
+  "sections": [
+    {
+      "id": "greeting",
+      "history_id": "greeting",
+      "name": "Greeting & Rapport",
+      "section_number": 1,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "audio_dependent": false,
+      "rubric_question": "Did the rep open with a professional greeting?",
+      "score_descriptions": {
+        "1": "Cold open",
+        "2": "Rushed",
+        "3": "Standard",
+        "4": "Warm",
+        "5": "Authentic warmth"
+      }
+    },
+    {
+      "id": "discovery",
+      "history_id": "discovery",
+      "name": "Discovery",
+      "section_number": 2,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "audio_dependent": false,
+      "rubric_question": "Did the rep ask discovery questions?",
+      "score_descriptions": {
+        "1": "None",
+        "2": "Surface",
+        "3": "Basic",
+        "4": "Probing",
+        "5": "Layered"
+      }
+    },
+    {
+      "id": "communication",
+      "history_id": "communication",
+      "name": "Communication",
+      "section_number": 3,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "audio_dependent": false,
+      "rubric_question": "Was the rep clear and concise?",
+      "score_descriptions": {
+        "1": "Confusing",
+        "2": "Some clarity",
+        "3": "Clear",
+        "4": "Polished",
+        "5": "Crisp"
+      }
+    },
+    {
+      "id": "closing",
+      "history_id": "closing",
+      "name": "Closing",
+      "section_number": 4,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "audio_dependent": true,
+      "rubric_question": "Did the rep drive toward a clear next step?",
+      "score_descriptions": {
+        "1": "Lost control",
+        "2": "Suggested only",
+        "3": "Set a next step",
+        "4": "Secured with date/time",
+        "5": "Calendar invite live"
+      },
+      "confidence_cap": "medium"
+    },
+    {
+      "id": "crm_documentation",
+      "history_id": "crm_documentation",
+      "name": "CRM Documentation",
+      "section_number": 5,
+      "score_type": "manual",
+      "score_range": [1, 5],
+      "audio_dependent": false
+    }
+  ],
+
+  "scoring_prompt": {
+    "system_prompt_template": "You are a QA evaluator for the Sales team at {company}.\nReturn ONLY a valid JSON object.",
+    "confidence_levels_note": "- \"high\": Clear evidence\n- \"medium\": Reasonable inference\n- \"low\": Insufficient signal",
+    "sop_sections": [5]
+  }
+}

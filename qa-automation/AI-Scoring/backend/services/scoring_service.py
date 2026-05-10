@@ -44,11 +44,27 @@ async def score_call(
     extra_notes = ""
     flagged_long = duration_ms > CALL_DURATION_FLAG_MS
     if flagged_long:
-        extra_notes = (
-            "NOTE: This call is over 25 minutes. Pay special attention to "
-            "Efficiency & Call Handling (Section 8). Flag any unnecessary hold time or delays, as well"
-            "as any associated timestamps. "
-        )
+        focus_ids = config.scoring_prompt.long_call_focus_sections
+        focus_sections = [
+            config.scoring_id_to_section[sid]
+            for sid in focus_ids
+            if sid in config.scoring_id_to_section
+        ]
+        if focus_sections:
+            focus_text = ", ".join(
+                f"{s.name} (Section {s.section_number})" for s in focus_sections
+            )
+            extra_notes = (
+                f"NOTE: This call is over 25 minutes. Pay special attention to "
+                f"{focus_text}. Flag any unnecessary hold time, delays, or "
+                f"pacing issues, including timestamps. "
+            )
+        else:
+            extra_notes = (
+                "NOTE: This call is over 25 minutes. Pay special attention to "
+                "audio-dependent sections. Flag any unnecessary hold time, "
+                "delays, or pacing issues, including timestamps. "
+            )
 
     scorecard = await score_audio(
         audio_bytes=audio_bytes,

@@ -103,18 +103,10 @@ async def team_stats(
         generated_at=datetime.now(timezone.utc),
         coverage_regime=_COVERAGE_REGIME,
         kpis=kpis,
-        roster=compute_agent_roster(
-            df,
-            config.numeric_history_ids,
-            config.section_labels,
-            config.yn_history_ids,
-            config.stats,
-        ),
+        roster=compute_agent_roster(df, config),
         outliers=compute_outliers(df, config.stats),
         spc=compute_monthly_spc(df, config.stats),
-        section_analysis=compute_section_analysis(
-            df, config.numeric_history_ids, config.section_labels
-        ),
+        section_analysis=compute_section_analysis(df, config),
         binary_stats=compute_binary_stats(df, config.yn_section_labels),
         supervisor_stats=compute_supervisor_stats(df),
         ewma=compute_ewma(df, config.stats),
