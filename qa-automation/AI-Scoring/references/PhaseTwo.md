@@ -282,6 +282,46 @@ cleanly. The names below replace the per-team-specific glue with a uniform contr
 
 ## Apps Script — generated Config.js, multi-team overlay, push.sh
 
+> **⚠ Atomicity constraint — read before opening the Phase C PR.**
+>
+> Phase C must touch the Python writer **and** the Apps Script `doPost` source-of-truth
+> tab in the same PR. Splitting them stops MS production emails for hours/days
+> with no exception — the failure mode is silent (emails just don't go out).
+>
+> **Today's wiring** (verified 2026-05-10):
+>
+> - `backend/services/sheets_service.py` `trigger_apps_script(dest_row_num, team_id)`
+>   posts `{"rowNumber": <score-destination row>}` to the team's web app.
+>   The route handler in `backend/routes/scoring.py` `approve_scorecard()` passes
+>   `dest_row` (the Form Responses 1 / Scores tab row from Stage 2) — not
+>   `history_row` (the Analyst_History row from Stage 4).
+> - `qa-automation/src/Main.js` `doPost(e)` reads `payload.rowNumber`, then
+>   `sheet.getRange(rowNumber, 1, 1, 22).getValues()[0]` from
+>   `CONFIG.QA_SHEET_NAME` (= `"Form Responses 1"`). The 22-col read width is
+>   FR1-shaped (cols A–V); Sales' Scores tab is wider (A–Y) and Analyst_History
+>   is wider still — so changing the source tab without updating the read width
+>   produces silent zero-padded reads.
+>
+> **What Phase C must change atomically:**
+>
+> 1. `routes/scoring.py` — pass `history_row` to `trigger_apps_script` instead of
+>    `dest_row`. (Both values already exist; just swap.)
+> 2. `sheets_service.py` `trigger_apps_script` docstring — drop the "Phase B (a)"
+>    note that says it still passes the destination-tab row.
+> 3. `qa-automation/src/Main.js` `doPost` — change `CONFIG.QA_SHEET_NAME` lookup
+>    to read from `Analyst_History` (likely via a new `CONFIG.HISTORY_SHEET_NAME`
+>    in the generated `Config.js`).
+> 4. `Main.js` row-read width — drop the hard `22` and use the team's
+>    `HistoryLayout(N).total_width` (also surfaced via the generated `Config.js`).
+> 5. `qa-automation/src/QAEntry.js` constructor — accept the new layout
+>    (currently consumes FR1's column shape via `CONFIG.COL`; needs to consume
+>    `CONFIG.HISTORY_LAYOUT` positions instead). The AnalystHistory.js refactor
+>    (below) is the natural place to land this together.
+>
+> **PR description should include this as a top-line callout** so a reviewer
+> can verify both ends of the wire moved together. Two short merges in
+> sequence will break MS — the constraint is "all in one PR or nothing".
+
 ### Deployment surface: `./push.sh`
 
 All Apps Script deployments go through the repo-root `push.sh` wrapper, registered in
@@ -404,45 +444,164 @@ backend-side rename.
 
 ### MS Analyst_History (one-shot, in-place reorder)
 
-`scripts/migrate_ms_history.py`:
+`scripts/migrate_ms_history.py`. Reads from `Analyst_History_legacy` (post-rename),
+writes to a fresh `Analyst_History` tab using the derived layout
+(`HistoryLayout(N=10)`, total width 42 cols A–AP).
 
-1. Read every row of `Analyst_History` (current MS layout).
-2. For each row, transpose into the new layout:
-   - Old col 0/1/2/3 → new col 0/1/2/5 (overall_score moves from D to F)
-   - Old col 14 → new col 3 (manager_email → evaluator_email)
-   - Old col 15 → new col 4 (dialpad_link)
-   - Old `section_columns` + `yn_columns` → new score range `[6, 6+N)` in
-     `section_number` order
-   - Old `extended_columns` (interleaved reasoning + confidence pairs) → new reasoning
-     range `[6+N, 6+2N)` and confidence range `[6+2N, 6+3N)`
-   - Old col 16/17/18 → new col 6+3N / 6+3N+1 / 6+3N+5 (key_strengths, improvements
-     [renamed to opportunities], source)
-   - Old call_summary/caller_name/caller_phone (37/38/39) → new col 6+3N+2/3/4
-   - Documentation extended (40/41) → reasoning + confidence cell for documentation in
-     the new layout
-3. Write to fresh tab `Analyst_History` (after renaming current → `Analyst_History_legacy`).
-4. Verify row counts match. Verify a small sample of overall_scores match. Bail on
-   mismatch.
+**Source columns** are 0-based and reference the legacy MS layout codified in
+`qa-automation/teams/member_support/Config.js` `HISTORY_COL`. **Destination
+columns** are 0-based positions returned by the `HistoryLayout` helpers. Section
+indices follow `section_number` order:
+
+| `section_number` | section_id (history_id) | layout idx |
+|---|---|---|
+| 1 | greeting | 0 |
+| 2 | caller_identity_validation (`identity_validation`) | 1 |
+| 3 | purpose_of_call | 2 |
+| 4 | matching_the_moment | 3 |
+| 5 | process_adherence | 4 |
+| 6 | call_resolution | 5 |
+| 7 | communication | 6 |
+| 8 | efficiency_call_handling (`efficiency`) | 7 |
+| 9 | documentation | 8 |
+| 10 | customer_resolution_indicator | 9 |
+
+**Per-column mapping** (legacy → new):
+
+| Old col | Old name (HISTORY_COL.\*)         | New col | New target                              |
+|--------:|-----------------------------------|--------:|-----------------------------------------|
+| 0       | AGENT_NAME                        | 0       | agent_name                              |
+| 1       | AGENT_EMAIL                       | 1       | agent_email                             |
+| 2       | TIMESTAMP                         | 2       | timestamp                               |
+| 14      | MANAGER_EMAIL                     | 3       | evaluator_email (renamed)               |
+| 15      | DIALPAD_LINK                      | 4       | dialpad_link                            |
+| 3       | OVERALL_SCORE                     | 5       | overall_score                           |
+| 4       | GREETING                          | 6       | `L.col_score(0)` greeting               |
+| 12      | IDENTITY_VAL                      | 7       | `L.col_score(1)` identity_validation    |
+| 5       | CALL_PURPOSE                      | 8       | `L.col_score(2)` purpose_of_call        |
+| 6       | MATCH_MOMENT                      | 9       | `L.col_score(3)` matching_the_moment    |
+| 7       | PROCESS_ADHERENCE                 | 10      | `L.col_score(4)` process_adherence      |
+| 8       | CALL_RESOLUTION                   | 11      | `L.col_score(5)` call_resolution        |
+| 9       | COMMUNICATION                     | 12      | `L.col_score(6)` communication          |
+| 10      | EFFICIENCY                        | 13      | `L.col_score(7)` efficiency             |
+| 11      | DOCUMENTATION                     | 14      | `L.col_score(8)` documentation          |
+| 13      | CUSTOMER_RES                      | 15      | `L.col_score(9)` customer_resolution    |
+| 20      | GREETING_REASON                   | 16      | `L.col_reasoning(0)`                    |
+| 22      | IDENTITY_REASON                   | 17      | `L.col_reasoning(1)`                    |
+| 24      | PURPOSE_REASON                    | 18      | `L.col_reasoning(2)`                    |
+| 26      | MATCHING_REASON                   | 19      | `L.col_reasoning(3)`                    |
+| 28      | PROCESS_REASON                    | 20      | `L.col_reasoning(4)`                    |
+| 30      | RESOLUTION_REASON                 | 21      | `L.col_reasoning(5)`                    |
+| 32      | COMMUNICATION_REASON              | 22      | `L.col_reasoning(6)`                    |
+| 34      | EFFICIENCY_REASON                 | 23      | `L.col_reasoning(7)`                    |
+| 41      | DOC_REASON                        | 24      | `L.col_reasoning(8)`                    |
+| 36      | CUSTOMER_RES_REASON               | 25      | `L.col_reasoning(9)`                    |
+| 19      | GREETING_CONF                     | 26      | `L.col_confidence(0)`                   |
+| 21      | IDENTITY_CONF                     | 27      | `L.col_confidence(1)`                   |
+| 23      | PURPOSE_CONF                      | 28      | `L.col_confidence(2)`                   |
+| 25      | MATCHING_CONF                     | 29      | `L.col_confidence(3)`                   |
+| 27      | PROCESS_CONF                      | 30      | `L.col_confidence(4)`                   |
+| 29      | RESOLUTION_CONF                   | 31      | `L.col_confidence(5)`                   |
+| 31      | COMMUNICATION_CONF                | 32      | `L.col_confidence(6)`                   |
+| 33      | EFFICIENCY_CONF                   | 33      | `L.col_confidence(7)`                   |
+| 40      | DOC_CONF                          | 34      | `L.col_confidence(8)`                   |
+| 35      | CUSTOMER_RES_CONF                 | 35      | `L.col_confidence(9)`                   |
+| 16      | KEY_STRENGTHS                     | 36      | key_strengths                           |
+| 17      | IMPROVEMENTS                      | 37      | opportunities (renamed)                 |
+| 37      | CALL_SUMMARY                      | 38      | call_summary                            |
+| 38      | CALLER_NAME                       | 39      | caller_name                             |
+| 39      | CALLER_PHONE                      | 40      | caller_phone                            |
+| 18      | SOURCE                            | 41      | source                                  |
+
+**Verification gates** (script bails on any mismatch):
+
+1. Row counts match between legacy and new tabs.
+2. For a 10-row sample: `overall_score` matches and section scores at indices
+   0–9 match the legacy column values (validates the section-reorder mapping).
+3. Reasoning/confidence pair re-pairing — for a 5-row sample, walk
+   `[L.col_reasoning(i), L.col_confidence(i)]` and verify the cell content
+   matches the legacy `(REASON, CONF)` pair from the section's old position
+   (catches off-by-one in the un-pair → re-pair step).
 
 ### Sales — 243-row import from FR3 → new Analyst_History
 
-`scripts/import_sales_history.py`:
+`scripts/import_sales_history.py`. Reads FR3 (A–AA, 244 rows incl header),
+writes to a fresh Sales `Analyst_History` tab using `HistoryLayout(N=19)`,
+total width 69 cols A–BQ.
 
-1. Read FR3 rows (A–AA, 244 rows incl header).
-2. For each row:
-   - Map A → dialpad_link, B → timestamp, C → agent_name (resolve email via Mails)
-   - D–V → 19 section scores (placed in score range `[6, 25)`)
-   - W → evaluator_email
-   - X (combined feedback) → `opportunities`; `key_strengths` blank
-   - Y → timestamp (use as primary if FR3 col B was blank)
-   - Z (agent email lookup formula) → already covered via Mails, ignore
-   - AA (Month) → derived; ignore
-3. For rows where col B (Call Date) is blank, call Dialpad `get_call_details(call_id)`
-   to backfill. Rate-limit: 5 calls/sec, ~1 minute total for 243 rows worst case. Cache
-   results.
-4. Reasoning + confidence: blank for migrated rows (no AI ran).
-5. `source` = `"migrated"` so analytics can filter these out until trust is established.
-6. Append to fresh `Analyst_History`.
+**Section index alignment.** Sales is fortunate: FR3's section columns D–V are
+already in `section_number` order, so D maps to layout idx 0 through V mapping
+to idx 18. No reorder within the score range required.
+
+| `section_number` | section_id     | FR3 col | layout idx | new col |
+|---:|------------------------|--------:|-----------:|--------:|
+| 1  | greeting               | D       | 0          | 6       |
+| 2  | pb_creation (manual)   | E       | 1          | 7       |
+| 3  | mc_call_notes (manual) | F       | 2          | 8       |
+| 4  | situation_match        | G       | 3          | 9       |
+| 5  | reason_for_move_pitch  | H       | 4          | 10      |
+| 6  | value_uplift           | I       | 5          | 11      |
+| 7  | membership_explanation | J       | 6          | 12      |
+| 8  | flex_long_stay_pitch   | K       | 7          | 13      |
+| 9  | landing_guarantee      | L       | 8          | 14      |
+| 10 | pricing_explanation    | M       | 9          | 15      |
+| 11 | book_attempt           | N       | 10         | 16      |
+| 12 | objection_handling     | O       | 11         | 17      |
+| 13 | urgency_disclosure     | P       | 12         | 18      |
+| 14 | followup_setup         | Q       | 13         | 19      |
+| 15 | tonality_pace          | R       | 14         | 20      |
+| 16 | hold_usage             | S       | 15         | 21      |
+| 17 | audio_quality          | T       | 16         | 22      |
+| 18 | screen_recording       | U       | 17         | 23      |
+| 19 | pre_send_intro         | V       | 18         | 24      |
+
+> Note for Q18 (`screen_recording`): the live config has `auto_value: "Yes"` so
+> Stage 1 hardcodes "Yes" for new evaluations, but the migration **preserves
+> the historical FR3 col U value verbatim** — old rows reflect what was
+> actually scored at the time, not the new fixed value.
+
+**Non-section columns** (FR3 → new layout):
+
+| FR3 col | Source field          | New col | New target                                  |
+|--------:|-----------------------|--------:|---------------------------------------------|
+| A       | dialpad_link          | 4       | dialpad_link                                |
+| B       | call_date             | 2       | timestamp (primary; backfill from Y or Dialpad if blank) |
+| C       | agent_name            | 0       | agent_name                                  |
+| —       | (Mails lookup on C)   | 1       | agent_email                                 |
+| W       | evaluator_name/email  | 3       | evaluator_email                             |
+| X       | combined feedback     | 64      | `L.col_opportunities` (key_strengths blank) |
+| Y       | submission_timestamp  | 2       | timestamp (fallback if B blank)             |
+| Z       | agent_email formula   | —       | ignore (resolved via Mails)                 |
+| AA      | derived month         | —       | ignore                                      |
+
+**Cells left blank** for migrated rows (no AI ran):
+
+- `agent_email` (col 1) if Mails lookup misses — log + warn (see follow-up §3.4)
+- `overall_score` (col 5) — re-derive from sheet formula or leave blank;
+  analytics filter on `source = 'migrated'` is the safety net
+- All reasoning cells `[L.col_reasoning(0..18)]` (cols 25–43)
+- All confidence cells `[L.col_confidence(0..18)]` (cols 44–62)
+- `key_strengths` (col 63) — combined feedback lands in `opportunities` only
+- `call_summary` (col 65), `caller_name` (col 66), `caller_phone` (col 67)
+
+**Constants written for every migrated row:**
+
+- `source` (col 68) = `"migrated"`
+
+**Date backfill (FR3 col B blank cases):**
+
+1. Use FR3 col Y (form-submission timestamp) if present.
+2. Otherwise call Dialpad `get_call_details(call_id)` parsed from FR3 col A.
+3. Rate-limit: 5 calls/sec; 243 rows worst case ≈ 1 minute. Cache responses
+   keyed on `call_id` to allow resumable runs.
+
+**Verification gates:**
+
+1. Row count: 243 written.
+2. Sample 10 random rows: section scores at layout idx 0–18 match FR3 cols D–V.
+3. `source` column on every written row equals `"migrated"`.
+4. Mails resolution rate logged; abort if < 70 % match (likely indicates a
+   wrong `Mails` tab connection, not just stale evaluators).
 
 ---
 
@@ -556,40 +715,37 @@ at the top and only skip an item if a higher-priority one absolutely depends on 
 
 ### Tier 1 — Critical (production data loss or launch-blocking)
 
-#### 1.1 Migration script mapping tables (Phase E prerequisite)
-**Status:** Phase E §"Migration" in this doc is light on column-mapping detail.
-**Silent failure:** A Phase E session re-derives mappings from memory and writes a
-one-shot migration that puts data into wrong columns. Worst case: 243 Sales FR3 rows
-imported with reasoning/feedback in the wrong cells; MS legacy reasoning+confidence
-pairs un-pair across the new contiguous ranges. Recovery requires
-`Analyst_History_legacy` restore + re-run.
-**Where to start:** Add a column-mapping table per migration:
-- MS in-place: old `analyst_history.section_columns` index → new
-  `L.col_score(section_idx_by_section_number)`; old `extended_columns` pair → new
-  `L.col_reasoning(i)` + `L.col_confidence(i)`.
-- Sales FR3 import: FR3 col D-V → new `L.col_score(0..18)`; FR3 col X (combined
-  feedback) → new `L.col_opportunities`; FR3 col Y → timestamp.
+#### 1.1 Migration script mapping tables (Phase E prerequisite) — ✅ RESOLVED 2026-05-10
+**Resolution:** §"Migration" above now contains explicit per-column mapping
+tables for both migrations (MS in-place reorder + Sales FR3 import), plus
+section-index alignment tables and verification gates. A Phase E session can
+implement the scripts directly from those tables without re-deriving the
+layout.
 
-#### 1.2 Manual-section dashboard input for Sales
-**Status:** Stage 1.5 already accepts analyst writes to manual section cells via
-`apply_analyst_edits_to_fr_ai`, but the frontend may not yet expose distinct inputs for
-manual sections (Q2 `pb_creation`, Q3 `mc_call_notes`).
-**Silent failure:** Analysts can't fill Q2/Q3 from the dashboard. Sales calls cannot be
-approved end-to-end. Sales rollout blocked entirely.
-**Where to start:** Audit the approve-payload UI in `frontend/index.html` for inputs
-keyed on `score_type === "manual"`. Add explicit manual-section affordances if missing.
+#### 1.2 Manual-section dashboard input for Sales — ✅ RESOLVED 2026-05-10
+**Resolution:** Pulled the frontend fix forward from Phase D scope.
+- New endpoint `GET /api/{team_id}/sections` (`backend/routes/team.py`) returns
+  the team's section list (id, name, section_number, score_type,
+  audio_dependent, na_applicable, auto_value).
+- `frontend/index.html` `buildScorecardPanel` now walks `_teamSections` in
+  canonical order, rendering AI cards for AI-scored sections and manual-input
+  cards for `score_type === "manual"`. `auto_value` sections are skipped.
+- `checkManualScores` replaces `checkDocScore`; the Approve button stays
+  disabled until **all** manual sections have a score selected, with status
+  text naming the missing sections (e.g. Sales: "Score PB Created + MC Call
+  Notes to enable Approve & Send.").
+- Approve payload iterates manual sections from `_teamSections` instead of
+  hardcoding the `'documentation'` push.
+- Out of scope (still Phase D): `dashboard.html` and `datapoint.html`
+  hardcoded `SECTION_KEYS` / `sectionOrder` / `'documentation'` literals.
 
-#### 1.3 Apps Script trigger flip must be atomic (Phase C)
-**Status:** `trigger_apps_script` currently passes `dest_row` (FR1/Scores tab); Apps
-Script reads from FR1.
-**Silent failure:** If a future session updates Python to send `history_row` without
-simultaneously updating Apps Script to read from Analyst_History (or vice versa), MS
-production emails break for hours/days until the other side catches up. Confusing
-failure mode — emails just stop, no error.
-**Where to start:** Phase C must be a single PR that touches both
-`backend/services/sheets_service.py` (`trigger_apps_script` payload) AND
-`qa-automation/src/Main.js` (doPost source-of-truth). Document this constraint at the
-top of the Phase C PR description.
+#### 1.3 Apps Script trigger flip must be atomic (Phase C) — ✅ DOCUMENTED 2026-05-10
+**Resolution:** §"Apps Script — generated Config.js, multi-team overlay,
+push.sh" above now opens with a ⚠ atomicity callout enumerating the five
+specific files Phase C must touch in a single PR (routes/scoring.py,
+sheets_service.py, Main.js, Main.js read width, QAEntry.js). The actual code
+flip lands as part of Phase C work; this entry stays in the doc as the
+landmine warning a future reader will hit before opening the PR.
 
 ### Tier 2 — High (operational pain or user-visible bug)
 
@@ -698,6 +854,49 @@ several Stage `print()` calls.
 **Where to start:** Replace `print(...)` with `logger.info(...)` across `sheets_service`,
 `history_service`, `scoring_service`. Wire to the existing audit middleware logger if
 applicable.
+
+#### 4.6 Phase-C bridge cleanup
+**Status:** Phase C ships a transitional payload bridge so Apps Script and Railway can
+deploy in either order without producing wrong-row emails during the deploy window.
+
+- Python (`sheets_service.trigger_apps_script`) sends both
+  `{historyRowNumber, rowNumber}`.
+- Apps Script `doPost` prefers `historyRowNumber` (new Analyst_History path); falls
+  back to `rowNumber` (legacy Form Responses 1 path via `_processRow` →
+  `AnalystHistory.append` → enrichment lookup).
+- The legacy code paths kept alive solely for this fallback:
+  - `Main.js` — the `else` branch in `doPost` that calls `_processRow(row)`
+  - `Main.js` — `_processRow`, `processLatestRow`, `createDraftForLatest`,
+    `rebuildHistory`, `_getLatestRow`
+  - `QAEntry.js` — the FR1-shape `constructor(row)` and `toHistoryRow()`
+  - `AnalystHistory.js` — `append`, `enrichEntry`, `_lookupEnrichment`,
+    `_writeEnrichment`, `_attachToEntry`, `_getOrCreateSheet`
+  - `member_support/Config.js` — `NUMERIC_CATEGORIES[*].col`,
+    `BINARY_CATEGORIES[*].col`, `MANUAL_CATEGORIES[*].col` (the destination-tab
+    column index used only by the legacy QAEntry constructor)
+  - `scripts/build_config.py` — the `_render_legacy_compat` block that
+    emits `CONFIG.COL`, `CONFIG.FORM_AI_COL`, `CONFIG.HISTORY_COL`, and
+    `CONFIG.HISTORY_EXTENDED_LAYOUT` (the MS-specific hand-coded literals
+    in particular)
+
+**Silent failure if not cleaned up:** Maintenance burden — every future change to the
+new path also has to consider whether the legacy fallback still makes sense; new
+contributors get confused by parallel implementations of the same flow.
+
+**Where to start, after MS+Sales cutover is verified live for at least one week:**
+1. Drop `rowNumber` from `trigger_apps_script`'s payload (`sheets_service.py`); update
+   docstring.
+2. Drop the `else` (legacy) branch from `Main.js doPost`. Delete `_processRow`,
+   `processLatestRow`, `createDraftForLatest`, `rebuildHistory`, `_getLatestRow`,
+   `_handleError`. Adjust `onOpen()` (no menu items left → can also be deleted).
+3. Trim `QAEntry.js` to keep only `fromHistoryRow` + the static helpers + the
+   formatted-date getter + the static color/name helpers.
+4. Trim `AnalystHistory.js` to keep only `getHistory` + a minimal sheet-getter.
+5. Drop the `col` field from generated `NUMERIC_CATEGORIES` / `BINARY_CATEGORIES` /
+   `MANUAL_CATEGORIES` in `build_config.py`; delete `_render_legacy_compat`
+   (and its call site in `render_config_js`); regenerate every team's `Config.js`.
+6. Manually delete the `onFormSubmit` installable trigger in each team's Apps Script
+   editor (Triggers UI) — was meant to be done at cutover but easy to forget.
 
 ---
 

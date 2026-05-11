@@ -568,6 +568,19 @@
     }
   }
   loadAgentDropdown();
+
+  // --- Team section list (drives manual-section input rendering) ---
+  let _teamSections = [];
+  async function loadTeamSections() {
+    try {
+      const res = await fetch(`${API_BASE}/sections`, { headers: authHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      _teamSections = await res.json();
+    } catch (e) {
+      console.error('Failed to load team sections:', e);
+    }
+  }
+  loadTeamSections();
   const dropZone = document.getElementById('drop-zone');
   const fileInput = document.getElementById('file-input');
   const fileList = document.getElementById('file-list');
@@ -761,67 +774,78 @@
       </div>
     `;
 
-    const sectionRows = sc.sections.map(s => {
-      const flags = s.flags && s.flags.length
-        ? `<div class="section-flags">${s.flags.join(', ')}</div>` : '';
-      const audioTag = s.audio_dependent ? ' <span style="color:var(--muted); font-size:0.68rem;">[audio]</span>' : '';
+    const aiById = Object.fromEntries(sc.sections.map(s => [s.id, s]));
 
-      // Editable score control
-      let scoreControl;
-      if (s.score_type === 'yn') {
-        scoreControl = `<select class="score-select" data-section-id="${s.id}" data-field="yn_value">
-          <option value="Y" ${s.yn_value==='Y'?'selected':''}>Y</option>
-          <option value="N" ${s.yn_value==='N'?'selected':''}>N</option>
-          <option value="NA" ${s.yn_value==='NA'?'selected':''}>NA</option>
+    // Walk team sections in canonical order, render AI cards for AI-scored
+    // sections and manual-input cards for manual ones. `auto_value` sections
+    // are skipped (writer hardcodes the value — no analyst input).
+    const sectionRows = _teamSections
+      .filter(ts => !ts.auto_value)
+      .map(ts => {
+        if (ts.score_type === 'manual') {
+          return `
+            <div class="section-row" style="border-left:3px solid var(--amber);">
+              <div>
+                <div class="section-name" style="color:var(--amber);">${ts.name} — Score Required</div>
+                <textarea class="section-reasoning" id="manual-reasoning-${ts.id}-${jobId}"
+                  placeholder="Enter reasoning for ${ts.name} score (persisted for progression analysis)"
+                  rows="2" style="width:100%; margin-top:0.4rem; font-family:'DM Mono',monospace; font-size:0.82rem; border:1px solid #d1d5db; border-radius:4px; padding:0.4rem; resize:vertical;"></textarea>
+              </div>
+              <div>
+                <select class="score-select" id="manual-score-${ts.id}-${jobId}" onchange="checkManualScores('${jobId}')">
+                  <option value="" selected>—</option>
+                  <option value="1">1/5</option>
+                  <option value="2">2/5</option>
+                  <option value="3">3/5</option>
+                  <option value="4">4/5</option>
+                  <option value="5">5/5</option>
+                </select>
+              </div>
+              <div><span class="confidence-badge" style="background:#e5e7eb; color:#6b7280;">MANUAL</span></div>
+            </div>
+          `;
+        }
+
+        const s = aiById[ts.id];
+        if (!s) {
+          console.warn(`No AI data for section "${ts.id}"`);
+          return '';
+        }
+        const flags = s.flags && s.flags.length
+          ? `<div class="section-flags">${s.flags.join(', ')}</div>` : '';
+        const audioTag = s.audio_dependent ? ' <span style="color:var(--muted); font-size:0.68rem;">[audio]</span>' : '';
+
+        let scoreControl;
+        if (s.score_type === 'yn') {
+          scoreControl = `<select class="score-select" data-section-id="${s.id}" data-field="yn_value">
+            <option value="Y" ${s.yn_value==='Y'?'selected':''}>Y</option>
+            <option value="N" ${s.yn_value==='N'?'selected':''}>N</option>
+            <option value="NA" ${s.yn_value==='NA'?'selected':''}>NA</option>
+          </select>`;
+        } else {
+          scoreControl = `<select class="score-select" data-section-id="${s.id}" data-field="score">
+            ${[1,2,3,4,5].map(v => `<option value="${v}" ${s.score===v?'selected':''}>${v}/5</option>`).join('')}
+          </select>`;
+        }
+
+        const confControl = `<select class="confidence-select" data-section-id="${s.id}" data-field="confidence">
+          <option value="high" ${s.confidence==='high'?'selected':''}>HIGH</option>
+          <option value="medium" ${s.confidence==='medium'?'selected':''}>MEDIUM</option>
+          <option value="low" ${s.confidence==='low'?'selected':''}>LOW</option>
         </select>`;
-      } else {
-        scoreControl = `<select class="score-select" data-section-id="${s.id}" data-field="score">
-          ${[1,2,3,4,5].map(v => `<option value="${v}" ${s.score===v?'selected':''}>${v}/5</option>`).join('')}
-        </select>`;
-      }
 
-      // Editable confidence control
-      const confControl = `<select class="confidence-select" data-section-id="${s.id}" data-field="confidence">
-        <option value="high" ${s.confidence==='high'?'selected':''}>HIGH</option>
-        <option value="medium" ${s.confidence==='medium'?'selected':''}>MEDIUM</option>
-        <option value="low" ${s.confidence==='low'?'selected':''}>LOW</option>
-      </select>`;
-
-      return `
-        <div class="section-row">
-          <div>
-            <div class="section-name">${s.name}${audioTag}</div>
-            <textarea class="reasoning-textarea" data-section-id="${s.id}" data-field="reasoning" rows="2">${s.reasoning}</textarea>
-            ${flags}
+        return `
+          <div class="section-row">
+            <div>
+              <div class="section-name">${s.name}${audioTag}</div>
+              <textarea class="reasoning-textarea" data-section-id="${s.id}" data-field="reasoning" rows="2">${s.reasoning}</textarea>
+              ${flags}
+            </div>
+            <div>${scoreControl}</div>
+            <div>${confControl}</div>
           </div>
-          <div>${scoreControl}</div>
-          <div>${confControl}</div>
-        </div>
-      `;
-    });
-
-    // Insert Documentation row after Efficiency (index 7) — editable, manager must score
-    sectionRows.splice(8, 0, `
-      <div class="section-row" style="border-left:3px solid var(--amber);">
-        <div>
-          <div class="section-name" style="color:var(--amber);">Documentation — Score Required</div>
-          <textarea class="section-reasoning" id="doc-reasoning-${jobId}"
-            placeholder="Enter reasoning for Documentation score (persisted for progression analysis)"
-            rows="2" style="width:100%; margin-top:0.4rem; font-family:'DM Mono',monospace; font-size:0.82rem; border:1px solid #d1d5db; border-radius:4px; padding:0.4rem; resize:vertical;"></textarea>
-        </div>
-        <div>
-          <select class="score-select" id="doc-score-${jobId}" onchange="checkDocScore('${jobId}')">
-            <option value="" selected>—</option>
-            <option value="1">1/5</option>
-            <option value="2">2/5</option>
-            <option value="3">3/5</option>
-            <option value="4">4/5</option>
-            <option value="5">5/5</option>
-          </select>
-        </div>
-        <div><span class="confidence-badge" style="background:#e5e7eb; color:#6b7280;">MANUAL</span></div>
-      </div>
-    `);
+        `;
+      });
 
     const notes = `
       <div class="notes-section">
@@ -835,10 +859,15 @@
       </div>
     `;
 
+    const manualSecs = _teamSections.filter(s => s.score_type === 'manual');
+    const initialDisabled = manualSecs.length > 0;
+    const initialStatus = initialDisabled
+      ? `Score ${manualSecs.map(s => s.name).join(' + ')} to enable Approve & Send.`
+      : 'Review scores and click to send evaluation email.';
     const approveBar = `
       <div class="approve-bar" id="approve-bar-${jobId}">
-        <span class="approve-status" id="approve-status-${jobId}">Score Documentation to enable Approve & Send.</span>
-        <button class="btn-approve" id="approve-btn-${jobId}" onclick="approveScorecard('${jobId}')" disabled>Approve & Send</button>
+        <span class="approve-status" id="approve-status-${jobId}">${initialStatus}</span>
+        <button class="btn-approve" id="approve-btn-${jobId}" onclick="approveScorecard('${jobId}')" ${initialDisabled ? 'disabled' : ''}>Approve & Send</button>
       </div>
     `;
 
@@ -884,16 +913,23 @@
     return panel;
   }
 
-  function checkDocScore(jobId) {
-    const docSelect = document.getElementById(`doc-score-${jobId}`);
+  function checkManualScores(jobId) {
     const btn = document.getElementById(`approve-btn-${jobId}`);
     const statusEl = document.getElementById(`approve-status-${jobId}`);
-    if (docSelect.value) {
+    if (!btn || !statusEl) return;
+
+    const missing = _teamSections
+      .filter(s => s.score_type === 'manual')
+      .filter(s => {
+        const sel = document.getElementById(`manual-score-${s.id}-${jobId}`);
+        return !sel || !sel.value;
+      });
+    if (missing.length === 0) {
       btn.disabled = false;
       statusEl.textContent = 'Review scores and click to send evaluation email.';
     } else {
       btn.disabled = true;
-      statusEl.textContent = 'Score Documentation to enable Approve & Send.';
+      statusEl.textContent = `Score ${missing.map(s => s.name).join(' + ')} to enable Approve & Send.`;
     }
   }
 
@@ -927,19 +963,23 @@
       };
     });
 
-    // Add Documentation score + reasoning (manual, not in AI sections)
-    const docScore = parseInt(document.getElementById(`doc-score-${jobId}`).value);
-    const docReasoning = (document.getElementById(`doc-reasoning-${jobId}`).value || '').trim();
-    sections.push({
-      id: 'documentation',
-      name: 'Documentation',
-      score: docScore,
-      score_type: 'numeric',
-      yn_value: null,
-      confidence: 'manual',
-      reasoning: docReasoning || 'Scored manually by manager.',
-      audio_dependent: false,
-      flags: [],
+    // Manual sections — analyst-entered scores from the dashboard inputs
+    _teamSections.filter(s => s.score_type === 'manual').forEach(ms => {
+      const scoreEl = document.getElementById(`manual-score-${ms.id}-${jobId}`);
+      const reasonEl = document.getElementById(`manual-reasoning-${ms.id}-${jobId}`);
+      const score = scoreEl && scoreEl.value ? parseInt(scoreEl.value) : null;
+      const reasoning = (reasonEl && reasonEl.value || '').trim();
+      sections.push({
+        id: ms.id,
+        name: ms.name,
+        score,
+        score_type: 'manual',
+        yn_value: null,
+        confidence: 'manual',
+        reasoning: reasoning || 'Scored manually by manager.',
+        audio_dependent: false,
+        flags: [],
+      });
     });
 
     const payload = {
@@ -972,7 +1012,7 @@
 
       btn.textContent = 'Sent';
       btn.style.background = '#065f46';
-      statusEl.textContent = `Email sent. Form Responses 1 row ${data.form_1_row}.`;
+      statusEl.textContent = `Approved — destination row ${data.destination_row}. Email dispatched.`;
 
       panel.querySelectorAll('select, textarea').forEach(el => el.disabled = true);
 

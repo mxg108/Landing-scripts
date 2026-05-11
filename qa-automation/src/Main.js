@@ -10,41 +10,16 @@
  */
 
 // ══════════════════════════════════════════════════════════════════
-// Trigger & Menu
+// Menu
 // ══════════════════════════════════════════════════════════════════
 
 /**
- * Installable trigger — runs each time a form response is submitted.
- *
- * @param {Object} e — the event object from the form-submit trigger
- */
-function onFormSubmit(e) {
-  // Sanity-check: log every element in e.values with its index and column letter.
-  // Useful for confirming which columns the form populates vs. which are formula-driven.
-  Logger.log('=== onFormSubmit e.values dump (%s elements) ===', e.values.length);
-  for (var i = 0; i < e.values.length; i++) {
-    Logger.log('  [%s] col %s: "%s"', i, String.fromCharCode(65 + i), e.values[i]);
-  }
-  Logger.log('=== end of e.values dump ===');
-
-  try {
-    // e.range.getRow() tells us exactly which row the form just appended.
-    // We sleep briefly to let ARRAYFORMULAs (overallScore col Q, agentEmail col V)
-    // finish computing before we re-read the full row from the live sheet.
-    var rowNum = e.range.getRow();
-    Utilities.sleep(3000);
-
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.QA_SHEET_NAME);
-    var row   = sheet.getRange(rowNum, 1, 1, 22).getValues()[0];  // A-V only
-
-    _processRow(row);
-  } catch (err) {
-    _handleError(err, 'onFormSubmit');
-  }
-}
-
-/**
  * Adds a custom menu to the spreadsheet for manual operations.
+ *
+ * Note: Phase C deleted `onFormSubmit`. The installable form-submit
+ * trigger that called it must be removed manually in the Apps Script
+ * editor (Triggers UI) — leaving it registered will spam the project
+ * with "function not found" errors on every form submission.
  */
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -61,9 +36,25 @@ function onOpen() {
 // ══════════════════════════════════════════════════════════════════
 
 /**
- * Web App entry point — receives a JSON payload with the row number
- * in Form Responses 1 to process. Called after the backend copies
- * approved scores and waits for ARRAYFORMULA computation.
+ * Web App entry point — receives a JSON payload from the Python backend
+ * with the row to process.
+ *
+ * Bridge payload shape (Phase C transitional):
+ *   {
+ *     historyRowNumber: <Analyst_History row>,  // new path
+ *     rowNumber:        <Form Responses 1 row>, // legacy fallback
+ *   }
+ *
+ * If `historyRowNumber` is set, reads from Analyst_History (post-Stage-4
+ * — already populated with scores + reasoning + confidence + feedback +
+ * caller meta) and dispatches the email via `_processHistoryRow(entry)`
+ * — no append, no enrichment lookup needed.
+ *
+ * Otherwise falls back to the legacy `rowNumber` flow: read FR1, build a
+ * QAEntry from FR1 layout, append-with-enrichment to Analyst_History,
+ * dispatch the email. Kept alive for the deploy window between Apps
+ * Script push and Railway redeploy. Drop with the bridge cleanup
+ * (PhaseTwo §4.6).
  *
  * @param {Object} e — the web app event object
  * @return {ContentOutput} JSON response
@@ -71,35 +62,64 @@ function onOpen() {
 function doPost(e) {
   try {
     var payload = JSON.parse(e.postData.contents);
-    var rowNumber = payload.rowNumber;
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
 
-    if (!rowNumber || typeof rowNumber !== 'number') {
+    // ── New path: Analyst_History row ──────────────────────────
+    if (payload.historyRowNumber && typeof payload.historyRowNumber === 'number') {
+      var rowNum = payload.historyRowNumber;
+      var L = CONFIG.HISTORY_LAYOUT;
+
+      Logger.log('[doPost] (new path) reading row %s from %s (width %s)',
+                 rowNum, CONFIG.HISTORY_SHEET_NAME, L.TOTAL_WIDTH);
+
+      var sheet = ss.getSheetByName(CONFIG.HISTORY_SHEET_NAME);
+      if (!sheet) {
+        throw new Error('Sheet "' + CONFIG.HISTORY_SHEET_NAME + '" not found.');
+      }
+
+      var row = sheet.getRange(rowNum, 1, 1, L.TOTAL_WIDTH).getValues()[0];
+      if (!row[L.COL_AGENT_NAME]) {
+        return ContentService
+          .createTextOutput(JSON.stringify({ status: 'error', message: 'Analyst_History row ' + rowNum + ' appears empty' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+
+      var entry = QAEntry.fromHistoryRow(row);
+      _processHistoryRow(entry);
+
       return ContentService
-        .createTextOutput(JSON.stringify({ status: 'error', message: 'Missing or invalid rowNumber' }))
+        .createTextOutput(JSON.stringify({ status: 'ok', message: 'Analyst_History row ' + rowNum + ' processed' }))
         .setMimeType(ContentService.MimeType.JSON);
     }
 
-    Logger.log('[doPost] Processing row %s in %s', rowNumber, CONFIG.QA_SHEET_NAME);
+    // ── Legacy path: FR1 row (bridge fallback) ─────────────────
+    var legacyRowNum = payload.rowNumber;
+    if (!legacyRowNum || typeof legacyRowNum !== 'number') {
+      return ContentService
+        .createTextOutput(JSON.stringify({ status: 'error', message: 'Missing historyRowNumber and rowNumber' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
 
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.QA_SHEET_NAME);
-    if (!sheet) {
+    Logger.log('[doPost] (legacy bridge path) reading row %s from %s',
+               legacyRowNum, CONFIG.QA_SHEET_NAME);
+
+    var fr1Sheet = ss.getSheetByName(CONFIG.QA_SHEET_NAME);
+    if (!fr1Sheet) {
       throw new Error('Sheet "' + CONFIG.QA_SHEET_NAME + '" not found.');
     }
 
-    // Read only cols A-V (22 columns). Using getLastColumn() can return thousands
-    // of columns when ARRAYFORMULAs extend beyond the data range.
-    var row = sheet.getRange(rowNumber, 1, 1, 22).getValues()[0];
-
-    if (!row[0]) {
+    // 22 cols A-V — FR1 shape (kept for bridge; remove with cleanup).
+    var legacyRow = fr1Sheet.getRange(legacyRowNum, 1, 1, 22).getValues()[0];
+    if (!legacyRow[0]) {
       return ContentService
-        .createTextOutput(JSON.stringify({ status: 'error', message: 'Row ' + rowNumber + ' appears empty' }))
+        .createTextOutput(JSON.stringify({ status: 'error', message: 'Row ' + legacyRowNum + ' appears empty' }))
         .setMimeType(ContentService.MimeType.JSON);
     }
 
-    _processRow(row);
+    _processRow(legacyRow);
 
     return ContentService
-      .createTextOutput(JSON.stringify({ status: 'ok', message: 'Row ' + rowNumber + ' processed' }))
+      .createTextOutput(JSON.stringify({ status: 'ok', message: 'Row ' + legacyRowNum + ' processed (legacy path)' }))
       .setMimeType(ContentService.MimeType.JSON);
 
   } catch (err) {
@@ -243,6 +263,49 @@ function _processRow(row) {
   var sender = new EmailSender(entry);
   sender.send(htmlBody);
   Logger.log('[_processRow] DONE — email sent.');
+}
+
+/**
+ * Phase-C dispatch path. Builds + sends the QA email from a QAEntry that
+ * was fully populated by `QAEntry.fromHistoryRow(row)` — Python's Stage 4
+ * already wrote scores, reasoning, confidence, feedback, and caller meta
+ * to the row, and resolved the agent's email via Mails.
+ *
+ * No append, no enrichment lookup — just past-history fetch for the
+ * progression card, then render + send.
+ *
+ * @param {QAEntry} entry — populated via QAEntry.fromHistoryRow
+ * @private
+ */
+function _processHistoryRow(entry) {
+  Logger.log('[_processHistoryRow] agent=%s, overallScore=%s, agentEmail=%s',
+             entry.agentName, entry.overallScore, entry.agentEmail);
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var history = new AnalystHistory(ss);
+
+  Logger.log('[_processHistoryRow] fetching past entries for progression card...');
+  var pastEntries = history.getHistory(entry.agentName);
+  Logger.log('[_processHistoryRow] pastEntries count=%s', pastEntries.length);
+
+  // Prepend current entry so the progression card includes it.
+  var allEntries = [
+    {
+      agentName:    entry.agentName,
+      agentEmail:   entry.agentEmail,
+      timestamp:    entry.timestamp,
+      overallScore: entry.overallScore,
+    }
+  ].concat(pastEntries);
+
+  var scoreCard       = new ScoreCard(entry);
+  var feedbackCard    = new FeedbackCard(entry);
+  var progressionCard = new ProgressionCard(entry, allEntries);
+  var renderer        = new HtmlRenderer(entry, scoreCard, feedbackCard, progressionCard);
+
+  var sender = new EmailSender(entry);
+  sender.send(renderer.renderEmail());
+  Logger.log('[_processHistoryRow] DONE — email sent to %s', entry.agentEmail);
 }
 
 // ══════════════════════════════════════════════════════════════════

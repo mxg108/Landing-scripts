@@ -17,17 +17,29 @@ Placeholder until Sales' Apps Script is bound to their QA spreadsheet.
      "rootDir": "./src"
    }
    ```
-3. Drop `Config.js` here — copy from `../member_support/Config.js` and edit
-   the team-specific values (sheet names, column indices, brand colors,
-   email subject template, mails sheet, QA goal, etc.).
-4. Verify the staging step:
+3. Drop `Branding.js` here — copy from `../member_support/Branding.js` and
+   tweak the team-specific brand/email constants (COLORS, EMAIL.SUBJECT_TEMPLATE,
+   QA_GOAL, THRESHOLDS, FIRST_EVAL_MESSAGE). Apps Script loads files
+   alphabetically, so Branding.js must declare `var CONFIG = {...}` first;
+   the auto-generated `Config.js` mutates that object.
+4. Generate `Config.js` from the team's JSON config:
+   ```bash
+   python qa-automation/scripts/build_config.py sales
+   ```
+   Re-run this whenever `qa-automation/AI-Scoring/backend/config/teams/sales.json`
+   changes — Config.js is AUTO-GENERATED and any hand edits will be clobbered
+   on the next regen.
+5. Verify the staging step:
    ```bash
    ./push.sh qa-sales --dry-run
    ```
-5. Live deploy:
+6. Live deploy:
    ```bash
    ./push.sh qa-sales
    ```
+7. In the Apps Script editor: Deploy → Web App (execute as me, access anyone with
+   link). Capture the deploy URL into the Sales API key's secret bundle as
+   `APPS_SCRIPT_WEBAPP_URL_SALES`.
 
 ## What is shared with Member Support
 
@@ -44,5 +56,6 @@ genuinely diverges.
 ## Do NOT run `clasp push` directly from here
 
 This directory contains only overlays — pushing from here would deploy
-ONLY `Config.js` and `.clasp.json` and break the script. Always go through
-`./push.sh qa-sales`, which stages the full overlay into `.build/sales/`.
+ONLY `Config.js`, `Branding.js`, and `.clasp.json` and break the script.
+Always go through `./push.sh qa-sales`, which stages the full overlay
+into `.build/sales/`.

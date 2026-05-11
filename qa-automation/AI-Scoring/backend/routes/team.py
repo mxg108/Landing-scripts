@@ -176,6 +176,33 @@ async def team_long_form(
     )
 
 
+@router.get("/sections")
+async def team_sections(request: Request):
+    """Return the team's section list in canonical (section_number) order.
+
+    Powers data-driven frontend rendering — the approve UI uses this to
+    splice manual-section inputs into the AI-scored card list, and the
+    section-aware dashboards consume the same shape (Phase D).
+
+    Sections with `auto_value` set are returned for completeness; UIs
+    typically skip them (writer hardcodes the value, no analyst input).
+    """
+    team_id = team_id_from_path(request)
+    config = get_team_config(team_id)
+    return [
+        {
+            "id": s.id,
+            "name": s.name,
+            "section_number": s.section_number,
+            "score_type": s.score_type,
+            "audio_dependent": s.audio_dependent,
+            "na_applicable": s.na_applicable,
+            "auto_value": s.auto_value,
+        }
+        for s in config.sections_by_number
+    ]
+
+
 @router.get("/mails", response_model=list[MailsEntry])
 async def team_mails(request: Request):
     """Return active analyst roster from Mails sheet."""

@@ -15,9 +15,12 @@ Both FR-AI and Analyst_History use the derived layout
 per-team ``score_destination`` block (mirrors legacy form layouts that
 ARRAYFORMULAs depend on).
 
-``trigger_apps_script`` continues to send the destination-tab row to
-Apps Script during Phase B (a) — Apps Script will start reading from
-Analyst_History instead in Phase C.
+``trigger_apps_script`` posts a Phase-C bridge payload — both
+``historyRowNumber`` (new path: Apps Script reads Analyst_History) and
+``rowNumber`` (legacy fallback: Apps Script reads Form Responses 1).
+The fallback exists only to absorb the deploy window between Apps
+Script push and Railway redeploy; drop it once cutover is verified
+(PhaseTwo §4.6).
 
 Setup:
   1. Create a Google Cloud service account
@@ -507,14 +510,25 @@ def finalize_to_analyst_history(
 # Phase C will switch to Analyst_History row)
 # ---------------------------------------------------------------------------
 
-def trigger_apps_script(dest_row_num: int, team_id: str) -> dict:
+def trigger_apps_script(
+    history_row_num: int,
+    dest_row_num: int,
+    team_id: str,
+) -> dict:
     """POST to the Apps Script web app to trigger the email pipeline.
 
-    Phase B (a) note: still passes the score-destination tab's row
-    number (``dest_row_num``) because Apps Script currently reads from
-    Form Responses 1. Phase C updates Apps Script to read from
-    Analyst_History; at that point this should switch to the history
-    row number.
+    Phase-C bridge payload — sends both row numbers so Apps Script can
+    pick the correct path regardless of which side deployed first:
+
+    - ``historyRowNumber`` is the new path (Apps Script reads
+      ``Analyst_History``, which Stage 4 already finalized).
+    - ``rowNumber`` is the legacy fallback (Apps Script reads
+      ``Form Responses 1``). Old Apps Script ignores
+      ``historyRowNumber`` and uses this; new Apps Script prefers
+      ``historyRowNumber`` and ignores this.
+
+    Drop the ``rowNumber`` field once both sides are verified live
+    (PhaseTwo §4.6 — bridge cleanup).
     """
     import httpx
 
@@ -528,7 +542,10 @@ def trigger_apps_script(dest_row_num: int, team_id: str) -> dict:
 
     response = httpx.post(
         url,
-        json={"rowNumber": dest_row_num},
+        json={
+            "historyRowNumber": history_row_num,
+            "rowNumber": dest_row_num,
+        },
         timeout=60.0,
         follow_redirects=True,
     )

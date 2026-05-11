@@ -24,6 +24,15 @@ class AnalystHistory {
    * AI enrichment in Form Responses AI, writes it to the new row, and
    * mutates `entry` so the email pipeline can render reasoning inline.
    *
+   * BRIDGE-WINDOW ONLY (Phase C). Used by the legacy `_processRow` path
+   * (FR1-shaped input) which doPost falls back to when the payload only
+   * carries `rowNumber` (no `historyRowNumber`). Post-cutover this
+   * writes a row in the OLD interleaved-extended-layout shape, which no
+   * longer matches Analyst_History's new derived layout — the row will
+   * land malformed. Acceptable during the bridge window because no FR1
+   * direct-form submissions happen in production. Drop with the bridge
+   * cleanup (PhaseTwo §4.6).
+   *
    * @param {QAEntry} entry
    */
   append(entry) {
@@ -64,10 +73,12 @@ class AnalystHistory {
    * Returns the most recent N QAEntry-like objects for a given agent,
    * sorted newest-first.
    *
-   * The numeric/binary score columns are walked dynamically from
-   * CONFIG.NUMERIC_CATEGORIES + BINARY_CATEGORIES (in toHistoryRow order),
-   * so each team's rubric drives its own history shape — no per-section
-   * keys are hardcoded here.
+   * Reads from the Phase-2 derived layout: scores live in
+   * `[SCORES_START, SCORES_END)`, reasoning in
+   * `[REASONING_START, REASONING_END)`, confidence in
+   * `[CONFIDENCE_START, CONFIDENCE_END)`. Per-category lookups go via
+   * `historyIdx` from CONFIG.NUMERIC_CATEGORIES / BINARY_CATEGORIES so
+   * the email cards (which iterate the same arrays) find every value.
    *
    * @param  {string} agentName  — value to match against column A
    * @param  {number} [limit]    — max records to return (default CONFIG.EMAIL.MAX_HISTORY)
@@ -76,44 +87,39 @@ class AnalystHistory {
   getHistory(agentName, limit) {
     limit = limit || CONFIG.EMAIL.MAX_HISTORY;
     var data = this.sheet.getDataRange().getValues();
-    var HC   = CONFIG.HISTORY_COL;
+    var L    = CONFIG.HISTORY_LAYOUT;
 
     var matches = [];
     for (var i = 1; i < data.length; i++) {
       var row = data[i];
-      if ((row[HC.AGENT_NAME] || '').toString().trim() !== agentName) continue;
+      if ((row[L.COL_AGENT_NAME] || '').toString().trim() !== agentName) continue;
 
       var entry = {
-        agentName:    row[HC.AGENT_NAME],
-        agentEmail:   row[HC.AGENT_EMAIL],
-        timestamp:    new Date(row[HC.TIMESTAMP]),
-        overallScore: parseFloat(row[HC.OVERALL_SCORE]) || 0,
+        agentName:    row[L.COL_AGENT_NAME],
+        agentEmail:   row[L.COL_AGENT_EMAIL],
+        timestamp:    new Date(row[L.COL_TIMESTAMP]),
+        managerEmail: (row[L.COL_EVALUATOR_EMAIL] || '').toString().trim(),
+        dialpadLink:  (row[L.COL_DIALPAD_LINK]    || '').toString().trim(),
+        overallScore: parseFloat(row[L.COL_OVERALL_SCORE]) || 0,
         numericScores: {},
         binaryChecks:  {},
+        // Tier 2.1 follow-up: standardize on `opportunities` everywhere.
+        keyStrengths: (row[L.COL_KEY_STRENGTHS] || '').toString().trim(),
+        improvements: (row[L.COL_OPPORTUNITIES] || '').toString().trim(),
+        source:       (row[L.COL_SOURCE]        || '').toString().trim(),
       };
 
-      // Score columns begin right after Overall Score (col E onwards),
-      // emitted in NUMERIC_CATEGORIES then BINARY_CATEGORIES order
-      // (must mirror QAEntry.toHistoryRow()).
-      var col = HC.OVERALL_SCORE + 1;
       CONFIG.NUMERIC_CATEGORIES.forEach(function(cat) {
-        var val = parseFloat(row[col]) || 0;
+        var val = parseFloat(row[L.SCORES_START + cat.historyIdx]) || 0;
         entry.numericScores[cat.key] = val;
         entry[cat.key] = val;  // top-level alias, kept for legacy callers
-        col++;
       });
       CONFIG.BINARY_CATEGORIES.forEach(function(cat) {
-        var passed = (row[col] || '').toString().trim().toUpperCase().charAt(0) === 'Y';
+        var raw = (row[L.SCORES_START + cat.historyIdx] || '').toString().trim().toUpperCase();
+        var passed = raw.charAt(0) === 'Y';
         entry.binaryChecks[cat.key] = passed;
         entry[cat.key] = passed;
-        col++;
       });
-
-      entry.managerEmail = row[col];                                       col++;
-      entry.dialpadLink  = (row[col] || '').toString().trim();             col++;
-      entry.keyStrengths = (row[col] || '').toString().trim();             col++;
-      entry.improvements = (row[col] || '').toString().trim();             col++;
-      entry.source       = (row[col] || '').toString().trim();             col++;
 
       matches.push(entry);
     }
