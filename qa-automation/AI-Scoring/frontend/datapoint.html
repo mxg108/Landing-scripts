@@ -320,6 +320,31 @@
       if (teamLink) teamLink.href = `/dashboard/${TEAM_ID}`;
     });
 
+    // Team section metadata. _sectionOrder is canonical (sorted by
+    // section_number from the endpoint); _teamSectionsByKey gives O(1)
+    // score_type / auto_value lookup for the confidence badge.
+    let _teamSections = [];
+    let _sectionOrder = [];
+    let _sectionLabels = {};
+    let _teamSectionsByKey = {};
+
+    async function loadTeamSections() {
+      try {
+        const res = await fetch(`${API_BASE}/sections`, { headers: authHeaders() });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        _teamSections = await res.json();
+        _sectionOrder = _teamSections.map(s => s.history_id || s.id);
+        _sectionLabels = Object.fromEntries(
+          _teamSections.map(s => [s.history_id || s.id, s.name])
+        );
+        _teamSectionsByKey = Object.fromEntries(
+          _teamSections.map(s => [s.history_id || s.id, s])
+        );
+      } catch (e) {
+        console.error('Failed to load team sections:', e);
+      }
+    }
+
     async function loadDataPoint() {
       if (!callId) {
         document.getElementById('placeholder').textContent = 'No call ID in URL.';
@@ -368,30 +393,25 @@
       overallEl.textContent = eval_.overall_score.toFixed(1);
       overallEl.className = 'overall-score ' + scoreColor(eval_.overall_score);
 
-      // Section rows
-      const sectionOrder = [
-        'greeting', 'identity_validation', 'purpose_of_call', 'matching_the_moment',
-        'process_adherence', 'call_resolution', 'communication', 'efficiency', 'documentation',
-        'customer_resolution_indicator'
-      ];
-      const sectionLabels = {
-        greeting: 'Greeting', identity_validation: 'Identity Validation',
-        purpose_of_call: 'Purpose of the Call', matching_the_moment: 'Matching the Moment',
-        process_adherence: 'Process Adherence', call_resolution: 'Call Resolution',
-        communication: 'Communication', efficiency: 'Efficiency & Call Handling',
-        documentation: 'Documentation', customer_resolution_indicator: 'Customer Resolution Indicator'
-      };
-
+      // Section rows — order, labels, and MANUAL/AUTO badge derived from
+      // /api/{team_id}/sections so MS and Sales render correctly without
+      // any hardcoded section ids.
       let rowsHtml = '';
-      for (const key of sectionOrder) {
+      for (const key of _sectionOrder) {
         const sec = eval_.sections[key];
         if (!sec) continue;
+        const sd = _teamSectionsByKey[key];
         const confClass = sec.confidence ? `conf-${sec.confidence}` : '';
-        const confLabel = sec.confidence || (key === 'documentation' ? 'MANUAL' : '');
+        let confLabel = sec.confidence;
+        if (!confLabel && sd) {
+          if (sd.score_type === 'manual') confLabel = 'MANUAL';
+          else if (sd.auto_value) confLabel = 'AUTO';
+        }
+        confLabel = confLabel || '';
         rowsHtml += `
           <div class="section-row">
             <div>
-              <div class="section-name">${sectionLabels[key] || key}</div>
+              <div class="section-name">${_sectionLabels[key] || key}</div>
               ${sec.reasoning ? `<div class="section-reasoning">${sec.reasoning}</div>` : ''}
             </div>
             <div class="score-val">${sec.score || '—'}</div>
@@ -439,7 +459,10 @@
       document.getElementById('footer').textContent = `DataPoint ${callId} | ${eval_.source} evaluation`;
     }
 
-    loadDataPoint();
+    (async () => {
+      await loadTeamSections();
+      loadDataPoint();
+    })();
   </script>
 </body>
 </html>

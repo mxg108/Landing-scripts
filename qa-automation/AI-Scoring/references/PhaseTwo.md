@@ -4,12 +4,13 @@
 > straightens the Member Support layout into the same generalized shape. Companion to
 > `PhaseOne.md` (which closed Step 4).
 > **Author session:** 2026-05-06.
-> **Status (2026-05-11):** Phases A, B, C, E ✅ landed on branch
+> **Status (2026-05-12):** Phases A, B, C, D, E ✅ landed on branch
 > `feat/sales-onboarding-phase2`. Tier 1.1/1.2/1.3 follow-ups ✅. Both
 > teams' `Analyst_History` tabs are now in the new derived layout with
-> matching column-header conventions. **Up next:** Phase D (frontend
-> multi-team — `dashboard.html` + `datapoint.html`), then Phase F
-> (cutover). See §"Phase 2 status" below for a precise picture.
+> matching column-header conventions, and all three single-team-aware
+> frontend pages (`index.html`, `dashboard.html`, `datapoint.html`)
+> data-drive section lists from `/api/{team_id}/sections`. **Up next:**
+> Phase F (cutover). See §"Phase 2 status" below for a precise picture.
 
 ---
 
@@ -30,8 +31,9 @@ Branch: `feat/sales-onboarding-phase2` (off `main`, not yet pushed).
 | Bridge legacy compat constants in generator | ✅ | `8391052` |
 | E — Migration scripts (MS reorder + Sales FR3 import) | ✅ | `1c51e9c` |
 | MS Analyst_History header normalization | ✅ | `661630a` |
-| **D — Frontend multi-team: `dashboard.html` + `datapoint.html`** | ⏭️ **Next** — see §"Phase D audit" below |
-| F — Cutover + smoke tests | ⏭️ |
+| Sales overall_score backfill from Scores!Y | ✅ | `2e726e1` |
+| D — Frontend multi-team: `dashboard.html` + `datapoint.html` | ✅ | _this commit_ |
+| **F — Cutover + smoke tests** | ⏭️ **Next** |
 
 **Live state of production sheets:**
 - MS `Analyst_History` is already in the new 42-col layout (migrated on
@@ -57,14 +59,12 @@ Branch: `feat/sales-onboarding-phase2` (off `main`, not yet pushed).
 
 **Outstanding before Phase F cutover:**
 
-1. Phase D (this branch): data-drive `dashboard.html` and
-   `datapoint.html`. Audit below.
-2. Manual sheet ops in the MS Google Sheet:
+1. Manual sheet ops in the MS Google Sheet:
    - Rename FR-AI tab from `"QA Scores"` to `"Form Responses AI"`
      (the JSON config change in `8391052` assumes this rename).
    - Delete the `onFormSubmit` installable trigger via Apps Script
      editor → Triggers UI (the function was deleted in `8391052`).
-3. Phase F cutover ordering (per §"Cutover plan" below):
+2. Phase F cutover ordering (per §"Cutover plan" below):
    migration scripts already ran for both teams; remaining steps are
    "redeploy Railway → push MS Apps Script → smoke test → flip Sales
    to `live: yes`".
