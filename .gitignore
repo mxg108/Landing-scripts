@@ -8,6 +8,10 @@ Thumbs.db
 # Staged build dirs created by push.sh for multi-team overlays
 .build/
 
+# Dialpad-call-details cache (one JSON per call_id) used by migration
+# scripts to avoid re-hitting the API on re-runs.
+.dialpad_cache/
+
 # Secrets
 .env
 *.env

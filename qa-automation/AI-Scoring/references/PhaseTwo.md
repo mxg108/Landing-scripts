@@ -597,7 +597,9 @@ to idx 18. No reorder within the score range required.
 
 **Verification gates:**
 
-1. Row count: 243 written.
+1. Row count is within ±20 of the documented ~243 (FR3 drifts as duplicates
+   are cleaned up — exact match isn't required, just a sanity check against
+   "wrong sheet" / "lost half the data").
 2. Sample 10 random rows: section scores at layout idx 0–18 match FR3 cols D–V.
 3. `source` column on every written row equals `"migrated"`.
 4. Mails resolution rate logged; abort if < 70 % match (likely indicates a
