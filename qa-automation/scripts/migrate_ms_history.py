@@ -317,10 +317,9 @@ def main() -> int:
         n_cols=layout.total_width,
     )
 
-    # Write the header first (from the legacy header for now — Phase F can
-    # rewrite it from a canonical source later if needed).
-    print(f"  Writing header (preserved from legacy)...")
-    # New layout positions: rebuild header in canonical order
+    # Write the header in canonical order, using `sec.name` (display label)
+    # for section columns to match the convention in import_sales_history.py.
+    print(f"  Writing header (canonical layout + display-name labels)...")
     new_header = mu.blank_history_row(layout)
     new_header[0] = "Agent Name"
     new_header[1] = "Agent Email"
@@ -328,10 +327,10 @@ def main() -> int:
     new_header[3] = "Evaluator Email"
     new_header[4] = "Dialpad Link"
     new_header[5] = "Overall Score"
-    for idx, _, _, _, label in _SECTION_MAP:
-        new_header[layout.col_score(idx)] = label
-        new_header[layout.col_reasoning(idx)] = f"{label} reasoning"
-        new_header[layout.col_confidence(idx)] = f"{label} confidence"
+    for i, sec in enumerate(cfg.sections_by_number):
+        new_header[layout.col_score(i)]      = sec.name
+        new_header[layout.col_reasoning(i)]  = f"{sec.name} reasoning"
+        new_header[layout.col_confidence(i)] = f"{sec.name} confidence"
     new_header[layout.col_key_strengths] = "Key Strengths"
     new_header[layout.col_opportunities] = "Opportunities"
     new_header[layout.col_call_summary]  = "Call Summary"
