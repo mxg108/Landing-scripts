@@ -4,7 +4,175 @@
 > straightens the Member Support layout into the same generalized shape. Companion to
 > `PhaseOne.md` (which closed Step 4).
 > **Author session:** 2026-05-06.
-> **Status:** Design — not yet implemented. Review before writing JSON.
+> **Status (2026-05-11):** Phases A, B, C, E ✅ landed on branch
+> `feat/sales-onboarding-phase2`. Tier 1.1/1.2/1.3 follow-ups ✅. Both
+> teams' `Analyst_History` tabs are now in the new derived layout with
+> matching column-header conventions. **Up next:** Phase D (frontend
+> multi-team — `dashboard.html` + `datapoint.html`), then Phase F
+> (cutover). See §"Phase 2 status" below for a precise picture.
+
+---
+
+## Phase 2 status (2026-05-11)
+
+Branch: `feat/sales-onboarding-phase2` (off `main`, not yet pushed).
+
+| Phase | Status | Landed in |
+|---|---|---|
+| A — TeamConfig schema + JSON | ✅ | `11cc270` |
+| B (a) — sheets_service 4-stage pipeline | ✅ | `11cc270` |
+| B (b) — history_service + team_stats | ✅ | `11cc270` |
+| B (c) — Test refactor (59/3/2) | ✅ | `11cc270` |
+| Tier 1.1 — Migration mapping tables | ✅ | `8391052` |
+| Tier 1.2 — Manual-section dashboard inputs + `/api/{team_id}/sections` | ✅ | `8391052` |
+| Tier 1.3 — Atomic-flip constraint docs | ✅ | `8391052` |
+| C — Apps Script atomic flip + Config.js generator + Branding split | ✅ | `8391052` |
+| Bridge legacy compat constants in generator | ✅ | `8391052` |
+| E — Migration scripts (MS reorder + Sales FR3 import) | ✅ | `1c51e9c` |
+| MS Analyst_History header normalization | ✅ | `661630a` |
+| **D — Frontend multi-team: `dashboard.html` + `datapoint.html`** | ⏭️ **Next** — see §"Phase D audit" below |
+| F — Cutover + smoke tests | ⏭️ |
+
+**Live state of production sheets:**
+- MS `Analyst_History` is already in the new 42-col layout (migrated on
+  2026-05-11). Old data renamed to `Analyst_History_legacy`.
+- Sales `Analyst_History` is populated with 242 migrated rows in the new
+  69-col layout, all tagged `source='migrated'`. One unresolved agent
+  ("Raul") needs adding to the Sales `Mails` tab if still active.
+- Both tabs share matching prefix/trailing canonical headers and
+  display-name section headers (e.g. "Greeting", "Caller Identity
+  Validation", "Pricing Breakdown") — verified by schema audit on
+  2026-05-11.
+
+**Apps Script deployment state:**
+- Sales: pushed via `./push.sh qa-sales` on 2026-05-11; web app
+  deployed; URL captured in `APPS_SCRIPT_WEBAPP_URL_SALES`.
+- MS: **not yet pushed**. Per the §"Apps Script" atomicity callout, MS
+  push lands during Phase F coordinated with Railway redeploy.
+
+**Railway:**
+- Still on a pre-Phase-2 commit (`feedback_railway_isolation` pattern).
+  No traffic has hit the new code yet.
+- Phase 2 code IS on the branch; redeploy happens during Phase F.
+
+**Outstanding before Phase F cutover:**
+
+1. Phase D (this branch): data-drive `dashboard.html` and
+   `datapoint.html`. Audit below.
+2. Manual sheet ops in the MS Google Sheet:
+   - Rename FR-AI tab from `"QA Scores"` to `"Form Responses AI"`
+     (the JSON config change in `8391052` assumes this rename).
+   - Delete the `onFormSubmit` installable trigger via Apps Script
+     editor → Triggers UI (the function was deleted in `8391052`).
+3. Phase F cutover ordering (per §"Cutover plan" below):
+   migration scripts already ran for both teams; remaining steps are
+   "redeploy Railway → push MS Apps Script → smoke test → flip Sales
+   to `live: yes`".
+
+---
+
+## Phase D audit (file:line breakdown for the fresh-session pickup)
+
+Two HTML files hardcode MS section IDs. Both become data-driven via
+`/api/{team_id}/sections` (already implemented in Tier 1.2 — returns
+`{id, name, section_number, score_type, audio_dependent, na_applicable,
+auto_value}` for each section in canonical order).
+
+`team_dashboard.html` is already data-driven (consumes
+`binary_stats` + `section_analysis` from `/team/stats`) — use it as the
+template/reference for naming conventions.
+
+### `frontend/dashboard.html` — 5 hit sites
+
+| Line(s) | Current hardcode | Replace with |
+|---|---|---|
+| 334–338 | `const SECTION_KEYS = ['greeting', 'purpose_of_call', …, 'documentation']` — 8 numeric+manual keys in MS rubric order | derive on init: `_numericSectionKeys = sections.filter(s => s.score_type !== 'yn' && !s.auto_value).map(s => s.history_id || s.id)` |
+| 339–350 | `const SECTION_LABELS = {greeting: 'Greeting', identity_validation: 'Identity Validation', …}` — 10 keys covering ALL sections (used by assessment cards which iterate `progression.section_assessments` keyed by history_id) | derive: `_sectionLabels = Object.fromEntries(sections.map(s => [s.history_id || s.id, s.name]))` |
+| 613 | `SECTION_KEYS.map(key => { vals = history.map(r => parseSectionScore(r.sections[key])).filter(...) })` — bar-chart average per numeric section | unchanged once `SECTION_KEYS` → `_numericSectionKeys` |
+| 634 | `labels: SECTION_KEYS.map(k => SECTION_LABELS[k])` — chart x-axis labels | unchanged once both derive from team config |
+| 677 | `SECTION_LABELS[key] || key` — title for each assessment card | unchanged |
+
+**Bootstrap pattern** (match what Tier 1.2 added to `index.html`):
+
+```js
+let _teamSections = [];
+let _sectionLabels = {};
+let _numericSectionKeys = [];
+
+async function loadTeamSections() {
+  const res = await fetch(`${API_BASE}/sections`, { headers: authHeaders() });
+  if (!res.ok) return;
+  _teamSections = await res.json();
+  _sectionLabels = Object.fromEntries(
+    _teamSections.map(s => [s.history_id || s.id, s.name])
+  );
+  _numericSectionKeys = _teamSections
+    .filter(s => s.score_type !== 'yn' && !s.auto_value)
+    .map(s => s.history_id || s.id);
+}
+// Call before any rendering. Page already awaits agent_name from URL; this
+// fits naturally at top of DOMContentLoaded.
+```
+
+**Note on `history_id` vs `id`:** Sales sections have `history_id === id`
+(both snake_case section ids). MS sections differ for some (e.g. sec 8
+`efficiency_call_handling` has `history_id: "efficiency"`). The backend
+analytics + assessment payloads key by `history_id`. Use
+`s.history_id || s.id` consistently in the frontend so MS keeps working.
+
+### `frontend/datapoint.html` — 4 hit sites
+
+| Line(s) | Current hardcode | Replace with |
+|---|---|---|
+| 372–376 | `const sectionOrder = ['greeting', 'identity_validation', …, 'customer_resolution_indicator']` — 10 history_ids in MS section_number order | derive: `_sectionOrder = _teamSections.map(s => s.history_id || s.id)` (already in canonical section_number order from the endpoint) |
+| 377–383 | `const sectionLabels = {…}` — same 10 history_id → display label | same as dashboard.html: `_sectionLabels = Object.fromEntries(...)` |
+| 386 | `for (const key of sectionOrder)` loop body unchanged | iterates `_sectionOrder` |
+| 390 | `confLabel = sec.confidence \|\| (key === 'documentation' ? 'MANUAL' : '')` — hardcoded MS-only check | derive: `const sd = _teamSectionsByKey[key]; confLabel = sec.confidence \|\| (sd && sd.score_type === 'manual' ? 'MANUAL' : (sd && sd.auto_value ? 'AUTO' : ''))` |
+
+Build the by-key lookup once at init:
+
+```js
+let _teamSectionsByKey = {};
+// after loadTeamSections:
+_teamSectionsByKey = Object.fromEntries(
+  _teamSections.map(s => [s.history_id || s.id, s])
+);
+```
+
+The `'AUTO'` badge for `auto_value` sections (Sales screen_recording)
+is a small UX polish over today's "blank confidence" rendering; reasonable
+to include in Phase D, easy to drop if it clutters.
+
+### What does NOT change
+
+- `team_dashboard.html` — already data-driven; no edits.
+- The backend `/api/{team_id}/sections` endpoint — already done in Tier
+  1.2; this Phase D work just consumes it.
+- The progression assessment / section-analysis backend responses — they
+  already key by `history_id` consistently per-team.
+- URL routing — both files already team-aware via
+  `TEAM_ID = (location.pathname.match(...) || [, 'member_support'])[1]`.
+
+### Phase D testing
+
+- MS path: visit `/dashboard/member_support/agent/<name>` — should
+  render exactly as today (no MS regression). Bar chart shows 8 numeric
+  sections, assessment cards iterate all 10.
+- Sales path: visit `/dashboard/sales/agent/<name>` — bar chart should
+  show 6 sections (4 AI numeric + 2 manual — pb_creation +
+  mc_call_notes); assessment cards iterate however many
+  `section_assessments` the backend returned (depends on whether
+  progression service has data for migrated rows).
+- Datapoint MS: `/datapoint/member_support/<call_id>` — 10-row table,
+  Documentation row shows "MANUAL" badge.
+- Datapoint Sales: `/datapoint/sales/<call_id>` — 19-row table,
+  `pb_creation` and `mc_call_notes` rows show "MANUAL", `screen_recording`
+  shows "AUTO" (or blank).
+
+Caveat for Sales smoke: progression service may not produce useful
+assessment data until enough non-migrated rows accumulate. Acceptable
+empty state for cutover — Phase D's job is rendering the shell, not
+fixing analytics with sparse data.
 
 ---
 
