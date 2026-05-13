@@ -1,194 +1,91 @@
 /**
- * QA Automation — Configuration
- * Landing QA System v1.1
+ * QA Automation — Config (auto-generated)
  *
- * Replace placeholder IDs before first clasp push.
+ * Team: Member Support (member_support)
+ * Rubric version: 2.0
+ *
+ * AUTO-GENERATED — DO NOT EDIT.
+ * Run: python qa-automation/scripts/build_config.py member_support
+ *
+ * Mutates the CONFIG object declared in Branding.js (loads first
+ * alphabetically). Brand colors, email templates, QA goal, and
+ * thresholds live in Branding.js and are not touched here.
  */
 
-// ── Google Resource IDs ─────────────────────────────────────────────
-const CONFIG = {
-  // ── Sheet names ─────────────────────────────────────────────────
-  QA_SHEET_NAME:       'Form Responses 1',   // default name Google gives the linked sheet
-  HISTORY_SHEET_NAME:  'Analyst_History',
-  MAILS_SHEET_NAME:    'Mails',              // source of truth for agent name → email mapping
-  FORM_AI_SHEET_NAME:  'Form Responses AI',
+// ── Sheet names ──────────────────────────────────────────────
+CONFIG.HISTORY_SHEET_NAME = "Analyst_History";
+CONFIG.MAILS_SHEET_NAME   = "Mails";
 
-  // ── QA goal (0-100 scale) ─────────────────────────────────────
-  QA_GOAL: 85,
+// ── Derived row layout (from HistoryLayout(N)) ───────────────
+CONFIG.HISTORY_LAYOUT = {
+  N_SECTIONS:         10,
+  TOTAL_WIDTH:        42,
+  COL_AGENT_NAME:     0,
+  COL_AGENT_EMAIL:    1,
+  COL_TIMESTAMP:      2,
+  COL_EVALUATOR_EMAIL:3,
+  COL_DIALPAD_LINK:   4,
+  COL_OVERALL_SCORE:  5,
+  SCORES_START:       6,
+  SCORES_END:         16,
+  REASONING_START:    16,
+  REASONING_END:      26,
+  CONFIDENCE_START:   26,
+  CONFIDENCE_END:     36,
+  COL_KEY_STRENGTHS:  36,
+  COL_OPPORTUNITIES:  37,
+  COL_CALL_SUMMARY:   38,
+  COL_CALLER_NAME:    39,
+  COL_CALLER_PHONE:   40,
+  COL_SOURCE:         41,
+};
 
-  // ── QA Sheet column indices (0-based) ───────────────────────────
-  COL: {
-    TIMESTAMP:           0,   // A
-    MANAGER_EMAIL:       1,   // B
-    AGENT_NAME:          2,   // C
-    GREETING:            3,   // D  (1-5)
-    IDENTITY_VALIDATION: 4,   // E  (Y/N)
-    CALL_PURPOSE:        5,   // F  (1-5)
-    MATCH_MOMENT:        6,   // G  (1-5)
-    PROCESS_ADHERENCE:   7,   // H  (1-5)
-    CALL_RESOLUTION:     8,   // I  (1-5)
-    COMMUNICATION:       9,   // J  (1-5)
-    EFFICIENCY:          10,  // K  (1-5)
-    DOCUMENTATION:       11,  // L  (1-5)
-    CUSTOMER_RESOLUTION: 12,  // M  (Y/N)
-    STRENGTHS:           13,  // N  (text)
-    IMPROVEMENTS:        14,  // O  (text)
-    DIALPAD_LINK:        15,  // P  (URL)
-    OVERALL_SCORE:       16,  // Q  (auto-calculated)
-    AGENT_EMAIL:         21,  // V  (Mails — ARRAYFORMULA lookup)
-  },
+// ── Section partitions ───────────────────────────────────────
+// `key` is the section id (also matches history_id when they're equal),
+// `historyIdx` is the position in the derived layout's score range.
+CONFIG.NUMERIC_CATEGORIES = [
+  { key: "greeting", label: "Greeting", historyIdx: 0 },
+  { key: "purpose_of_call", label: "Purpose of the Call", historyIdx: 2 },
+  { key: "matching_the_moment", label: "Matching the Moment", historyIdx: 3 },
+  { key: "process_adherence", label: "Process Adherence", historyIdx: 4 },
+  { key: "call_resolution", label: "Call Resolution", historyIdx: 5 },
+  { key: "communication", label: "Communication", historyIdx: 6 },
+  { key: "efficiency_call_handling", label: "Efficiency & Call Handling", historyIdx: 7 },
+  { key: "documentation", label: "Documentation", historyIdx: 8 },
+];
 
-  // ── Numeric score categories (1-5 scale) ────────────────────────
-  NUMERIC_CATEGORIES: [
-    { key: 'greeting',         label: 'Greeting',                    col: 3  },
-    { key: 'callPurpose',      label: 'Purpose of the Call',         col: 5  },
-    { key: 'matchMoment',      label: 'Matching the Moment',         col: 6  },
-    { key: 'processAdherence', label: 'Process Adherence',           col: 7  },
-    { key: 'callResolution',   label: 'Call Resolution',             col: 8  },
-    { key: 'communication',    label: 'Communication',               col: 9  },
-    { key: 'efficiency',       label: 'Efficiency & Call Handling',   col: 10 },
-    { key: 'documentation',    label: 'Documentation',               col: 11 },
-  ],
+CONFIG.BINARY_CATEGORIES = [
+  { key: "caller_identity_validation", label: "Caller Identity Validation", historyIdx: 1 },
+  { key: "customer_resolution_indicator", label: "Customer Resolution Indicator", historyIdx: 9 },
+];
 
-  // ── Binary categories (Y/N) ─────────────────────────────────────
-  BINARY_CATEGORIES: [
-    { key: 'identityValidation',  label: 'Caller Identity Validation',   col: 4  },
-    { key: 'customerResolution',  label: 'Customer Resolution Indicator', col: 12 },
-  ],
+CONFIG.MANUAL_CATEGORIES = [
+  { key: "documentation", label: "Documentation", historyIdx: 8 },
+];
 
-  // ── Score thresholds for color coding ───────────────────────────
-  THRESHOLDS: {
-    OVERALL_HIGH: 85,     // >= 85 → green   (0-100 scale)
-    OVERALL_MID:  70,     // >= 70 → amber
-    CATEGORY_HIGH: 4.25,  // >= 4.25 → green (1-5 scale, ≈85%)
-    CATEGORY_MID:  3.5,   // >= 3.5  → amber (1-5 scale, ≈70%)
-  },
+// ── Section labels + rubric prompts ──────────────────────────
+CONFIG.SECTION_LABELS = {
+  "greeting": "Greeting",
+  "identity_validation": "Caller Identity Validation",
+  "purpose_of_call": "Purpose of the Call",
+  "matching_the_moment": "Matching the Moment",
+  "process_adherence": "Process Adherence",
+  "call_resolution": "Call Resolution",
+  "communication": "Communication",
+  "efficiency": "Efficiency & Call Handling",
+  "documentation": "Documentation",
+  "customer_resolution_indicator": "Customer Resolution Indicator",
+};
 
-  // ── Landing brand colors ────────────────────────────────────────
-  COLORS: {
-    DARK_NAVY:   '#15192D',
-    ACCENT_BLUE: '#1A61D9',
-    LIGHT_BLUE:  '#E7EFFB',
-    WHITE:       '#FFFFFF',
-    AMBER:       '#E8A317',
-    RED:         '#D9534F',
-    GREEN:       '#28A745',
-    TEXT_GRAY:   '#4A4A4A',
-    GOLD:        '#FFD700',
-    GOLD_DARK:   '#B8860B',
-    GOLD_LIGHT:  '#FFF8E1',
-    GREEN_LIGHT: '#E8F5E9',
-  },
-
-  // ── First evaluation messaging ──────────────────────────────────
-  FIRST_EVAL_MESSAGE: 'This is {{agentName}}\'s first QA evaluation. Future emails will show score trends here.',
-  FIRST_EVAL_STYLE:   'font-size:14px;color:{{textGray}};margin:0 0 12px 0;',
-
-  // ── Email defaults ──────────────────────────────────────────────
-  EMAIL: {
-    SUBJECT_TEMPLATE: 'QA Evaluation — {{agentName}} — {{date}}',
-    MAX_HISTORY:      5,     // how many past QAs to show in ProgressionCard
-  },
-
-  // ── Analyst_History sheet columns (0-based) ─────────────────────
-  HISTORY_COL: {
-    AGENT_NAME:     0,   // A
-    AGENT_EMAIL:    1,   // B
-    TIMESTAMP:      2,   // C
-    OVERALL_SCORE:  3,   // D
-    GREETING:       4,   // E
-    CALL_PURPOSE:   5,   // F
-    MATCH_MOMENT:   6,   // G
-    PROCESS:        7,   // H
-    RESOLUTION:     8,   // I
-    COMMUNICATION:  9,   // J
-    EFFICIENCY:     10,  // K
-    DOCUMENTATION:  11,  // L
-    IDENTITY_VAL:   12,  // M  (Y/N)
-    CUSTOMER_RES:   13,  // N  (Y/N)
-    MANAGER_EMAIL:  14,  // O
-    DIALPAD_LINK:       15,  // P
-    KEY_STRENGTHS:      16,  // Q
-    IMPROVEMENTS:       17,  // R
-    SOURCE:             18,  // S
-    GREETING_CONF:      19,  // T
-    GREETING_REASON:    20,  // U
-    IDENTITY_CONF:      21,  // V
-    IDENTITY_REASON:    22,  // W
-    PURPOSE_CONF:       23,  // X
-    PURPOSE_REASON:     24,  // Y
-    MATCHING_CONF:      25,  // Z
-    MATCHING_REASON:    26,  // AA
-    PROCESS_CONF:       27,  // AB
-    PROCESS_REASON:     28,  // AC
-    RESOLUTION_CONF:    29,  // AD
-    RESOLUTION_REASON:  30,  // AE
-    COMMUNICATION_CONF: 31,  // AF
-    COMMUNICATION_REASON: 32, // AG
-    EFFICIENCY_CONF:    33,  // AH
-    EFFICIENCY_REASON:  34,  // AI
-    CUSTOMER_RES_CONF:  35,  // AJ
-    CUSTOMER_RES_REASON: 36, // AK
-    CALL_SUMMARY:       37,  // AL
-    CALLER_NAME:        38,  // AM
-    CALLER_PHONE:       39,  // AN
-    DOC_CONF:           40,  // AO
-    DOC_REASON:         41,  // AP
-  },
-
-  // ── Form Responses AI extended columns (0-based) ──────────────────
-  FORM_AI_COL: {
-    DIALPAD_LINK:       15,  // P — match key for lookup
-    SOURCE:             16,  // Q
-    GREETING_CONF:      17,  // R
-    GREETING_REASON:    18,  // S
-    IDENTITY_CONF:      19,  // T
-    IDENTITY_REASON:    20,  // U
-    PURPOSE_CONF:       21,  // V
-    PURPOSE_REASON:     22,  // W
-    MATCHING_CONF:      23,  // X
-    MATCHING_REASON:    24,  // Y
-    PROCESS_CONF:       25,  // Z
-    PROCESS_REASON:     26,  // AA
-    RESOLUTION_CONF:    27,  // AB
-    RESOLUTION_REASON:  28,  // AC
-    COMMUNICATION_CONF: 29,  // AD
-    COMMUNICATION_REASON: 30, // AE
-    EFFICIENCY_CONF:    31,  // AF
-    EFFICIENCY_REASON:  32,  // AG
-    CUSTOMER_RES_CONF:  33,  // AH
-    CUSTOMER_RES_REASON: 34, // AI
-    CALL_SUMMARY:       35,  // AJ
-    CALLER_NAME:        36,  // AK
-    CALLER_PHONE:       37,  // AL
-    DOC_REASONING:      38,  // AM
-  },
-
-  // ── Extended-block layout (drives AnalystHistory header + enrichment) ──
-  // Single ordered descriptor for the per-section reasoning/meta block that
-  // appears after Source on Analyst_History (col T+) and after Source on
-  // Form Responses AI (col R+). New teams override this list to declare
-  // their rubric ordering instead of forking AnalystHistory.js.
-  //
-  // Slot types:
-  //   'reasoning' — AI-scored category. Two cols on both tabs (Conf + Reason).
-  //   'meta'      — single-column metadata (caller details). Same on both tabs.
-  //   'manual'    — manual-scored category (e.g. Documentation). Two cols on
-  //                 Analyst_History (Conf set to 'manual' + Reason); one col
-  //                 on Form AI (Reason only — the manager types it in).
-  HISTORY_EXTENDED_LAYOUT: [
-    { type: 'reasoning', key: 'greeting',           label: 'Greeting' },
-    { type: 'reasoning', key: 'identityValidation', label: 'Identity Validation' },
-    { type: 'reasoning', key: 'callPurpose',        label: 'Purpose of Call' },
-    { type: 'reasoning', key: 'matchMoment',        label: 'Matching the Moment' },
-    { type: 'reasoning', key: 'processAdherence',   label: 'Process Adherence' },
-    { type: 'reasoning', key: 'callResolution',     label: 'Call Resolution' },
-    { type: 'reasoning', key: 'communication',      label: 'Communication' },
-    { type: 'reasoning', key: 'efficiency',         label: 'Efficiency' },
-    { type: 'reasoning', key: 'customerResolution', label: 'Customer Resolution' },
-    { type: 'meta',      key: 'callSummary',        label: 'Call Summary' },
-    { type: 'meta',      key: 'callerName',         label: 'Caller Name' },
-    { type: 'meta',      key: 'callerPhone',        label: 'Caller Phone' },
-    { type: 'manual',    key: 'documentation',      label: 'Documentation' },
-  ],
+CONFIG.RUBRIC_QUESTIONS = {
+  "greeting": "Did the agent use the institutional greeting, their name and answer immediately?",
+  "identity_validation": "Did the agent verify: full name AND DOB (OR last 4 digits of payment method OR last 4 of SSN)?",
+  "purpose_of_call": "Did the agent ask relevant questions to understand the issue?",
+  "matching_the_moment": "Was tone and pace appropriate to the context of the call?",
+  "process_adherence": "Did the agent follow correct process and company policies?",
+  "call_resolution": "Was the issue fully resolved or clear resolution path provided?",
+  "communication": "Clear, concise, helpful information?",
+  "efficiency": "Handled efficiently without unnecessary delays?",
+  "documentation": "",
+  "customer_resolution_indicator": "Did agent summarize result/actions AND ask if there is anything else they can do?",
 };

@@ -96,6 +96,7 @@ These were originally scoped for Weeks 13-18 but were built during Phase 1:
 | Rubric hardcoded in 8+ files | High | prompts, services, frontend | Phase A |
 | In-memory job store | Medium | `backend/routes/scoring.py` | — |
 | Diagnostic print in main.py | Low | `backend/main.py:17` | Cleanup |
+| Form Responses AI rewrites same draft row instead of appending | Medium | `sheets_service.py` (write path); affects ~row 1153 | Standalone refactor, separate from Step 2.5 |
 
 ---
 
@@ -281,7 +282,11 @@ The following merges both roadmaps into a single sequence. Each step is independ
 - Health endpoint (`/api/health`) remains unauthenticated
 - Procfile, .env.example, diagnostic print removed
 
-#### Step 1.5 — Manager Approval Workflow
+#### Step 1.5 — Manager Approval Workflow -- COMPLETE
+
+**Completed 2026-04** (verified in production 2026-05-05): the four-step approval pipeline
+(`[approve] Step 1..4 complete`) runs end-to-end. Step 4 ends with the Apps Script web app
+echoing `{'status': 'ok', 'message': 'Row N processed'}`.
 
 **Goal:** Managers review, edit, and approve AI-proposed scores entirely in the frontend.
 No manual Sheets work required. Approval triggers the existing Apps Script email pipeline.
@@ -321,7 +326,10 @@ manually copy scores between Sheets tabs — friction that blocks adoption. CLAU
 **Deliverables:** Manager clicks "Approve & Send" in the frontend -> scores land in both sheets,
 email sent to agent. Zero Sheets interaction required.
 
-#### Step 2 — DataPoints: Evaluation Drill-Down (PRD Phase 0)
+#### Step 2 — DataPoints: Evaluation Drill-Down (PRD Phase 0) -- COMPLETE
+
+**Completed 2026-04** (commits `27777f0` backend + `48f4c0d` frontend, ahead of PR #14):
+`/datapoint/{team_id}/{call_id}` route, clickable chart points, caller metadata persisted.
 
 **Goal:** Every data point in every chart is traceable to a specific call evaluation.
 
@@ -338,7 +346,75 @@ the existing dashboards and doesn't depend on multi-team routing.
 **Deliverables:** Click any data point -> see full evaluation detail with scorecard breakdown,
 strengths/improvements, call summary, and mini-history table.
 
-#### Step 3 — Rubric Abstraction (PRD Phase A)
+#### Step 2.5 — Live Dashboard Updates (SSE)
+
+**Goal:** New evaluations propagate to the team dashboard in real time. Managers see a toast,
+the recent-evals chiclet rotates, and moving / monthly averages refresh — no page reload.
+
+This eliminates the "I scored a call, why doesn't the dashboard reflect it?" friction.
+Without it, managers learn to refresh manually, which trains them to distrust the dashboard.
+
+**Architecture:**
+- **Transport: Server-Sent Events (SSE)**, one-way server → client. FastAPI
+  `EventSourceResponse` on the backend, plain `EventSource` on the frontend. No WebSocket
+  dependency; works through Railway's proxy. Polling every 30s is the dumb fallback if
+  SSE proves flaky.
+- **Event source: the approval pipeline** (`POST /api/{team_id}/score/{job_id}/approve`)
+  publishes `eval.finalized` **after Step 4 of the approval pipeline returns**
+  `{'status': 'ok', 'message': 'Row N processed'}` from the Apps Script web app. Earlier
+  signals (scoring complete, Form Responses 1 written, ARRAYFORMULA buffer elapsed) all
+  race against either ARRAYFORMULA or Apps Script — only the doPost `ok` response means
+  "eval exists in Analyst_History + email dispatched".
+- **Cache invalidation:** `data_provider`'s 5-minute TTL would mask the new eval.
+  Publishing an event must also call `data_provider.invalidate(team_id)` synchronously,
+  otherwise the toast fires but `/team/stats` returns stale numbers on the next fetch.
+
+**Source-of-truth caveat (recent-evals chiclet):**
+The chiclet must read from **`Analyst_History`**, not `Form Responses AI`. Form Responses AI
+currently rewrites the same draft row (~row 1153) on each scoring rather than appending —
+only Analyst_History is reliably append-only and represents finalized evaluations. The FRAI
+append behavior is captured in the Known Technical Debt table and is **not blocking** this
+feature.
+
+**New endpoints:**
+| Method | Route | Purpose |
+|---|---|---|
+| GET | `/api/{team_id}/events` | SSE stream. Emits `eval.finalized` events with `{call_id, agent_name, overall_score, finalized_at}`. |
+| GET | `/api/{team_id}/recent_evals?limit=5` | Most recent N rows from Analyst_History. Returns `call_id`, `agent_name`, `overall_score`, `evaluated_at`, and a precomputed `datapoint_url` (`/datapoint/{team_id}/{call_id}`). |
+| GET | `/api/{team_id}/period_stats` | `{last_month: {label: "Apr 1–30", avg: ...}, mtd: {label: "May 1–5", avg: ...}}`. Kept separate from `/team/stats` so the chiclet response stays small and is cacheable on month boundaries. |
+
+**Frontend changes** (all in `frontend/team_dashboard.html`):
+- Toast component fires on `eval.finalized` with the agent name + overall score.
+- "Recent Evals" chiclet — 5-card rotating carousel, each card linking to
+  `/datapoint/{team_id}/{call_id}`.
+- "Month-over-Month" chiclet — last full month's average vs. MTD accumulated average.
+- On `eval.finalized`: invalidate client state and re-fetch `/recent_evals`,
+  `/period_stats`, and the existing `/team/stats`. Re-render charts with fresh data.
+
+**Dependencies:**
+- Step 1.5 (Manager Approval Workflow) — supplies the publish point. ✓ in production.
+- Step 2 (DataPoints) — supplies the `/datapoint/{team_id}/{call_id}` route the chiclet
+  links to. ✓ shipped.
+- Step 4 (Team Routing) — endpoints are team-scoped. ✓ shipped.
+
+**Non-goals / accepted limitations:**
+- **Multi-tab dedup:** if a manager has two browser tabs open on the same dashboard, both
+  fire the toast. Acceptable.
+- **Cross-team broadcast:** events are scoped to one team_id. A future admin dashboard
+  (Step 7) would consume a different stream.
+- **No event persistence / inbox:** a manager who isn't connected when an eval fires won't
+  see a backlog. This is a deliberate live-status feature, not a notification center.
+- **MTD chiclet does not handle timezone edge cases at month boundaries.** "This month"
+  is server-time-local. Acceptable for a single-region team.
+
+**Deliverables:** Manager A has the team dashboard open. Manager B (or A in another tab)
+clicks "Approve & Send" on a call. Within 1–2 seconds, A sees a toast, the recent-evals
+chiclet rotates the new eval to position 1, and overall + MoM averages update without a
+page reload.
+
+#### Step 3 — Rubric Abstraction (PRD Phase A) -- COMPLETE
+
+**Completed 2026-04-14** (PR #14): rubric extracted to `backend/config/teams/*.json`.
 
 **Goal:** Extract all hardcoded rubric references into a single JSON config file per team.
 
@@ -352,7 +428,10 @@ identically, but rubric definitions live in config instead of scattered across 8
 
 **Deliverables:** Score 5 real calls, compare output to pre-migration. Identical results = success.
 
-#### Step 4 — Team Routing + Multi-Team Support (PRD Phase B, remainder)
+#### Step 4 — Team Routing + Multi-Team Support (PRD Phase B, remainder) -- COMPLETE
+
+**Completed 2026-04-22** (PR #15): URL-based team routing live; `/api/{team_id}/...` and
+`/dashboard/{team_id}` are the canonical paths.
 
 **Goal:** API routes accept team_id, requests authenticated per team, data fully isolated.
 
@@ -477,6 +556,10 @@ These thresholds determine when to upgrade infrastructure:
 | Approval workflow added as Step 1.5 (before DataPoints) | 2026-04-06 | Without frontend approval, managers still live in Sheets — blocks adoption more than missing drill-down |
 | Apps Script doPost() for triggering email pipeline | 2026-04-06 | Keeps Apps Script sacred; backend writes to Sheets + calls web app rather than duplicating email logic |
 | 3-4 second buffer before doPost() call | 2026-04-06 | ARRAYFORMULA needs time to calculate Overall Score (col Q) and agent email (col V) after row write |
+| Step 2.5 added: Live Dashboard Updates via SSE | 2026-05-05 | Real-time toast + recent-evals chiclet + MoM chiclet; eliminates the manual-refresh distrust pattern on the team dashboard |
+| SSE chosen over WebSocket for live dashboard | 2026-05-05 | One-way server→client; no extra deps; works through Railway proxy; WebSocket is overkill for a broadcast-only stream |
+| `eval.finalized` event publishes after Apps Script doPost confirms | 2026-05-05 | Earlier signals race against ARRAYFORMULA + Apps Script; only the [approve] Step 4 `{status: ok}` response means "eval exists in Analyst_History + email sent" |
+| Recent-evals chiclet sources from Analyst_History, not Form Responses AI | 2026-05-05 | FRAI currently rewrites the same draft row instead of appending; Analyst_History is the append-only canonical store. FRAI append behavior tracked separately as tech debt, not blocking Step 2.5 |
 
 ---
 

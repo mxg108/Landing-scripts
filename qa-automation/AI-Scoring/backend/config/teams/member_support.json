@@ -2,7 +2,7 @@
   "team_id": "member_support",
   "display_name": "Member Support",
   "company": "Landing Living LLC",
-  "rubric_version": "1.0",
+  "rubric_version": "2.0",
 
   "excluded_test_agents": ["Maximiliano Perez"],
 
@@ -26,11 +26,15 @@
 
   "sheets": {
     "form_responses_ai": {
-      "tab_name_default": "QA Scores",
-      "column_map": {
-        "A": "timestamp",
-        "B": "manager_email",
-        "C": "agent_name",
+      "tab_name": "Form Responses AI"
+    },
+    "analyst_history": {
+      "tab_name": "Analyst_History",
+      "tab_name_legacy": "Analyst_History_legacy"
+    },
+    "score_destination": {
+      "tab_name": "Form Responses 1",
+      "section_score_columns": {
         "D": "greeting",
         "E": "caller_identity_validation",
         "F": "purpose_of_call",
@@ -40,72 +44,19 @@
         "J": "communication",
         "K": "efficiency_call_handling",
         "L": "documentation",
-        "M": "customer_resolution_indicator",
-        "N": "key_strengths",
-        "O": "opportunities",
-        "P": "dialpad_link"
-      },
-      "scored_section_columns": {
-        "D": "greeting",
-        "E": "caller_identity_validation",
-        "F": "purpose_of_call",
-        "G": "matching_the_moment",
-        "H": "process_adherence",
-        "I": "call_resolution",
-        "J": "communication",
-        "K": "efficiency_call_handling",
         "M": "customer_resolution_indicator"
       },
-      "reasoning_start_col": "Q",
-      "caller_metadata_cols": {
-        "call_summary": "AJ",
-        "caller_name": "AK",
-        "caller_phone": "AL"
-      },
-      "doc_reasoning_col": "AM"
+      "score_readback_col": "Q",
+      "arrayformula_buffer_seconds": 4,
+      "metadata_cols": {
+        "timestamp": "A",
+        "manager_email": "B",
+        "agent_name": "C",
+        "key_strengths": "N",
+        "opportunities": "O",
+        "dialpad_link": "P"
+      }
     },
-    "analyst_history": {
-      "tab_name_default": "Analyst_History",
-      "col_agent_name": 0,
-      "col_agent_email": 1,
-      "col_timestamp": 2,
-      "col_overall_score": 3,
-      "section_columns": {
-        "greeting": 4,
-        "purpose_of_call": 5,
-        "matching_the_moment": 6,
-        "process_adherence": 7,
-        "call_resolution": 8,
-        "communication": 9,
-        "efficiency": 10,
-        "documentation": 11
-      },
-      "yn_columns": {
-        "identity_validation": 12,
-        "customer_resolution_indicator": 13
-      },
-      "col_manager_email": 14,
-      "col_dialpad_link": 15,
-      "col_key_strengths": 16,
-      "col_improvements": 17,
-      "col_source": 18,
-      "extended_columns": {
-        "greeting": [19, 20],
-        "identity_validation": [21, 22],
-        "purpose_of_call": [23, 24],
-        "matching_the_moment": [25, 26],
-        "process_adherence": [27, 28],
-        "call_resolution": [29, 30],
-        "communication": [31, 32],
-        "efficiency": [33, 34],
-        "customer_resolution_indicator": [35, 36],
-        "documentation": [40, 41]
-      },
-      "col_call_summary": 37,
-      "col_caller_name": 38,
-      "col_caller_phone": 39
-    },
-    "form_responses_1_tab": "Form Responses 1",
     "mails_tab": "Mails"
   },
 
@@ -126,6 +77,7 @@
         "4": "Missed self-introduction but answered timely",
         "5": "Used script, great opening tone, answered immediately"
       },
+      "na_applicable": false,
       "confidence_cap": null,
       "special_reasoning_instructions": null
     },
@@ -136,7 +88,7 @@
       "section_number": 2,
       "score_type": "yn",
       "audio_dependent": false,
-      "rubric_question": "Did the agent verify: full name AND (DOB/email OR last 4 digits of payment method)?",
+      "rubric_question": "Did the agent verify: full name AND DOB (OR last 4 digits of payment method OR last 4 of SSN)?",
       "na_applicable": true,
       "confidence_cap": null,
       "special_reasoning_instructions": null
@@ -157,6 +109,7 @@
         "4": "Probing questions to get to root cause",
         "5": "Multiple probing questions, reinstated problem back to member"
       },
+      "na_applicable": false,
       "confidence_cap": null,
       "special_reasoning_instructions": null
     },
@@ -176,6 +129,7 @@
         "4": "2 of 3: Assurance of assistance, empathy, paraphrasing",
         "5": "All 3: Assurance + empathy + paraphrasing reason for call"
       },
+      "na_applicable": false,
       "confidence_cap": "medium",
       "special_reasoning_instructions": null
     },
@@ -195,6 +149,7 @@
         "4": "Completed right steps",
         "5": "Above and beyond, steps followed completely"
       },
+      "na_applicable": false,
       "confidence_cap": null,
       "special_reasoning_instructions": null
     },
@@ -214,6 +169,7 @@
         "4": "Handled call, provided resolution but missed next steps",
         "5": "Solution found, educated member on process and next steps"
       },
+      "na_applicable": false,
       "confidence_cap": null,
       "special_reasoning_instructions": null
     },
@@ -233,6 +189,7 @@
         "4": "Appropriate communication",
         "5": "Professional wording, clear/concise, engaging, built rapport"
       },
+      "na_applicable": false,
       "confidence_cap": null,
       "special_reasoning_instructions": null
     },
@@ -252,8 +209,9 @@
         "4": "Assisted guest in timely manner",
         "5": "No hold/dead air OR proper hold expectations set, confident throughout"
       },
+      "na_applicable": false,
       "confidence_cap": "medium",
-      "special_reasoning_instructions": "ALWAYS include timestamps if holds longer than 3 minutes or significant dead air were detected"
+      "special_reasoning_instructions": "ALWAYS include timestamps if holds longer than 3 minutes or significant dead air (longer than 30 seconds) were detected"
     },
     {
       "id": "documentation",
@@ -265,8 +223,10 @@
       "audio_dependent": false,
       "rubric_question": null,
       "score_descriptions": null,
+      "na_applicable": false,
       "confidence_cap": null,
-      "special_reasoning_instructions": null
+      "special_reasoning_instructions": null,
+      "manual_default_value": "1"
     },
     {
       "id": "customer_resolution_indicator",
@@ -285,6 +245,7 @@
   "scoring_prompt": {
     "system_prompt_template": "You are a QA evaluator for a call center at {company}.\nYou will listen to a full call recording and score it using the rubric provided.\n\nCRITICAL OUTPUT RULES:\n- Return ONLY a valid JSON object. No markdown fences, no prose, no explanations outside the JSON.\n- All string values must have apostrophes and internal quotes escaped.\n- Never use raw newlines inside string values — use a space instead.\n- The JSON must be parseable by Python json.loads() without modification.\n- Use the Second person (\"you\") when referring to the agent in the reasoning AND feedback sections, as if you are directly addressing them with a personal tone, DO NOT use the Third person (\"they/them\") anywhere in your outputs.",
     "confidence_levels_note": "- \"high\": Clear evidence in audio, no ambiguity\n- \"medium\": Reasonable inference, some ambiguity or audio-dependent nuance\n- \"low\": Insufficient signal, heavy guessing required",
-    "sop_sections": [5, 6]
+    "sop_sections": [5, 6],
+    "long_call_focus_sections": ["efficiency_call_handling"]
   }
 }

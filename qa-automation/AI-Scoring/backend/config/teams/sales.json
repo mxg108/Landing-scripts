@@ -1,0 +1,349 @@
+{
+  "team_id": "sales",
+  "display_name": "Sales",
+  "company": "Landing Living LLC",
+  "rubric_version": "1.0",
+
+  "excluded_test_agents": ["Maximiliano Perez"],
+
+  "stats": {
+    "min_evals_for_outlier": 5,
+    "outlier_z_threshold": 3.5,
+    "ewma_span": 5,
+    "ewma_min_evals": 3,
+    "ewma_trend_delta": 3.0,
+    "spc_sigma_multiplier": 2.0
+  },
+
+  "gemini": {
+    "scoring_model": "gemini-2.5-flash",
+    "scoring_temperature": 0.2,
+    "scoring_max_output_tokens": 65536,
+    "progression_model": "gemini-2.5-flash",
+    "progression_temperature": 0.3,
+    "progression_max_output_tokens": 65536
+  },
+
+  "sheets": {
+    "form_responses_ai": {
+      "tab_name": "Form Responses AI"
+    },
+    "analyst_history": {
+      "tab_name": "Analyst_History"
+    },
+    "score_destination": {
+      "tab_name": "Scores",
+      "section_score_columns": {
+        "D": "greeting",
+        "E": "pb_creation",
+        "F": "mc_call_notes",
+        "G": "situation_match",
+        "H": "reason_for_move_pitch",
+        "I": "value_uplift",
+        "J": "membership_explanation",
+        "K": "flex_long_stay_pitch",
+        "L": "landing_guarantee",
+        "M": "pricing_explanation",
+        "N": "book_attempt",
+        "O": "objection_handling",
+        "P": "urgency_disclosure",
+        "Q": "followup_setup",
+        "R": "tonality_pace",
+        "S": "hold_usage",
+        "T": "audio_quality",
+        "U": "screen_recording",
+        "V": "pre_send_intro"
+      },
+      "score_readback_col": "Y",
+      "arrayformula_buffer_seconds": 4,
+      "metadata_cols": {
+        "dialpad_link": "A",
+        "timestamp": "B",
+        "agent_name": "C",
+        "evaluator_email": "W",
+        "feedback_combined": "X"
+      },
+      "weights_reference": {
+        "tab_name": "Weighing",
+        "range": "B2:B20",
+        "comment": "Sales' ARRAYFORMULA at the score_readback_col reads per-section weights from this range. Sheet-only — not mirrored in Python. Range size must equal len(sections)."
+      }
+    },
+    "mails_tab": "Mails"
+  },
+
+  "sections": [
+    {
+      "id": "greeting",
+      "history_id": "greeting",
+      "name": "Greeting & Lead Name",
+      "section_number": 1,
+      "score_type": "yn",
+      "audio_dependent": true,
+      "rubric_question": "Did the agent say their name and 'Landing', and use the lead's name in the greeting?",
+      "na_applicable": true,
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "pb_creation",
+      "history_id": "pb_creation",
+      "name": "PB Created",
+      "section_number": 2,
+      "score_type": "manual",
+      "score_range": [1, 5],
+      "audio_dependent": false,
+      "rubric_question": null,
+      "score_descriptions": null,
+      "na_applicable": false,
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "mc_call_notes",
+      "history_id": "mc_call_notes",
+      "name": "MC Call Notes",
+      "section_number": 3,
+      "score_type": "manual",
+      "score_range": [1, 5],
+      "audio_dependent": false,
+      "rubric_question": null,
+      "score_descriptions": null,
+      "na_applicable": false,
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "situation_match",
+      "history_id": "situation_match",
+      "name": "Situation Match (First 2 Min)",
+      "section_number": 4,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "audio_dependent": true,
+      "rubric_question": "Did the agent get, react to, and match the situation behind the reason for the move within the first 2 minutes?",
+      "score_descriptions": {
+        "1": "The agent's tone felt disconnected and robotic, and they failed to ask about the reason for the move.",
+        "2": "The agent asked and/or identified the lead's situation but failed to use the information effectively, asked at the wrong time, or came across as disengaged.",
+        "3": "The agent asked and/or identified the reason for the move and matched the lead's tone, but their response lacked emotional intelligence and felt transactional.",
+        "4": "The agent asked and/or identified the reason for the move in time, adjusted their tone appropriately, and demonstrated strong awareness of the lead's emotional state to recommend the best option.",
+        "5": "The agent asked and/or identified the reason for the move in time, showed excellent emotional intelligence by matching the lead's tone, and used the information naturally to keep the conversation engaging."
+      },
+      "na_applicable": false,
+      "confidence_cap": "medium",
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "reason_for_move_pitch",
+      "history_id": "reason_for_move_pitch",
+      "name": "Reason as Sales Argument",
+      "section_number": 5,
+      "score_type": "yn",
+      "audio_dependent": false,
+      "rubric_question": "Did the agent use the reason for the move as a sales argument throughout the call?",
+      "na_applicable": true,
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "value_uplift",
+      "history_id": "value_uplift",
+      "name": "Landing Value Uplift",
+      "section_number": 6,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "audio_dependent": false,
+      "rubric_question": "Did the agent uplift Landing's value against other booking options and prices?",
+      "score_descriptions": {
+        "1": "The agent missed the chance to position Landing as the better option and did not ask probing questions that could have uncovered insights to strengthen Landing's positioning.",
+        "2": "The agent attempted to present Landing's benefits, but the delivery felt robotic and scripted, missing the chance to position Landing as the stronger option.",
+        "3": "The agent learned about the lead's search but relied on generic comparisons, missing key differentiators that would have better highlighted Landing's value.",
+        "4": "The agent identified what the lead has already tried or is currently searching for and used that to highlight Landing's benefits and address concerns. However, the sales pitch and connections could have been stronger.",
+        "5": "The agent uncovered the lead's search history and frustrations, then used that insight to confidently pitch Landing as the best solution with clear, strong value propositions."
+      },
+      "na_applicable": false,
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "membership_explanation",
+      "history_id": "membership_explanation",
+      "name": "Membership Explanation",
+      "section_number": 7,
+      "score_type": "yn",
+      "audio_dependent": false,
+      "rubric_question": "Did the agent explain the Landing Membership correctly and offer the best booking option?",
+      "na_applicable": true,
+      "confidence_cap": null,
+      "special_reasoning_instructions": "Use the Landing Membership SOP context to judge correctness; do not flag minor wording differences."
+    },
+    {
+      "id": "flex_long_stay_pitch",
+      "history_id": "flex_long_stay_pitch",
+      "name": "FLEX Pitch (60+ Nights)",
+      "section_number": 8,
+      "score_type": "yn",
+      "audio_dependent": false,
+      "rubric_question": "If the prospect's intended stay is greater than 60 nights, did the agent pitch FLEX first?",
+      "na_applicable": true,
+      "confidence_cap": null,
+      "special_reasoning_instructions": "Mark N/A only if the agent probed for the lead's intended stay duration and confirmed it is 60 nights or fewer. Probing for stay duration is REQUIRED — if the agent never asked about stay length, score 'No', not N/A."
+    },
+    {
+      "id": "landing_guarantee",
+      "history_id": "landing_guarantee",
+      "name": "Landing Guarantee Explanation",
+      "section_number": 9,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "audio_dependent": false,
+      "rubric_question": "After the tour objection, did the agent refer to the Landing Guarantee and explain it correctly?",
+      "score_descriptions": {
+        "1": "Rep didn't mention the Landing Guarantee after the caller asked about tours.",
+        "2": "Rep mentioned the Guarantee without details or used the wrong name (e.g. 7DG or 'peace-of-mind guarantee'); there's room for misinterpretation.",
+        "3": "The agent explained the Landing Guarantee but not the reason why we don't do tours; the caller is not convinced this is a good option.",
+        "4": "Proper explanation of the step-by-step and which circumstances apply; the communication was clear and there's no room for misinterpretation.",
+        "5": "The agent explained the Landing Guarantee perfectly and the prospect understood why, due to the nature of our business, we cannot offer tours."
+      },
+      "na_applicable": true,
+      "confidence_cap": null,
+      "special_reasoning_instructions": "Mark N/A if the lead never raised a tour-related objection."
+    },
+    {
+      "id": "pricing_explanation",
+      "history_id": "pricing_explanation",
+      "name": "Pricing Breakdown",
+      "section_number": 10,
+      "score_type": "yn",
+      "audio_dependent": false,
+      "rubric_question": "Did the agent understand the situation and offer the best pricing breakdown explanation?",
+      "na_applicable": true,
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "book_attempt",
+      "history_id": "book_attempt",
+      "name": "Asked to Book on Call",
+      "section_number": 11,
+      "score_type": "yn",
+      "audio_dependent": false,
+      "rubric_question": "Did the agent ask if the prospect wanted to book on this call?",
+      "na_applicable": true,
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "objection_handling",
+      "history_id": "objection_handling",
+      "name": "Objection Handling",
+      "section_number": 12,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "audio_dependent": false,
+      "rubric_question": "Was the agent able to address all concerns and handle objections?",
+      "score_descriptions": {
+        "1": "The agent did not address the lead's concerns or ask follow-up questions, resulting in a missed opportunity.",
+        "2": "The agent acknowledged the objection but handled it ineffectively, failing to distinguish between a smokescreen and a real concern.",
+        "3": "The agent attempted to address concerns but did not fully control the conversation, leaving some objections unresolved and next steps unclear for the booking process.",
+        "4": "The agent identified whether the objection was real or a smokescreen and responded clearly, keeping the conversation on track, but the response could have been more persuasive.",
+        "5": "The agent skillfully distinguished between smokescreens and real objections, addressing concerns with Landing's benefits and securing clear answers from the prospect on their needs and next steps."
+      },
+      "na_applicable": false,
+      "confidence_cap": "medium",
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "urgency_disclosure",
+      "history_id": "urgency_disclosure",
+      "name": "Pricing/Inventory Urgency",
+      "section_number": 13,
+      "score_type": "yn",
+      "audio_dependent": false,
+      "rubric_question": "Did the agent mention that prices can change and the apartment can get taken online?",
+      "na_applicable": true,
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "followup_setup",
+      "history_id": "followup_setup",
+      "name": "Follow-up Set",
+      "section_number": 14,
+      "score_type": "yn",
+      "audio_dependent": false,
+      "rubric_question": "Did the agent set up a specific medium and time for a follow-up?",
+      "na_applicable": true,
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "tonality_pace",
+      "history_id": "tonality_pace",
+      "name": "Tonality & Pace",
+      "section_number": 15,
+      "score_type": "yn",
+      "audio_dependent": true,
+      "rubric_question": "Did the agent use a friendly, customer-oriented tonality and pace?",
+      "na_applicable": true,
+      "confidence_cap": "medium",
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "hold_usage",
+      "history_id": "hold_usage",
+      "name": "Hold Usage / Dead Air",
+      "section_number": 16,
+      "score_type": "yn",
+      "audio_dependent": true,
+      "rubric_question": "Did the agent use hold properly to avoid dead air?",
+      "na_applicable": true,
+      "confidence_cap": null,
+      "special_reasoning_instructions": "ALWAYS include timestamps if holds longer than 3 minutes or significant dead air were detected."
+    },
+    {
+      "id": "audio_quality",
+      "history_id": "audio_quality",
+      "name": "Audio Quality",
+      "section_number": 17,
+      "score_type": "yn",
+      "audio_dependent": true,
+      "rubric_question": "Were the agent's audio settings correct and call quality adequate?",
+      "na_applicable": true,
+      "confidence_cap": null,
+      "special_reasoning_instructions": "Assess from compression artifacts, background noise, mic clipping, and clarity of the agent's voice. Ignore prospect-side audio issues."
+    },
+    {
+      "id": "screen_recording",
+      "history_id": "screen_recording",
+      "name": "Screen Recording (Inbound Only)",
+      "section_number": 18,
+      "score_type": "yn",
+      "audio_dependent": false,
+      "rubric_question": null,
+      "na_applicable": true,
+      "auto_value": "Yes",
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "pre_send_intro",
+      "history_id": "pre_send_intro",
+      "name": "Pre-Send Intro",
+      "section_number": 19,
+      "score_type": "yn",
+      "audio_dependent": false,
+      "rubric_question": "Did the agent send their name and 'Landing' before sending links, options, or pricing breakdowns?",
+      "na_applicable": true,
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    }
+  ],
+
+  "scoring_prompt": {
+    "system_prompt_template": "You are a QA evaluator for the Sales team at {company}.\nYou will listen to a full sales call recording and score it using the rubric provided.\n\nCRITICAL OUTPUT RULES:\n- Return ONLY a valid JSON object. No markdown fences, no prose, no explanations outside the JSON.\n- All string values must have apostrophes and internal quotes escaped.\n- Never use raw newlines inside string values — use a space instead.\n- The JSON must be parseable by Python json.loads() without modification.\n- Use the Second person (\"you\") when referring to the rep in the reasoning AND feedback sections, as if you are directly addressing them with a personal tone, DO NOT use the Third person (\"they/them\") anywhere in your outputs.",
+    "confidence_levels_note": "- \"high\": Clear evidence in audio, no ambiguity\n- \"medium\": Reasonable inference, some ambiguity or audio-dependent nuance\n- \"low\": Insufficient signal, heavy guessing required",
+    "sop_sections": [7, 8, 9, 10],
+    "long_call_focus_sections": ["hold_usage", "audio_quality"]
+  }
+}

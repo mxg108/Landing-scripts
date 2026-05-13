@@ -330,24 +330,27 @@
     let trendChartInstance = null;
     let sectionChartInstance = null;
 
-    // Numeric sections for the bar chart (1-5 scale)
-    const SECTION_KEYS = [
-      'greeting', 'purpose_of_call', 'matching_the_moment',
-      'process_adherence', 'call_resolution', 'communication',
-      'efficiency', 'documentation'
-    ];
-    const SECTION_LABELS = {
-      greeting: 'Greeting',
-      identity_validation: 'Identity Validation',
-      purpose_of_call: 'Purpose of Call',
-      matching_the_moment: 'Matching the Moment',
-      process_adherence: 'Process Adherence',
-      call_resolution: 'Call Resolution',
-      communication: 'Communication',
-      efficiency: 'Efficiency',
-      documentation: 'Documentation',
-      customer_resolution_indicator: 'Customer Resolution'
-    };
+    // Team section metadata (populated by loadTeamSections before any render).
+    // `_numericSectionKeys` drives the bar chart; `_sectionLabels` titles cards.
+    let _teamSections = [];
+    let _sectionLabels = {};
+    let _numericSectionKeys = [];
+
+    async function loadTeamSections() {
+      try {
+        const res = await fetch(`${API_BASE}/team/sections`, { headers: authHeaders() });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        _teamSections = await res.json();
+        _sectionLabels = Object.fromEntries(
+          _teamSections.map(s => [s.history_id || s.id, s.name])
+        );
+        _numericSectionKeys = _teamSections
+          .filter(s => s.score_type !== 'yn' && !s.auto_value)
+          .map(s => s.history_id || s.id);
+      } catch (e) {
+        console.error('Failed to load team sections:', e);
+      }
+    }
 
     // Overall score is 0-100 scale
     function overallColor(score) {
@@ -610,7 +613,7 @@
       if (sectionChartInstance) { sectionChartInstance.destroy(); sectionChartInstance = null; }
 
       // Extract numeric scores from sections dict: r.sections[key].score
-      const avgs = SECTION_KEYS.map(key => {
+      const avgs = _numericSectionKeys.map(key => {
         const vals = history
           .map(r => r.sections ? parseSectionScore(r.sections[key]) : null)
           .filter(v => v != null);
@@ -631,7 +634,7 @@
       sectionChartInstance = new Chart(ctx, {
         type: 'bar',
         data: {
-          labels: SECTION_KEYS.map(k => SECTION_LABELS[k]),
+          labels: _numericSectionKeys.map(k => _sectionLabels[k] || k),
           datasets: [{
             label: 'Average Score',
             data: avgs,
@@ -674,7 +677,7 @@
 
         card.innerHTML = `
           <div class="section-card-header">
-            <span class="section-name">${SECTION_LABELS[key] || key}</span>
+            <span class="section-name">${_sectionLabels[key] || key}</span>
             <span class="trend-badge ${trendClass}">${trendLabel}</span>
           </div>
           <div class="summary">${sec.summary || ''}</div>
@@ -698,13 +701,16 @@
       });
     });
 
-    // Init — load from URL
-    if (currentAgent) {
-      document.getElementById('headerTitle').textContent = currentAgent;
-      loadDashboard(currentAgent);
-    } else {
-      document.getElementById('placeholder').textContent = 'No agent specified in URL.';
-    }
+    // Init — load team sections first, then dashboard
+    (async () => {
+      await loadTeamSections();
+      if (currentAgent) {
+        document.getElementById('headerTitle').textContent = currentAgent;
+        loadDashboard(currentAgent);
+      } else {
+        document.getElementById('placeholder').textContent = 'No agent specified in URL.';
+      }
+    })();
   </script>
 </body>
 </html>

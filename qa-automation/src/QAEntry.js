@@ -1,50 +1,67 @@
 /**
  * QA Automation — QAEntry
  *
- * Data-model class that wraps a single QA form-response row.
- * Provides structured access to scores, feedback, and metadata.
+ * Data-model class that wraps a single Analyst_History row. Built via
+ * the static `QAEntry.fromHistoryRow(row)` factory only — there is no
+ * usable instance constructor (Apps Script doesn't allow private
+ * constructors, but no caller invokes `new QAEntry(...)` directly).
+ *
+ * Read positions come from CONFIG.HISTORY_LAYOUT (auto-generated from
+ * the team's HistoryLayout(N)). Keys for numericScores / binaryChecks /
+ * aiReasoning / aiConfidence come from CONFIG.NUMERIC_CATEGORIES /
+ * BINARY_CATEGORIES so the email cards (which iterate the same arrays)
+ * find every value.
  */
 
 class QAEntry {
+
   /**
-   * @param {Array} row  — a single row from the QA Sheet (values array, 0-indexed)
+   * Constructs a QAEntry from an Analyst_History row.
+   *
+   * @param  {Array} row — values array read from the Analyst_History row
+   * @return {QAEntry}
    */
-  constructor(row) {
-    const C = CONFIG.COL;
+  static fromHistoryRow(row) {
+    var L = CONFIG.HISTORY_LAYOUT;
+    var entry = Object.create(QAEntry.prototype);
 
     // ── Metadata ────────────────────────────────────────────────
-    this.timestamp    = new Date(row[C.TIMESTAMP]);
-    this.managerEmail = (row[C.MANAGER_EMAIL] || '').toString().trim();
-    this.agentName    = (row[C.AGENT_NAME]    || '').toString().trim();
-    this.agentEmail   = (row[C.AGENT_EMAIL]   || '').toString().trim();
-    this.dialpadLink  = (row[C.DIALPAD_LINK]  || '').toString().trim();
+    entry.agentName    = (row[L.COL_AGENT_NAME]      || '').toString().trim();
+    entry.agentEmail   = (row[L.COL_AGENT_EMAIL]     || '').toString().trim();
+    entry.timestamp    = new Date(row[L.COL_TIMESTAMP]);
+    entry.managerEmail = (row[L.COL_EVALUATOR_EMAIL] || '').toString().trim();
+    entry.dialpadLink  = (row[L.COL_DIALPAD_LINK]    || '').toString().trim();
+    entry.overallScore = QAEntry._parseNumberStatic(row[L.COL_OVERALL_SCORE]);
 
-    // ── Overall score (auto-calculated by the Sheet) ────────────
-    this.overallScore = this._parseNumber(row[C.OVERALL_SCORE]);
+    // ── Score / reasoning / confidence per section ──────────────
+    entry.numericScores = {};
+    entry.binaryChecks  = {};
+    entry.aiReasoning   = {};
+    entry.aiConfidence  = {};
 
-    // ── Numeric scores (1-5) ────────────────────────────────────
-    this.numericScores = {};
     CONFIG.NUMERIC_CATEGORIES.forEach(function(cat) {
-      this.numericScores[cat.key] = this._parseNumber(row[cat.col]);
-    }.bind(this));
+      entry.numericScores[cat.key] = QAEntry._parseNumberStatic(row[L.SCORES_START + cat.historyIdx]);
+      entry.aiReasoning[cat.key]   = (row[L.REASONING_START  + cat.historyIdx] || '').toString();
+      entry.aiConfidence[cat.key]  = (row[L.CONFIDENCE_START + cat.historyIdx] || '').toString();
+    });
 
-    // ── Binary checks (Y/N → boolean) ───────────────────────────
-    this.binaryChecks = {};
     CONFIG.BINARY_CATEGORIES.forEach(function(cat) {
-      this.binaryChecks[cat.key] = this._parseYesNo(row[cat.col]);
-    }.bind(this));
+      entry.binaryChecks[cat.key] = QAEntry._parseYesNoStatic(row[L.SCORES_START + cat.historyIdx]);
+      entry.aiReasoning[cat.key]  = (row[L.REASONING_START  + cat.historyIdx] || '').toString();
+      entry.aiConfidence[cat.key] = (row[L.CONFIDENCE_START + cat.historyIdx] || '').toString();
+    });
 
-    // ── Qualitative feedback ────────────────────────────────────
-    this.strengths    = (row[C.STRENGTHS]    || '').toString().trim();
-    this.improvements = (row[C.IMPROVEMENTS] || '').toString().trim();
+    // ── Feedback + caller meta ──────────────────────────────────
+    entry.strengths    = (row[L.COL_KEY_STRENGTHS] || '').toString().trim();
+    // Legacy field name: code downstream reads `entry.improvements`. The
+    // new layout stores the value at COL_OPPORTUNITIES; the rename is a
+    // separate Tier 2 follow-up.
+    entry.improvements = (row[L.COL_OPPORTUNITIES] || '').toString().trim();
+    entry.callSummary  = (row[L.COL_CALL_SUMMARY]  || '').toString().trim();
+    entry.callerName   = (row[L.COL_CALLER_NAME]   || '').toString().trim();
+    entry.callerPhone  = (row[L.COL_CALLER_PHONE]  || '').toString().trim();
 
-    // ── AI enrichment slots (populated post-construction by
-    //    AnalystHistory.append() / .enrichEntry() via Form Responses AI) ──
-    this.aiReasoning  = {};
-    this.aiConfidence = {};
-    this.callSummary  = '';
-    this.callerName   = '';
-    this.callerPhone  = '';
+    return entry;
   }
 
   // ────────────────────────────────────────────────────────────────
@@ -58,35 +75,6 @@ class QAEntry {
       Session.getScriptTimeZone(),
       'MMM dd, yyyy'
     );
-  }
-
-  /**
-   * Returns a flat object suitable for writing to the Analyst_History sheet.
-   * Numeric and binary slots are emitted in CONFIG.NUMERIC_CATEGORIES /
-   * BINARY_CATEGORIES order so each team's rubric drives the column layout.
-   */
-  toHistoryRow() {
-    var row = [
-      this.agentName,        // A
-      this.agentEmail,       // B
-      this.timestamp,        // C
-      this.overallScore,     // D
-    ];
-
-    // Numeric scores (1–5) in rubric order
-    CONFIG.NUMERIC_CATEGORIES.forEach(function(cat) {
-      row.push(this.numericScores[cat.key]);
-    }, this);
-
-    // Binary checks (Y/N) in rubric order
-    CONFIG.BINARY_CATEGORIES.forEach(function(cat) {
-      row.push(this.binaryChecks[cat.key] ? 'Y' : 'N');
-    }, this);
-
-    row.push(this.managerEmail);  // O
-    row.push(this.dialpadLink);   // P  (Dialpad link — used as lookup key for AI reasoning)
-
-    return row;
   }
 
   /**
@@ -130,13 +118,13 @@ class QAEntry {
   // ────────────────────────────────────────────────────────────────
 
   /** @private */
-  _parseNumber(val) {
+  static _parseNumberStatic(val) {
     var n = parseFloat(val);
     return isNaN(n) ? 0 : n;
   }
 
   /** @private */
-  _parseYesNo(val) {
+  static _parseYesNoStatic(val) {
     return (val || '').toString().trim().toUpperCase().charAt(0) === 'Y';
   }
 }

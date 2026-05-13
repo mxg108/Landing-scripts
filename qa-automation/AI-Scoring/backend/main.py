@@ -55,32 +55,39 @@ async def health():
 # Serve the frontend HTML at the root
 _frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
 
+# The HTML pages embed all JS/CSS inline, so a stale HTML response means
+# a stale app. no-cache forces the browser to revalidate on every reload
+# (an ETag round-trip, not a full re-download) so frontend edits surface
+# immediately without manual hard-refreshes. Static API responses are
+# unaffected.
+_HTML_NO_CACHE = {"Cache-Control": "no-cache"}
+
 
 # --- Team-aware page routes ---
 
 @app.get("/score/{team_id}", include_in_schema=False)
 async def serve_scoring_ui(team_id: str):
-    return FileResponse(_frontend_dir / "index.html")
+    return FileResponse(_frontend_dir / "index.html", headers=_HTML_NO_CACHE)
 
 
 @app.get("/dashboard/{team_id}/agent/{name:path}", include_in_schema=False)
 async def serve_agent_dashboard(team_id: str, name: str):
-    return FileResponse(_frontend_dir / "dashboard.html")
+    return FileResponse(_frontend_dir / "dashboard.html", headers=_HTML_NO_CACHE)
 
 
 @app.get("/datapoint/{team_id}/{call_id}", include_in_schema=False)
 async def serve_datapoint_page(team_id: str, call_id: str):
-    return FileResponse(_frontend_dir / "datapoint.html")
+    return FileResponse(_frontend_dir / "datapoint.html", headers=_HTML_NO_CACHE)
 
 
 @app.get("/dashboard/{team_id}", include_in_schema=False)
 async def serve_team_dashboard(team_id: str):
-    return FileResponse(_frontend_dir / "team_dashboard.html")
+    return FileResponse(_frontend_dir / "team_dashboard.html", headers=_HTML_NO_CACHE)
 
 
 @app.get("/lookup/{team_id}", include_in_schema=False)
 async def serve_lookup_page(team_id: str):
-    return FileResponse(_frontend_dir / "lookup.html")
+    return FileResponse(_frontend_dir / "lookup.html", headers=_HTML_NO_CACHE)
 
 
 # --- Legacy page redirects (30-day transition) ---

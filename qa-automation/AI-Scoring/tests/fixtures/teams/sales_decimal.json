@@ -1,0 +1,248 @@
+{
+  "team_id": "sales_decimal",
+  "display_name": "Sales (decimal — 12 sections, 1-10 scale, mixed caps, no manual)",
+  "company": "Landing Living LLC",
+  "rubric_version": "test-2.0",
+
+  "excluded_test_agents": [],
+
+  "stats": {
+    "min_evals_for_outlier": 5,
+    "outlier_z_threshold": 3.5,
+    "ewma_span": 5,
+    "ewma_min_evals": 3,
+    "ewma_trend_delta": 6.0,
+    "spc_sigma_multiplier": 2.0
+  },
+
+  "gemini": {
+    "scoring_model": "gemini-2.5-flash",
+    "scoring_temperature": 0.2,
+    "scoring_max_output_tokens": 65536,
+    "progression_model": "gemini-2.5-flash",
+    "progression_temperature": 0.3,
+    "progression_max_output_tokens": 16384
+  },
+
+  "sheets": {
+    "form_responses_ai": {
+      "tab_name": "QA Scores"
+    },
+    "analyst_history": {
+      "tab_name": "Analyst_History"
+    },
+    "score_destination": {
+      "tab_name": "Form Responses 1",
+      "section_score_columns": {
+        "D": "greeting",
+        "E": "discovery",
+        "F": "tone_alignment",
+        "G": "process_adherence",
+        "H": "objection_handling",
+        "I": "communication",
+        "J": "closing",
+        "K": "next_step_commitment",
+        "L": "value_articulation",
+        "M": "competitor_handling",
+        "N": "compliance_disclosure",
+        "O": "follow_up_setup"
+      },
+      "score_readback_col": "P",
+      "arrayformula_buffer_seconds": 4,
+      "metadata_cols": {
+        "timestamp": "A",
+        "manager_email": "B",
+        "agent_name": "C",
+        "key_strengths": "Q",
+        "opportunities": "R",
+        "dialpad_link": "S"
+      }
+    },
+    "mails_tab": "Mails"
+  },
+
+  "sections": [
+    {
+      "id": "greeting",
+      "history_id": "greeting",
+      "name": "Greeting & Rapport",
+      "section_number": 1,
+      "score_type": "numeric",
+      "score_range": [1, 10],
+      "audio_dependent": false,
+      "rubric_question": "Greeting and rapport quality?",
+      "score_descriptions": {
+        "1": "Cold open",
+        "3": "Rushed",
+        "5": "Standard",
+        "7": "Warm",
+        "9": "Authentic, used name",
+        "10": "Exemplary opening"
+      }
+    },
+    {
+      "id": "discovery",
+      "history_id": "discovery",
+      "name": "Discovery & Needs Analysis",
+      "section_number": 2,
+      "score_type": "numeric",
+      "score_range": [1, 10],
+      "audio_dependent": false,
+      "rubric_question": "Discovery depth?",
+      "score_descriptions": {
+        "1": "None",
+        "5": "Basic",
+        "10": "Layered with budget, timeline, criteria"
+      }
+    },
+    {
+      "id": "tone_alignment",
+      "history_id": "tone_alignment",
+      "name": "Tone Alignment",
+      "section_number": 3,
+      "score_type": "numeric",
+      "score_range": [1, 10],
+      "audio_dependent": true,
+      "rubric_question": "Tone matching?",
+      "score_descriptions": {
+        "1": "Tone clash",
+        "5": "Adequate",
+        "10": "Mirrored expertly"
+      },
+      "confidence_cap": "medium"
+    },
+    {
+      "id": "process_adherence",
+      "history_id": "process_adherence",
+      "name": "Process Adherence",
+      "section_number": 4,
+      "score_type": "numeric",
+      "score_range": [1, 10],
+      "audio_dependent": false,
+      "rubric_question": "Followed Sales SOP?",
+      "score_descriptions": {
+        "1": "Skipped multiple steps",
+        "5": "Minor deviations",
+        "10": "Fully adhered plus best practice"
+      }
+    },
+    {
+      "id": "objection_handling",
+      "history_id": "objection_handling",
+      "name": "Objection Handling",
+      "section_number": 5,
+      "score_type": "numeric",
+      "score_range": [1, 10],
+      "audio_dependent": false,
+      "rubric_question": "Objection handling effectiveness?",
+      "score_descriptions": {
+        "1": "Ignored",
+        "5": "Acknowledged and responded",
+        "10": "Reframed as benefit"
+      }
+    },
+    {
+      "id": "communication",
+      "history_id": "communication",
+      "name": "Communication",
+      "section_number": 6,
+      "score_type": "numeric",
+      "score_range": [1, 10],
+      "audio_dependent": false,
+      "rubric_question": "Clarity and professionalism?",
+      "score_descriptions": {
+        "1": "Confusing",
+        "5": "Clear",
+        "10": "Crisp, persuasive"
+      }
+    },
+    {
+      "id": "closing",
+      "history_id": "closing",
+      "name": "Closing & Call Control",
+      "section_number": 7,
+      "score_type": "numeric",
+      "score_range": [1, 10],
+      "audio_dependent": true,
+      "rubric_question": "Drove to clear next step?",
+      "score_descriptions": {
+        "1": "Lost control",
+        "5": "Set a next step",
+        "10": "Calendar invite live"
+      },
+      "confidence_cap": "low",
+      "special_reasoning_instructions": "ALWAYS include timestamps when commitment was made"
+    },
+    {
+      "id": "next_step_commitment",
+      "history_id": "next_step_commitment",
+      "name": "Next Step Commitment",
+      "section_number": 8,
+      "score_type": "yn",
+      "audio_dependent": false,
+      "rubric_question": "Did prospect verbally commit?",
+      "na_applicable": true
+    },
+    {
+      "id": "value_articulation",
+      "history_id": "value_articulation",
+      "name": "Value Articulation",
+      "section_number": 9,
+      "score_type": "numeric",
+      "score_range": [1, 10],
+      "audio_dependent": false,
+      "rubric_question": "Did rep articulate Landing's value clearly?",
+      "score_descriptions": {
+        "1": "Generic",
+        "5": "Tailored to use case",
+        "10": "ROI quantified, differentiation explicit"
+      }
+    },
+    {
+      "id": "competitor_handling",
+      "history_id": "competitor_handling",
+      "name": "Competitor Handling",
+      "section_number": 10,
+      "score_type": "numeric",
+      "score_range": [1, 10],
+      "audio_dependent": false,
+      "rubric_question": "Did rep address competitor mentions?",
+      "score_descriptions": {
+        "1": "Disparaged",
+        "5": "Neutral acknowledgment",
+        "10": "Reframed positioning, owned weak spots"
+      }
+    },
+    {
+      "id": "compliance_disclosure",
+      "history_id": "compliance_disclosure",
+      "name": "Compliance Disclosure",
+      "section_number": 11,
+      "score_type": "yn",
+      "audio_dependent": false,
+      "rubric_question": "Were all required compliance disclosures made?",
+      "na_applicable": false
+    },
+    {
+      "id": "follow_up_setup",
+      "history_id": "follow_up_setup",
+      "name": "Follow-up Setup",
+      "section_number": 12,
+      "score_type": "numeric",
+      "score_range": [1, 10],
+      "audio_dependent": false,
+      "rubric_question": "Did rep set up follow-up actions?",
+      "score_descriptions": {
+        "1": "None",
+        "5": "Verbal only",
+        "10": "Calendar + email recap committed"
+      }
+    }
+  ],
+
+  "scoring_prompt": {
+    "system_prompt_template": "You are a QA evaluator for the Sales team at {company}.\nReturn ONLY a valid JSON object.",
+    "confidence_levels_note": "- \"high\": Clear evidence\n- \"medium\": Reasonable inference\n- \"low\": Insufficient signal",
+    "sop_sections": [4, 11]
+  }
+}
