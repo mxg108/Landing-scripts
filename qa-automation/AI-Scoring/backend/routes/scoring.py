@@ -270,11 +270,9 @@ async def approve_scorecard(request: Request, job_id: str, approval: ApprovalReq
         )
         print(f"[approve] Stage 4 complete. Analyst_History row: {history_row}")
 
-        # Trigger Apps Script — Phase-C bridge payload (sends both
-        # historyRowNumber for the new AH-reading path and rowNumber for
-        # the legacy FR1-reading fallback). Drop with bridge cleanup.
-        print(f"[approve] Triggering Apps Script doPost (history_row={history_row}, dest_row={dest_row})...")
-        script_response = trigger_apps_script(history_row, dest_row, config.team_id)
+        # Stage 5 — dispatch QA email via Apps Script (reads AH row).
+        print(f"[approve] Triggering Apps Script doPost (history_row={history_row})...")
+        script_response = trigger_apps_script(history_row, config.team_id)
         print(f"[approve] Apps Script response: {script_response}")
 
         job["status"] = "approved"

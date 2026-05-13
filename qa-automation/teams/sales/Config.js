@@ -13,10 +13,8 @@
  */
 
 // ── Sheet names ──────────────────────────────────────────────
-CONFIG.QA_SHEET_NAME      = "Scores";
 CONFIG.HISTORY_SHEET_NAME = "Analyst_History";
 CONFIG.MAILS_SHEET_NAME   = "Mails";
-CONFIG.FORM_AI_SHEET_NAME = "Form Responses AI";
 
 // ── Derived row layout (from HistoryLayout(N)) ───────────────
 CONFIG.HISTORY_LAYOUT = {
@@ -44,38 +42,35 @@ CONFIG.HISTORY_LAYOUT = {
 
 // ── Section partitions ───────────────────────────────────────
 // `key` is the section id (also matches history_id when they're equal),
-// `historyIdx` is the position in the derived layout's score range,
-// `col` is the 0-based column index on the score-destination tab
-// (FR1 for MS, Scores for Sales) — used by the legacy bridge path
-// in QAEntry's FR1 constructor; drop with the bridge cleanup.
+// `historyIdx` is the position in the derived layout's score range.
 CONFIG.NUMERIC_CATEGORIES = [
-  { key: "pb_creation", label: "PB Created", col: 4, historyIdx: 1 },
-  { key: "mc_call_notes", label: "MC Call Notes", col: 5, historyIdx: 2 },
-  { key: "situation_match", label: "Situation Match (First 2 Min)", col: 6, historyIdx: 3 },
-  { key: "value_uplift", label: "Landing Value Uplift", col: 8, historyIdx: 5 },
-  { key: "landing_guarantee", label: "Landing Guarantee Explanation", col: 11, historyIdx: 8 },
-  { key: "objection_handling", label: "Objection Handling", col: 14, historyIdx: 11 },
+  { key: "pb_creation", label: "PB Created", historyIdx: 1 },
+  { key: "mc_call_notes", label: "MC Call Notes", historyIdx: 2 },
+  { key: "situation_match", label: "Situation Match (First 2 Min)", historyIdx: 3 },
+  { key: "value_uplift", label: "Landing Value Uplift", historyIdx: 5 },
+  { key: "landing_guarantee", label: "Landing Guarantee Explanation", historyIdx: 8 },
+  { key: "objection_handling", label: "Objection Handling", historyIdx: 11 },
 ];
 
 CONFIG.BINARY_CATEGORIES = [
-  { key: "greeting", label: "Greeting & Lead Name", col: 3, historyIdx: 0 },
-  { key: "reason_for_move_pitch", label: "Reason as Sales Argument", col: 7, historyIdx: 4 },
-  { key: "membership_explanation", label: "Membership Explanation", col: 9, historyIdx: 6 },
-  { key: "flex_long_stay_pitch", label: "FLEX Pitch (60+ Nights)", col: 10, historyIdx: 7 },
-  { key: "pricing_explanation", label: "Pricing Breakdown", col: 12, historyIdx: 9 },
-  { key: "book_attempt", label: "Asked to Book on Call", col: 13, historyIdx: 10 },
-  { key: "urgency_disclosure", label: "Pricing/Inventory Urgency", col: 15, historyIdx: 12 },
-  { key: "followup_setup", label: "Follow-up Set", col: 16, historyIdx: 13 },
-  { key: "tonality_pace", label: "Tonality & Pace", col: 17, historyIdx: 14 },
-  { key: "hold_usage", label: "Hold Usage / Dead Air", col: 18, historyIdx: 15 },
-  { key: "audio_quality", label: "Audio Quality", col: 19, historyIdx: 16 },
-  { key: "screen_recording", label: "Screen Recording (Inbound Only)", col: 20, historyIdx: 17 },
-  { key: "pre_send_intro", label: "Pre-Send Intro", col: 21, historyIdx: 18 },
+  { key: "greeting", label: "Greeting & Lead Name", historyIdx: 0 },
+  { key: "reason_for_move_pitch", label: "Reason as Sales Argument", historyIdx: 4 },
+  { key: "membership_explanation", label: "Membership Explanation", historyIdx: 6 },
+  { key: "flex_long_stay_pitch", label: "FLEX Pitch (60+ Nights)", historyIdx: 7 },
+  { key: "pricing_explanation", label: "Pricing Breakdown", historyIdx: 9 },
+  { key: "book_attempt", label: "Asked to Book on Call", historyIdx: 10 },
+  { key: "urgency_disclosure", label: "Pricing/Inventory Urgency", historyIdx: 12 },
+  { key: "followup_setup", label: "Follow-up Set", historyIdx: 13 },
+  { key: "tonality_pace", label: "Tonality & Pace", historyIdx: 14 },
+  { key: "hold_usage", label: "Hold Usage / Dead Air", historyIdx: 15 },
+  { key: "audio_quality", label: "Audio Quality", historyIdx: 16 },
+  { key: "screen_recording", label: "Screen Recording (Inbound Only)", historyIdx: 17 },
+  { key: "pre_send_intro", label: "Pre-Send Intro", historyIdx: 18 },
 ];
 
 CONFIG.MANUAL_CATEGORIES = [
-  { key: "pb_creation", label: "PB Created", col: 4, historyIdx: 1 },
-  { key: "mc_call_notes", label: "MC Call Notes", col: 5, historyIdx: 2 },
+  { key: "pb_creation", label: "PB Created", historyIdx: 1 },
+  { key: "mc_call_notes", label: "MC Call Notes", historyIdx: 2 },
 ];
 
 // ── Section labels + rubric prompts ──────────────────────────
@@ -122,25 +117,3 @@ CONFIG.RUBRIC_QUESTIONS = {
   "screen_recording": "",
   "pre_send_intro": "Did the agent send their name and 'Landing' before sending links, options, or pricing breakdowns?",
 };
-
-// ── BRIDGE: legacy compatibility (DROP WITH PhaseTwo §4.6) ───
-// `CONFIG.COL` describes the score-destination tab layout (FR1
-// for MS, Scores for Sales). Used by QAEntry's FR1-shape
-// constructor on the legacy doPost fallback path.
-CONFIG.COL = {
-  TIMESTAMP:     1,
-  MANAGER_EMAIL: 22,
-  AGENT_NAME:    2,
-  AGENT_EMAIL:   -1,
-  DIALPAD_LINK:  0,
-  OVERALL_SCORE: 24,
-  STRENGTHS:     23,
-  IMPROVEMENTS:  23,
-};
-
-// Non-MS teams have no legacy production state; legacy
-// doPost path is unreachable. Empty stubs avoid
-// ReferenceError if it accidentally fires.
-CONFIG.FORM_AI_COL = {};
-CONFIG.HISTORY_COL = {};
-CONFIG.HISTORY_EXTENDED_LAYOUT = [];

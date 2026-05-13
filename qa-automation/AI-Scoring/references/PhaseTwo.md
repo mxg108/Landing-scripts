@@ -9,7 +9,7 @@
 > teams' `Analyst_History` tabs are now in the new derived layout with
 > matching column-header conventions, and all three single-team-aware
 > frontend pages (`index.html`, `dashboard.html`, `datapoint.html`)
-> data-drive section lists from `/api/{team_id}/sections`. **Up next:**
+> data-drive section lists from `/api/{team_id}/team/sections`. **Up next:**
 > Phase F (cutover). See §"Phase 2 status" below for a precise picture.
 
 ---
@@ -25,14 +25,16 @@ Branch: `feat/sales-onboarding-phase2` (off `main`, not yet pushed).
 | B (b) — history_service + team_stats | ✅ | `11cc270` |
 | B (c) — Test refactor (59/3/2) | ✅ | `11cc270` |
 | Tier 1.1 — Migration mapping tables | ✅ | `8391052` |
-| Tier 1.2 — Manual-section dashboard inputs + `/api/{team_id}/sections` | ✅ | `8391052` |
+| Tier 1.2 — Manual-section dashboard inputs + `/api/{team_id}/team/sections` | ✅ | `8391052` |
 | Tier 1.3 — Atomic-flip constraint docs | ✅ | `8391052` |
 | C — Apps Script atomic flip + Config.js generator + Branding split | ✅ | `8391052` |
 | Bridge legacy compat constants in generator | ✅ | `8391052` |
 | E — Migration scripts (MS reorder + Sales FR3 import) | ✅ | `1c51e9c` |
 | MS Analyst_History header normalization | ✅ | `661630a` |
 | Sales overall_score backfill from Scores!Y | ✅ | `2e726e1` |
-| D — Frontend multi-team: `dashboard.html` + `datapoint.html` | ✅ | _this commit_ |
+| D — Frontend multi-team: `dashboard.html` + `datapoint.html` | ✅ | `60b2e3d` |
+| Phase D follow-ups: `/team/sections` path + `history_id` field + no-cache headers + idempotent loadTeamSections | ✅ | _this commit_ |
+| Tier 4.6 — Bridge cleanup (forced by Phase F debugging) | ✅ | _this commit_ |
 | **F — Cutover + smoke tests** | ⏭️ **Next** |
 
 **Live state of production sheets:**
@@ -74,7 +76,7 @@ Branch: `feat/sales-onboarding-phase2` (off `main`, not yet pushed).
 ## Phase D audit (file:line breakdown for the fresh-session pickup)
 
 Two HTML files hardcode MS section IDs. Both become data-driven via
-`/api/{team_id}/sections` (already implemented in Tier 1.2 — returns
+`/api/{team_id}/team/sections` (already implemented in Tier 1.2 — returns
 `{id, name, section_number, score_type, audio_dependent, na_applicable,
 auto_value}` for each section in canonical order).
 
@@ -100,7 +102,7 @@ let _sectionLabels = {};
 let _numericSectionKeys = [];
 
 async function loadTeamSections() {
-  const res = await fetch(`${API_BASE}/sections`, { headers: authHeaders() });
+  const res = await fetch(`${API_BASE}/team/sections`, { headers: authHeaders() });
   if (!res.ok) return;
   _teamSections = await res.json();
   _sectionLabels = Object.fromEntries(
@@ -146,7 +148,7 @@ to include in Phase D, easy to drop if it clutters.
 ### What does NOT change
 
 - `team_dashboard.html` — already data-driven; no edits.
-- The backend `/api/{team_id}/sections` endpoint — already done in Tier
+- The backend `/api/{team_id}/team/sections` endpoint — already done in Tier
   1.2; this Phase D work just consumes it.
 - The progression assessment / section-analysis backend responses — they
   already key by `history_id` consistently per-team.
@@ -590,8 +592,8 @@ data-driven:
 
 | File | Current | New |
 |---|---|---|
-| `dashboard.html:334-350` | Hardcoded `SECTION_KEYS` + `SECTION_LABELS` (MS only) | Fetch from `/api/{team_id}/sections` (new endpoint, returns id/name/score_type/section_number) |
-| `datapoint.html:372-383, 390` | Hardcoded `sectionOrder` + `sectionLabels` + `'documentation' ? 'MANUAL'` literal | Same `/sections` endpoint; `'MANUAL'` derived from `score_type === 'manual'` |
+| `dashboard.html:334-350` | Hardcoded `SECTION_KEYS` + `SECTION_LABELS` (MS only) | Fetch from `/api/{team_id}/team/sections` (new endpoint, returns id/name/score_type/section_number) |
+| `datapoint.html:372-383, 390` | Hardcoded `sectionOrder` + `sectionLabels` + `'documentation' ? 'MANUAL'` literal | Same `/team/sections` endpoint; `'MANUAL'` derived from `score_type === 'manual'` |
 | `index.html:803-824, 933-943` | `sectionRows.splice(8, 0, …)` for Documentation; literal `id: 'documentation'` in approve payload | Iterate over team config's manual sections; insert each at its `section_number - 1` index |
 
 `team_dashboard.html` is already data-driven (consumes `binary_stats` and
@@ -599,7 +601,7 @@ data-driven:
 mirror.
 
 **API additions:**
-- `GET /api/{team_id}/sections` → array of `{id, name, score_type, section_number,
+- `GET /api/{team_id}/team/sections` → array of `{id, name, score_type, section_number,
   audio_dependent, na_applicable}` (no scoring criteria — those stay backend-only).
 
 **Latent bug to fix as part of this:** scorecard send-payload uses `opportunities`,
@@ -894,7 +896,7 @@ layout.
 
 #### 1.2 Manual-section dashboard input for Sales — ✅ RESOLVED 2026-05-10
 **Resolution:** Pulled the frontend fix forward from Phase D scope.
-- New endpoint `GET /api/{team_id}/sections` (`backend/routes/team.py`) returns
+- New endpoint `GET /api/{team_id}/team/sections` (`backend/routes/team.py`) returns
   the team's section list (id, name, section_number, score_type,
   audio_dependent, na_applicable, auto_value).
 - `frontend/index.html` `buildScorecardPanel` now walks `_teamSections` in
@@ -1025,48 +1027,31 @@ several Stage `print()` calls.
 `history_service`, `scoring_service`. Wire to the existing audit middleware logger if
 applicable.
 
-#### 4.6 Phase-C bridge cleanup
-**Status:** Phase C ships a transitional payload bridge so Apps Script and Railway can
-deploy in either order without producing wrong-row emails during the deploy window.
+#### 4.6 Phase-C bridge cleanup — ✅ RESOLVED 2026-05-12
+**Resolution:** Pulled forward when Phase F debugging revealed the deployed MS Apps
+Script was still the pre-bridge code, so the bridge's "fall through to legacy" branch
+fired every approval — appending a second OLD-format row to `Analyst_History` whose
+columns no longer matched the new layout. Stripping the bridge entirely eliminated the
+duplicate write and forced the new path to be the only path.
 
-- Python (`sheets_service.trigger_apps_script`) sends both
-  `{historyRowNumber, rowNumber}`.
-- Apps Script `doPost` prefers `historyRowNumber` (new Analyst_History path); falls
-  back to `rowNumber` (legacy Form Responses 1 path via `_processRow` →
-  `AnalystHistory.append` → enrichment lookup).
-- The legacy code paths kept alive solely for this fallback:
-  - `Main.js` — the `else` branch in `doPost` that calls `_processRow(row)`
-  - `Main.js` — `_processRow`, `processLatestRow`, `createDraftForLatest`,
-    `rebuildHistory`, `_getLatestRow`
-  - `QAEntry.js` — the FR1-shape `constructor(row)` and `toHistoryRow()`
-  - `AnalystHistory.js` — `append`, `enrichEntry`, `_lookupEnrichment`,
-    `_writeEnrichment`, `_attachToEntry`, `_getOrCreateSheet`
-  - `member_support/Config.js` — `NUMERIC_CATEGORIES[*].col`,
-    `BINARY_CATEGORIES[*].col`, `MANUAL_CATEGORIES[*].col` (the destination-tab
-    column index used only by the legacy QAEntry constructor)
-  - `scripts/build_config.py` — the `_render_legacy_compat` block that
-    emits `CONFIG.COL`, `CONFIG.FORM_AI_COL`, `CONFIG.HISTORY_COL`, and
-    `CONFIG.HISTORY_EXTENDED_LAYOUT` (the MS-specific hand-coded literals
-    in particular)
-
-**Silent failure if not cleaned up:** Maintenance burden — every future change to the
-new path also has to consider whether the legacy fallback still makes sense; new
-contributors get confused by parallel implementations of the same flow.
-
-**Where to start, after MS+Sales cutover is verified live for at least one week:**
-1. Drop `rowNumber` from `trigger_apps_script`'s payload (`sheets_service.py`); update
-   docstring.
-2. Drop the `else` (legacy) branch from `Main.js doPost`. Delete `_processRow`,
-   `processLatestRow`, `createDraftForLatest`, `rebuildHistory`, `_getLatestRow`,
-   `_handleError`. Adjust `onOpen()` (no menu items left → can also be deleted).
-3. Trim `QAEntry.js` to keep only `fromHistoryRow` + the static helpers + the
-   formatted-date getter + the static color/name helpers.
-4. Trim `AnalystHistory.js` to keep only `getHistory` + a minimal sheet-getter.
-5. Drop the `col` field from generated `NUMERIC_CATEGORIES` / `BINARY_CATEGORIES` /
-   `MANUAL_CATEGORIES` in `build_config.py`; delete `_render_legacy_compat`
-   (and its call site in `render_config_js`); regenerate every team's `Config.js`.
-6. Manually delete the `onFormSubmit` installable trigger in each team's Apps Script
-   editor (Triggers UI) — was meant to be done at cutover but easy to forget.
+- `sheets_service.trigger_apps_script` now sends `{"historyRowNumber": int}` only —
+  `dest_row_num` parameter removed.
+- `Main.js doPost` is a single new-path branch; `_processRow`, `processLatestRow`,
+  `createDraftForLatest`, `rebuildHistory`, `_getLatestRow`, `_lookupAgentEmail`,
+  `_handleError`, and the `onOpen` menu are gone.
+- `QAEntry.js` kept `fromHistoryRow` + static helpers (`_parseNumberStatic`,
+  `_parseYesNoStatic`, `colorForScore`, `colorForOverallScore`,
+  `managerNameFromEmail`) + the `formattedDate` getter. Legacy constructor,
+  `toHistoryRow`, and instance parsers deleted.
+- `AnalystHistory.js` kept `getHistory` only. `append`, `enrichEntry`,
+  `_lookupEnrichment`, `_writeEnrichment`, `_attachToEntry`, and `_getOrCreateSheet`
+  deleted; constructor now just `getSheetByName` with a hard throw if missing.
+- `build_config.py` — `_render_legacy_compat` and `_section_destination_col_map`
+  deleted; `col` field removed from `NUMERIC_CATEGORIES` / `BINARY_CATEGORIES` /
+  `MANUAL_CATEGORIES`; `CONFIG.QA_SHEET_NAME` and `CONFIG.FORM_AI_SHEET_NAME` no
+  longer emitted (only `HISTORY_SHEET_NAME` + `MAILS_SHEET_NAME` remain).
+  MS `Config.js` shrank 5976 → 3725 bytes.
+- Apps Script source builds clean (`node --check` passes on all three rewritten files).
 
 ---
 

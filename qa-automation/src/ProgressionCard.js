@@ -11,7 +11,9 @@ class ProgressionCard {
   /**
    * @param {QAEntry}   currentEntry  — the QA that was just submitted
    * @param {Object[]}  history       — past entries from AnalystHistory.getHistory()
-   *                                     (newest-first; current is prepended synthetically by Main._processRow)
+   *                                     (newest-first; the most-recent entry IS the
+   *                                     current call — Stage 4 already wrote it to AH
+   *                                     before this card renders).
    */
   constructor(currentEntry, history) {
     this.current = currentEntry;

@@ -13,10 +13,8 @@
  */
 
 // ── Sheet names ──────────────────────────────────────────────
-CONFIG.QA_SHEET_NAME      = "Form Responses 1";
 CONFIG.HISTORY_SHEET_NAME = "Analyst_History";
 CONFIG.MAILS_SHEET_NAME   = "Mails";
-CONFIG.FORM_AI_SHEET_NAME = "Form Responses AI";
 
 // ── Derived row layout (from HistoryLayout(N)) ───────────────
 CONFIG.HISTORY_LAYOUT = {
@@ -44,28 +42,25 @@ CONFIG.HISTORY_LAYOUT = {
 
 // ── Section partitions ───────────────────────────────────────
 // `key` is the section id (also matches history_id when they're equal),
-// `historyIdx` is the position in the derived layout's score range,
-// `col` is the 0-based column index on the score-destination tab
-// (FR1 for MS, Scores for Sales) — used by the legacy bridge path
-// in QAEntry's FR1 constructor; drop with the bridge cleanup.
+// `historyIdx` is the position in the derived layout's score range.
 CONFIG.NUMERIC_CATEGORIES = [
-  { key: "greeting", label: "Greeting", col: 3, historyIdx: 0 },
-  { key: "purpose_of_call", label: "Purpose of the Call", col: 5, historyIdx: 2 },
-  { key: "matching_the_moment", label: "Matching the Moment", col: 6, historyIdx: 3 },
-  { key: "process_adherence", label: "Process Adherence", col: 7, historyIdx: 4 },
-  { key: "call_resolution", label: "Call Resolution", col: 8, historyIdx: 5 },
-  { key: "communication", label: "Communication", col: 9, historyIdx: 6 },
-  { key: "efficiency_call_handling", label: "Efficiency & Call Handling", col: 10, historyIdx: 7 },
-  { key: "documentation", label: "Documentation", col: 11, historyIdx: 8 },
+  { key: "greeting", label: "Greeting", historyIdx: 0 },
+  { key: "purpose_of_call", label: "Purpose of the Call", historyIdx: 2 },
+  { key: "matching_the_moment", label: "Matching the Moment", historyIdx: 3 },
+  { key: "process_adherence", label: "Process Adherence", historyIdx: 4 },
+  { key: "call_resolution", label: "Call Resolution", historyIdx: 5 },
+  { key: "communication", label: "Communication", historyIdx: 6 },
+  { key: "efficiency_call_handling", label: "Efficiency & Call Handling", historyIdx: 7 },
+  { key: "documentation", label: "Documentation", historyIdx: 8 },
 ];
 
 CONFIG.BINARY_CATEGORIES = [
-  { key: "caller_identity_validation", label: "Caller Identity Validation", col: 4, historyIdx: 1 },
-  { key: "customer_resolution_indicator", label: "Customer Resolution Indicator", col: 12, historyIdx: 9 },
+  { key: "caller_identity_validation", label: "Caller Identity Validation", historyIdx: 1 },
+  { key: "customer_resolution_indicator", label: "Customer Resolution Indicator", historyIdx: 9 },
 ];
 
 CONFIG.MANUAL_CATEGORIES = [
-  { key: "documentation", label: "Documentation", col: 11, historyIdx: 8 },
+  { key: "documentation", label: "Documentation", historyIdx: 8 },
 ];
 
 // ── Section labels + rubric prompts ──────────────────────────
@@ -94,39 +89,3 @@ CONFIG.RUBRIC_QUESTIONS = {
   "documentation": "",
   "customer_resolution_indicator": "Did agent summarize result/actions AND ask if there is anything else they can do?",
 };
-
-// ── BRIDGE: legacy compatibility (DROP WITH PhaseTwo §4.6) ───
-// `CONFIG.COL` describes the score-destination tab layout (FR1
-// for MS, Scores for Sales). Used by QAEntry's FR1-shape
-// constructor on the legacy doPost fallback path.
-CONFIG.COL = {
-  TIMESTAMP:     0,
-  MANAGER_EMAIL: 1,
-  AGENT_NAME:    2,
-  AGENT_EMAIL:   21,
-  DIALPAD_LINK:  15,
-  OVERALL_SCORE: 16,
-  STRENGTHS:     13,
-  IMPROVEMENTS:  14,
-};
-
-// MS-only legacy positions for `_lookupEnrichment` /
-// `_writeEnrichment` / `_getOrCreateSheet`. Describe the OLD
-// FR-AI + AH shapes that the legacy code path expects.
-CONFIG.FORM_AI_COL = { DIALPAD_LINK: 15, SOURCE: 16 };
-CONFIG.HISTORY_COL = { KEY_STRENGTHS: 16 };
-CONFIG.HISTORY_EXTENDED_LAYOUT = [
-  { type: 'reasoning', key: 'greeting',                     label: 'Greeting' },
-  { type: 'reasoning', key: 'caller_identity_validation',   label: 'Identity Validation' },
-  { type: 'reasoning', key: 'purpose_of_call',              label: 'Purpose of Call' },
-  { type: 'reasoning', key: 'matching_the_moment',          label: 'Matching the Moment' },
-  { type: 'reasoning', key: 'process_adherence',            label: 'Process Adherence' },
-  { type: 'reasoning', key: 'call_resolution',              label: 'Call Resolution' },
-  { type: 'reasoning', key: 'communication',                label: 'Communication' },
-  { type: 'reasoning', key: 'efficiency_call_handling',     label: 'Efficiency' },
-  { type: 'reasoning', key: 'customer_resolution_indicator', label: 'Customer Resolution' },
-  { type: 'meta',      key: 'callSummary',                  label: 'Call Summary' },
-  { type: 'meta',      key: 'callerName',                   label: 'Caller Name' },
-  { type: 'meta',      key: 'callerPhone',                  label: 'Caller Phone' },
-  { type: 'manual',    key: 'documentation',                label: 'Documentation' },
-];

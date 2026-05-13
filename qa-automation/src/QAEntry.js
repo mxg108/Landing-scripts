@@ -1,67 +1,22 @@
 /**
  * QA Automation — QAEntry
  *
- * Data-model class that wraps a single QA form-response row.
- * Provides structured access to scores, feedback, and metadata.
+ * Data-model class that wraps a single Analyst_History row. Built via
+ * the static `QAEntry.fromHistoryRow(row)` factory only — there is no
+ * usable instance constructor (Apps Script doesn't allow private
+ * constructors, but no caller invokes `new QAEntry(...)` directly).
+ *
+ * Read positions come from CONFIG.HISTORY_LAYOUT (auto-generated from
+ * the team's HistoryLayout(N)). Keys for numericScores / binaryChecks /
+ * aiReasoning / aiConfidence come from CONFIG.NUMERIC_CATEGORIES /
+ * BINARY_CATEGORIES so the email cards (which iterate the same arrays)
+ * find every value.
  */
 
 class QAEntry {
-  /**
-   * @param {Array} row  — a single row from the QA Sheet (values array, 0-indexed)
-   */
-  constructor(row) {
-    const C = CONFIG.COL;
-
-    // ── Metadata ────────────────────────────────────────────────
-    this.timestamp    = new Date(row[C.TIMESTAMP]);
-    this.managerEmail = (row[C.MANAGER_EMAIL] || '').toString().trim();
-    this.agentName    = (row[C.AGENT_NAME]    || '').toString().trim();
-    this.agentEmail   = (row[C.AGENT_EMAIL]   || '').toString().trim();
-    this.dialpadLink  = (row[C.DIALPAD_LINK]  || '').toString().trim();
-
-    // ── Overall score (auto-calculated by the Sheet) ────────────
-    this.overallScore = this._parseNumber(row[C.OVERALL_SCORE]);
-
-    // ── Numeric scores (1-5) ────────────────────────────────────
-    this.numericScores = {};
-    CONFIG.NUMERIC_CATEGORIES.forEach(function(cat) {
-      this.numericScores[cat.key] = this._parseNumber(row[cat.col]);
-    }.bind(this));
-
-    // ── Binary checks (Y/N → boolean) ───────────────────────────
-    this.binaryChecks = {};
-    CONFIG.BINARY_CATEGORIES.forEach(function(cat) {
-      this.binaryChecks[cat.key] = this._parseYesNo(row[cat.col]);
-    }.bind(this));
-
-    // ── Qualitative feedback ────────────────────────────────────
-    this.strengths    = (row[C.STRENGTHS]    || '').toString().trim();
-    this.improvements = (row[C.IMPROVEMENTS] || '').toString().trim();
-
-    // ── AI enrichment slots (populated post-construction by
-    //    AnalystHistory.append() / .enrichEntry() via Form Responses AI) ──
-    this.aiReasoning  = {};
-    this.aiConfidence = {};
-    this.callSummary  = '';
-    this.callerName   = '';
-    this.callerPhone  = '';
-  }
-
-  // ────────────────────────────────────────────────────────────────
-  // Static factories
-  // ────────────────────────────────────────────────────────────────
 
   /**
-   * Constructs a QAEntry from an Analyst_History row (post-Phase-2
-   * layout). Used by Main.js doPost when Python's Stage 4 has already
-   * populated the row with scores + reasoning + confidence + feedback +
-   * caller meta.
-   *
-   * Row positions come from CONFIG.HISTORY_LAYOUT (auto-generated from
-   * the team's HistoryLayout(N)). Keys for numericScores / binaryChecks
-   * / aiReasoning / aiConfidence come from CONFIG.NUMERIC_CATEGORIES /
-   * BINARY_CATEGORIES so the email cards (which iterate the same arrays)
-   * find every value.
+   * Constructs a QAEntry from an Analyst_History row.
    *
    * @param  {Array} row — values array read from the Analyst_History row
    * @return {QAEntry}
@@ -123,35 +78,6 @@ class QAEntry {
   }
 
   /**
-   * Returns a flat object suitable for writing to the Analyst_History sheet.
-   * Numeric and binary slots are emitted in CONFIG.NUMERIC_CATEGORIES /
-   * BINARY_CATEGORIES order so each team's rubric drives the column layout.
-   */
-  toHistoryRow() {
-    var row = [
-      this.agentName,        // A
-      this.agentEmail,       // B
-      this.timestamp,        // C
-      this.overallScore,     // D
-    ];
-
-    // Numeric scores (1–5) in rubric order
-    CONFIG.NUMERIC_CATEGORIES.forEach(function(cat) {
-      row.push(this.numericScores[cat.key]);
-    }, this);
-
-    // Binary checks (Y/N) in rubric order
-    CONFIG.BINARY_CATEGORIES.forEach(function(cat) {
-      row.push(this.binaryChecks[cat.key] ? 'Y' : 'N');
-    }, this);
-
-    row.push(this.managerEmail);  // O
-    row.push(this.dialpadLink);   // P  (Dialpad link — used as lookup key for AI reasoning)
-
-    return row;
-  }
-
-  /**
    * Returns color hex for a 1-5 category score.
    * @param {number} score
    * @return {string} hex color
@@ -190,16 +116,6 @@ class QAEntry {
   // ────────────────────────────────────────────────────────────────
   // Private helpers
   // ────────────────────────────────────────────────────────────────
-
-  /** @private */
-  _parseNumber(val) {
-    return QAEntry._parseNumberStatic(val);
-  }
-
-  /** @private */
-  _parseYesNo(val) {
-    return QAEntry._parseYesNoStatic(val);
-  }
 
   /** @private */
   static _parseNumberStatic(val) {

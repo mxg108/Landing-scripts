@@ -15,10 +15,10 @@ Brand colors, email templates, QA goal, and thresholds stay in `Branding.js`
 and are NOT touched by this generator.
 
 Contents generated:
-- Sheet names (QA_SHEET_NAME, HISTORY_SHEET_NAME, MAILS_SHEET_NAME, FORM_AI_SHEET_NAME)
+- Sheet names (HISTORY_SHEET_NAME, MAILS_SHEET_NAME)
 - HISTORY_LAYOUT — column-position constants derived from N = len(sections)
 - NUMERIC_CATEGORIES — numeric+manual sections; key=section.id, label=name,
-  col=destination-tab column index (legacy bridge), historyIdx=layout index
+  historyIdx=position in the derived layout's score range
 - BINARY_CATEGORIES — yn sections (incl. auto_value)
 - MANUAL_CATEGORIES — manual-only subset of NUMERIC_CATEGORIES
 - SECTION_LABELS — {history_id: name}
@@ -43,7 +43,6 @@ _TEAMS_DIR = _REPO_ROOT / "qa-automation" / "teams"
 # Make backend.* importable
 sys.path.insert(0, str(_AI_SCORING))
 
-from backend.config.history_layout import col_letter_to_index  # noqa: E402
 from backend.config.team_config import TeamConfig, get_team_config  # noqa: E402
 
 
@@ -81,30 +80,15 @@ def _render_history_layout(config: TeamConfig) -> str:
     return "\n".join(lines)
 
 
-def _section_destination_col_map(config: TeamConfig) -> dict[str, int]:
-    """section_id -> 0-based column index on the score-destination tab.
-
-    Used by the legacy bridge path where QAEntry's FR1-shape constructor
-    reads `row[cat.col]`. Post-bridge cleanup drops this field.
-    """
-    out: dict[str, int] = {}
-    for letter, section_id in config.sheets.score_destination.section_score_columns.items():
-        out[section_id] = col_letter_to_index(letter)
-    return out
-
-
 def _render_categories(config: TeamConfig) -> str:
     """NUMERIC_CATEGORIES, BINARY_CATEGORIES, MANUAL_CATEGORIES."""
     sections_in_order = config.sections_by_number
     history_idx_by_id = {s.id: i for i, s in enumerate(sections_in_order)}
-    dest_col_by_id = _section_destination_col_map(config)
 
     def cat_obj(s) -> str:
-        col = dest_col_by_id.get(s.id, -1)
         return (
             f"  {{ key: {_js_string(s.id)}, "
             f"label: {_js_string(s.name)}, "
-            f"col: {col}, "
             f"historyIdx: {history_idx_by_id[s.id]} }}"
         )
 
@@ -154,110 +138,9 @@ def _render_rubric_questions(config: TeamConfig) -> str:
 def _render_sheet_names(config: TeamConfig) -> str:
     sheets = config.sheets
     return "\n".join([
-        f"CONFIG.QA_SHEET_NAME      = {_js_string(sheets.score_destination.tab_name)};",
         f"CONFIG.HISTORY_SHEET_NAME = {_js_string(sheets.analyst_history.tab_name)};",
         f"CONFIG.MAILS_SHEET_NAME   = {_js_string(sheets.mails_tab)};",
-        f"CONFIG.FORM_AI_SHEET_NAME = {_js_string(sheets.form_responses_ai.tab_name)};",
     ])
-
-
-def _render_legacy_compat(config: TeamConfig) -> str:
-    """Bridge-window compatibility constants for the legacy Apps Script paths.
-
-    BRIDGE — DROP WITH PhaseTwo §4.6 CLEANUP.
-
-    Needed by the legacy fallback path in `Main.js doPost` (fires when the
-    payload carries only `rowNumber`, no `historyRowNumber`):
-      - QAEntry's FR1-shape constructor reads `CONFIG.COL.*`
-      - AnalystHistory.append → _lookupEnrichment reads CONFIG.FORM_AI_COL
-        + walks HISTORY_EXTENDED_LAYOUT
-      - AnalystHistory.append → _writeEnrichment reads CONFIG.HISTORY_COL
-      - AnalystHistory._getOrCreateSheet walks HISTORY_EXTENDED_LAYOUT
-
-    `CONFIG.COL` is derivable from JSON for any team. The other three
-    (FORM_AI_COL, HISTORY_COL, HISTORY_EXTENDED_LAYOUT) describe the
-    *old* MS shape and are MS-specific — Sales has no prior production
-    state, so for non-MS teams we emit empty stubs (no crash if the path
-    accidentally fires, no useful enrichment either).
-    """
-    sd = config.sheets.score_destination
-    md = sd.metadata_cols
-
-    def col_or(key: str, default_letter: str) -> int:
-        return col_letter_to_index(md.get(key, default_letter))
-
-    # CONFIG.COL — score-destination tab layout. Derivable from JSON.
-    timestamp_col = col_or("timestamp", "A")
-    manager_email_col = col_letter_to_index(
-        md.get("manager_email") or md.get("evaluator_email") or "B"
-    )
-    agent_name_col = col_or("agent_name", "C")
-    dialpad_link_col = col_or("dialpad_link", "P")
-    overall_score_col = col_letter_to_index(sd.score_readback_col)
-    strengths_col = col_letter_to_index(
-        md.get("key_strengths") or md.get("feedback_combined") or "N"
-    )
-    improvements_col = col_letter_to_index(
-        md.get("opportunities") or md.get("feedback_combined") or "O"
-    )
-    # MS hardcodes AGENT_EMAIL at col V=21 (ARRAYFORMULA agent-email lookup).
-    # Sales has no equivalent on the destination tab; -1 = unused.
-    agent_email_col = 21 if config.team_id == "member_support" else -1
-
-    lines = [
-        "// ── BRIDGE: legacy compatibility (DROP WITH PhaseTwo §4.6) ───",
-        "// `CONFIG.COL` describes the score-destination tab layout (FR1",
-        "// for MS, Scores for Sales). Used by QAEntry's FR1-shape",
-        "// constructor on the legacy doPost fallback path.",
-        "CONFIG.COL = {",
-        f"  TIMESTAMP:     {timestamp_col},",
-        f"  MANAGER_EMAIL: {manager_email_col},",
-        f"  AGENT_NAME:    {agent_name_col},",
-        f"  AGENT_EMAIL:   {agent_email_col},",
-        f"  DIALPAD_LINK:  {dialpad_link_col},",
-        f"  OVERALL_SCORE: {overall_score_col},",
-        f"  STRENGTHS:     {strengths_col},",
-        f"  IMPROVEMENTS:  {improvements_col},",
-        "};",
-        "",
-    ]
-
-    if config.team_id == "member_support":
-        lines.extend([
-            "// MS-only legacy positions for `_lookupEnrichment` /",
-            "// `_writeEnrichment` / `_getOrCreateSheet`. Describe the OLD",
-            "// FR-AI + AH shapes that the legacy code path expects.",
-            "CONFIG.FORM_AI_COL = { DIALPAD_LINK: 15, SOURCE: 16 };",
-            "CONFIG.HISTORY_COL = { KEY_STRENGTHS: 16 };",
-            "CONFIG.HISTORY_EXTENDED_LAYOUT = [",
-            "  { type: 'reasoning', key: 'greeting',                     label: 'Greeting' },",
-            "  { type: 'reasoning', key: 'caller_identity_validation',   label: 'Identity Validation' },",
-            "  { type: 'reasoning', key: 'purpose_of_call',              label: 'Purpose of Call' },",
-            "  { type: 'reasoning', key: 'matching_the_moment',          label: 'Matching the Moment' },",
-            "  { type: 'reasoning', key: 'process_adherence',            label: 'Process Adherence' },",
-            "  { type: 'reasoning', key: 'call_resolution',              label: 'Call Resolution' },",
-            "  { type: 'reasoning', key: 'communication',                label: 'Communication' },",
-            "  { type: 'reasoning', key: 'efficiency_call_handling',     label: 'Efficiency' },",
-            "  { type: 'reasoning', key: 'customer_resolution_indicator', label: 'Customer Resolution' },",
-            "  { type: 'meta',      key: 'callSummary',                  label: 'Call Summary' },",
-            "  { type: 'meta',      key: 'callerName',                   label: 'Caller Name' },",
-            "  { type: 'meta',      key: 'callerPhone',                  label: 'Caller Phone' },",
-            "  { type: 'manual',    key: 'documentation',                label: 'Documentation' },",
-            "];",
-            "",
-        ])
-    else:
-        lines.extend([
-            "// Non-MS teams have no legacy production state; legacy",
-            "// doPost path is unreachable. Empty stubs avoid",
-            "// ReferenceError if it accidentally fires.",
-            "CONFIG.FORM_AI_COL = {};",
-            "CONFIG.HISTORY_COL = {};",
-            "CONFIG.HISTORY_EXTENDED_LAYOUT = [];",
-            "",
-        ])
-
-    return "\n".join(lines)
 
 
 def render_config_js(team_id: str, config: TeamConfig) -> str:
@@ -285,18 +168,13 @@ def render_config_js(team_id: str, config: TeamConfig) -> str:
         "",
         "// ── Section partitions ───────────────────────────────────────",
         "// `key` is the section id (also matches history_id when they're equal),",
-        "// `historyIdx` is the position in the derived layout's score range,",
-        "// `col` is the 0-based column index on the score-destination tab",
-        "// (FR1 for MS, Scores for Sales) — used by the legacy bridge path",
-        "// in QAEntry's FR1 constructor; drop with the bridge cleanup.",
+        "// `historyIdx` is the position in the derived layout's score range.",
         _render_categories(config),
         "",
         "// ── Section labels + rubric prompts ──────────────────────────",
         _render_section_labels(config),
         "",
         _render_rubric_questions(config),
-        "",
-        _render_legacy_compat(config),
     ]
     return "\n".join(parts)
 

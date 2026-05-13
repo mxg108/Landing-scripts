@@ -15,12 +15,9 @@ Both FR-AI and Analyst_History use the derived layout
 per-team ``score_destination`` block (mirrors legacy form layouts that
 ARRAYFORMULAs depend on).
 
-``trigger_apps_script`` posts a Phase-C bridge payload — both
-``historyRowNumber`` (new path: Apps Script reads Analyst_History) and
-``rowNumber`` (legacy fallback: Apps Script reads Form Responses 1).
-The fallback exists only to absorb the deploy window between Apps
-Script push and Railway redeploy; drop it once cutover is verified
-(PhaseTwo §4.6).
+``trigger_apps_script`` posts the Analyst_History row number to the
+team's Apps Script web app, which reads the populated row and
+dispatches the QA evaluation email.
 
 Setup:
   1. Create a Google Cloud service account
@@ -510,25 +507,11 @@ def finalize_to_analyst_history(
 # Phase C will switch to Analyst_History row)
 # ---------------------------------------------------------------------------
 
-def trigger_apps_script(
-    history_row_num: int,
-    dest_row_num: int,
-    team_id: str,
-) -> dict:
-    """POST to the Apps Script web app to trigger the email pipeline.
+def trigger_apps_script(history_row_num: int, team_id: str) -> dict:
+    """POST to the team's Apps Script web app to dispatch the QA email.
 
-    Phase-C bridge payload — sends both row numbers so Apps Script can
-    pick the correct path regardless of which side deployed first:
-
-    - ``historyRowNumber`` is the new path (Apps Script reads
-      ``Analyst_History``, which Stage 4 already finalized).
-    - ``rowNumber`` is the legacy fallback (Apps Script reads
-      ``Form Responses 1``). Old Apps Script ignores
-      ``historyRowNumber`` and uses this; new Apps Script prefers
-      ``historyRowNumber`` and ignores this.
-
-    Drop the ``rowNumber`` field once both sides are verified live
-    (PhaseTwo §4.6 — bridge cleanup).
+    The Apps Script reads ``Analyst_History`` row ``history_row_num``
+    (already finalized by Stage 4) and sends the evaluation email.
     """
     import httpx
 
@@ -542,10 +525,7 @@ def trigger_apps_script(
 
     response = httpx.post(
         url,
-        json={
-            "historyRowNumber": history_row_num,
-            "rowNumber": dest_row_num,
-        },
+        json={"historyRowNumber": history_row_num},
         timeout=60.0,
         follow_redirects=True,
     )
