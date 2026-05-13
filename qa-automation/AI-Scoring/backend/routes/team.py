@@ -192,6 +192,7 @@ async def team_sections(request: Request):
     return [
         {
             "id": s.id,
+            "history_id": s.history_id,
             "name": s.name,
             "section_number": s.section_number,
             "score_type": s.score_type,

@@ -330,7 +330,7 @@
 
     async function loadTeamSections() {
       try {
-        const res = await fetch(`${API_BASE}/sections`, { headers: authHeaders() });
+        const res = await fetch(`${API_BASE}/team/sections`, { headers: authHeaders() });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         _teamSections = await res.json();
         _sectionOrder = _teamSections.map(s => s.history_id || s.id);
@@ -394,7 +394,7 @@
       overallEl.className = 'overall-score ' + scoreColor(eval_.overall_score);
 
       // Section rows — order, labels, and MANUAL/AUTO badge derived from
-      // /api/{team_id}/sections so MS and Sales render correctly without
+      // /api/{team_id}/team/sections so MS and Sales render correctly without
       // any hardcoded section ids.
       let rowsHtml = '';
       for (const key of _sectionOrder) {

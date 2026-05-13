@@ -570,16 +570,42 @@
   loadAgentDropdown();
 
   // --- Team section list (drives manual-section input rendering) ---
+  // Idempotent: callers can `await loadTeamSections()` to be sure
+  // _teamSections is populated before they read it. On failure the cached
+  // promise is cleared so the next caller retries instead of inheriting
+  // a permanently-empty list. A visible banner surfaces the failure —
+  // silent empty _teamSections is what hid two earlier bugs.
   let _teamSections = [];
-  async function loadTeamSections() {
-    try {
-      const res = await fetch(`${API_BASE}/sections`, { headers: authHeaders() });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      _teamSections = await res.json();
-    } catch (e) {
-      console.error('Failed to load team sections:', e);
-    }
+  let _teamSectionsPromise = null;
+
+  function loadTeamSections() {
+    if (_teamSections.length > 0) return Promise.resolve(_teamSections);
+    if (_teamSectionsPromise) return _teamSectionsPromise;
+    _teamSectionsPromise = (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/team/sections`, { headers: authHeaders() });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        _teamSections = await res.json();
+      } catch (e) {
+        console.error('Failed to load team sections:', e);
+        showSectionsLoadError(e);
+        _teamSectionsPromise = null;
+      }
+      return _teamSections;
+    })();
+    return _teamSectionsPromise;
   }
+
+  function showSectionsLoadError(e) {
+    if (document.getElementById('sections-load-error')) return;
+    const banner = document.createElement('div');
+    banner.id = 'sections-load-error';
+    banner.style.cssText = 'background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;padding:0.6rem 1rem;margin:0.5rem 0;border-radius:4px;font-size:0.85rem;';
+    banner.textContent = `Team section config failed to load (${e.message}). Scorecard rendering will be incomplete — reload the page or check the API key.`;
+    const main = document.querySelector('main') || document.body;
+    main.insertBefore(banner, main.firstChild);
+  }
+
   loadTeamSections();
   const dropZone = document.getElementById('drop-zone');
   const fileInput = document.getElementById('file-input');
@@ -712,14 +738,17 @@
     }, 3000);
   }
 
-  function updateJobRow(jobId, filename, callId, data) {
+  async function updateJobRow(jobId, filename, callId, data) {
     const row = document.getElementById(`job-${jobId}`);
     if (!row) return;
 
     if ((data.status === 'complete' || data.status === 'approved') && data.scorecard) {
       const existing = document.getElementById(`scorecard-${jobId}`);
       if (!existing) {
-        // Replace job-row with spacer, insert enriched scorecard
+        // _teamSections drives section-row rendering + manual-input splice.
+        // Await here so a slow or initially-failed fetch doesn't produce
+        // an empty scorecard panel.
+        await loadTeamSections();
         const panel = buildScorecardPanel(jobId, data.scorecard, filename, callId, data.sheets_row);
         row.className = 'eval-spacer';
         row.innerHTML = '';
