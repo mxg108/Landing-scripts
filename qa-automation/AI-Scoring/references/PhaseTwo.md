@@ -4,19 +4,21 @@
 > straightens the Member Support layout into the same generalized shape. Companion to
 > `PhaseOne.md` (which closed Step 4).
 > **Author session:** 2026-05-06.
-> **Status (2026-05-12):** Phases A, B, C, D, E ✅ landed on branch
-> `feat/sales-onboarding-phase2`. Tier 1.1/1.2/1.3 follow-ups ✅. Both
-> teams' `Analyst_History` tabs are now in the new derived layout with
-> matching column-header conventions, and all three single-team-aware
-> frontend pages (`index.html`, `dashboard.html`, `datapoint.html`)
-> data-drive section lists from `/api/{team_id}/team/sections`. **Up next:**
-> Phase F (cutover). See §"Phase 2 status" below for a precise picture.
+> **Status (2026-05-13):** ✅ **Phase 2 complete.** All phases A–F landed
+> across two PRs: #21 (Phases A–E + D follow-ups + Tier 4.6 bridge strip,
+> merged 2026-05-12) and the follow-up Phase F PR (timestamp parser
+> consolidation + `manual_yn` schema + colocated Sales FR-AI destination
+> + Stage 1 deterministic write). Both MS and Sales run end-to-end on
+> the new pipeline; Sales Apps Script + web-app deployment is `Anyone`-
+> access; MS unchanged. See §"Phase 2 status" below for the full
+> commit-level picture.
 
 ---
 
-## Phase 2 status (2026-05-11)
+## Phase 2 status (2026-05-13)
 
-Branch: `feat/sales-onboarding-phase2` (off `main`, not yet pushed).
+PR #21 merged into `main` on 2026-05-12 (commits `11cc270`…`6a24a34`).
+Follow-up Phase F PR carries today's two commits (`04eb65e`, `469efe0`).
 
 | Phase | Status | Landed in |
 |---|---|---|
@@ -28,48 +30,60 @@ Branch: `feat/sales-onboarding-phase2` (off `main`, not yet pushed).
 | Tier 1.2 — Manual-section dashboard inputs + `/api/{team_id}/team/sections` | ✅ | `8391052` |
 | Tier 1.3 — Atomic-flip constraint docs | ✅ | `8391052` |
 | C — Apps Script atomic flip + Config.js generator + Branding split | ✅ | `8391052` |
-| Bridge legacy compat constants in generator | ✅ | `8391052` |
 | E — Migration scripts (MS reorder + Sales FR3 import) | ✅ | `1c51e9c` |
 | MS Analyst_History header normalization | ✅ | `661630a` |
 | Sales overall_score backfill from Scores!Y | ✅ | `2e726e1` |
 | D — Frontend multi-team: `dashboard.html` + `datapoint.html` | ✅ | `60b2e3d` |
-| Phase D follow-ups: `/team/sections` path + `history_id` field + no-cache headers + idempotent loadTeamSections | ✅ | _this commit_ |
-| Tier 4.6 — Bridge cleanup (forced by Phase F debugging) | ✅ | _this commit_ |
-| **F — Cutover + smoke tests** | ⏭️ **Next** |
+| Phase D follow-ups: `/team/sections` path + `history_id` + no-cache + idempotent loadTeamSections | ✅ | `ad27906` |
+| Tier 4.6 — Bridge cleanup (forced forward by Phase F debugging) | ✅ | `6a24a34` |
+| Phase F (a) — Date-only timestamp parsing + DRY parser consolidation | ✅ | `04eb65e` |
+| Phase F (b) — `manual_yn` schema + colocated Sales FR-AI + chiclet wrap + Stage 1 deterministic write | ✅ | `469efe0` |
 
 **Live state of production sheets:**
-- MS `Analyst_History` is already in the new 42-col layout (migrated on
-  2026-05-11). Old data renamed to `Analyst_History_legacy`.
-- Sales `Analyst_History` is populated with 242 migrated rows in the new
-  69-col layout, all tagged `source='migrated'`. One unresolved agent
-  ("Raul") needs adding to the Sales `Mails` tab if still active.
-- Both tabs share matching prefix/trailing canonical headers and
-  display-name section headers (e.g. "Greeting", "Caller Identity
-  Validation", "Pricing Breakdown") — verified by schema audit on
-  2026-05-11.
+- MS `Analyst_History`: 42-col layout. `Analyst_History_legacy` retained as backup.
+- Sales `Analyst_History`: 69-col layout, 242 migrated rows + new approvals
+  landing cleanly. `overall_score` backfilled from `Scores!Y` (no longer
+  needed going forward — the ARRAYFORMULA on FR-AI col F computes it
+  directly).
+- Both tabs share canonical prefix/trailing headers + display-name
+  section headers.
+- Sales `Scores` tab: orphaned (no longer written by the pipeline; the
+  score destination collapsed onto Form Responses AI). Safe to archive
+  whenever convenient.
 
 **Apps Script deployment state:**
-- Sales: pushed via `./push.sh qa-sales` on 2026-05-11; web app
-  deployed; URL captured in `APPS_SCRIPT_WEBAPP_URL_SALES`.
-- MS: **not yet pushed**. Per the §"Apps Script" atomicity callout, MS
-  push lands during Phase F coordinated with Railway redeploy.
+- MS (`qa-member-support`): bridge-stripped Main.js pushed +
+  redeployed; web app under `/macros/.../exec` (Anyone access).
+- Sales (`qa-sales`): bridge-stripped Main.js + Sales `Config.js` with
+  `manual_yn` partition pushed + redeployed; web app under
+  `/macros/.../exec` (Anyone access — required so the Python backend
+  can POST unauthenticated).
 
-**Railway:**
-- Still on a pre-Phase-2 commit (`feedback_railway_isolation` pattern).
-  No traffic has hit the new code yet.
-- Phase 2 code IS on the branch; redeploy happens during Phase F.
+**Backend deployment state:**
+- Railway: still on the pre-Phase-2 commit (`feedback_railway_isolation`
+  pattern preserved). Local dev validated end-to-end; Railway redeploy
+  is a one-step "Deploy Latest Commit" away.
+- `APPS_SCRIPT_WEBAPP_URL_MEMBER_SUPPORT` + `APPS_SCRIPT_WEBAPP_URL_SALES`
+  both set in production env. (Sales URL needed updating mid-session
+  when its deployment access was switched from Workspace-domain to
+  Anyone.)
 
-**Outstanding before Phase F cutover:**
+**Sales-specific schema notes (post-`469efe0`):**
+- `score_type='manual_yn'` is the data-shape combination for analyst-
+  input Y/N sections that AI cannot score (Sales' PB Created + MC Call
+  Notes). Excluded from `ai_scored_sections`, included in `yn_sections`
+  + `manual_sections`. /score UI prompts for Y/N/NA + reasoning.
+- Sales' `score_destination.tab_name == form_responses_ai.tab_name`
+  ("Form Responses AI"). Stage 2 detects this and short-circuits the
+  append; Stage 3 polls col F (where Sales' weighted ARRAYFORMULA now
+  lives) then skips the writeback to preserve the formula's output
+  range. MS keeps the separate "Form Responses 1" destination tab.
 
-1. Manual sheet ops in the MS Google Sheet:
-   - Rename FR-AI tab from `"QA Scores"` to `"Form Responses AI"`
-     (the JSON config change in `8391052` assumes this rename).
-   - Delete the `onFormSubmit` installable trigger via Apps Script
-     editor → Triggers UI (the function was deleted in `8391052`).
-2. Phase F cutover ordering (per §"Cutover plan" below):
-   migration scripts already ran for both teams; remaining steps are
-   "redeploy Railway → push MS Apps Script → smoke test → flip Sales
-   to `live: yes`".
+**Remaining production rollout (manual, none code-blocked):**
+1. Once today's Phase F PR is merged, Railway "Deploy Latest Commit"
+   on `main`.
+2. Flip `qa-sales` to `live: yes` in `push.projects` (currently `no`
+   per the manifest, since Sales was staging-only until verified).
 
 ---
 

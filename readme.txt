@@ -10,8 +10,8 @@
 
   Component versions (current):
     - Mass Notifications (Apps Script):     v3.3.0
-    - QA Automation     (Apps Script):     v1.2.0
-    - AI-Scoring        (Python backend):  v2.0   (Railway)
+    - QA Automation     (Apps Script):     v2.0.0  (multi-team, post-Phase 2)
+    - AI-Scoring        (Python backend):  v2.1    (Railway, multi-team)
 
 --------------------------------------------------------------------------------
   OVERVIEW
@@ -27,16 +27,26 @@ manual effort for operations and quality assurance workflows at Landing.
   2.1 AI-Scoring          — AI-powered call scoring pipeline + agent progression dashboard
 
 The QA Automation Apps Script and AI-Scoring Python backend work together:
-AI-Scoring grades calls via Gemini and writes to Form Responses AI. Managers
-review and edit scores in the frontend, then click "Approve & Send" which
-updates Sheets and triggers the Apps Script email pipeline via doPost().
-The Apps Script enriches Analyst_History with AI reasoning on email send.
+AI-Scoring grades calls via Gemini, writes the draft to Form Responses AI,
+and (after manager approval) finalizes the row in Analyst_History. The
+Apps Script's sole responsibility is dispatching the QA evaluation email
+from the Analyst_History row that the backend just wrote — it no longer
+appends, enriches, or reads Form Responses 1.
+
+As of Phase 2 (May 2026), the system supports multiple teams via per-team
+JSON config. Member Support and Sales are both live, with distinct
+rubrics, section counts (MS = 10, Sales = 19), Apps Script deployments,
+and Google Sheets. Adding a new team requires authoring a JSON config
+and regenerating its `Config.js` — no code changes.
+
 Dashboard pages show per-agent trends, team analytics, and Gemini coaching.
 DataPoint detail pages provide full drill-down into individual evaluations.
+All multi-team routes are team-scoped (`/dashboard/{team_id}`,
+`/score/{team_id}`, `/datapoint/{team_id}/{call_id}`, etc.).
 
 Mass Notifications and QA Automation run inside Google Sheets as custom menus
 or form triggers. AI-Scoring runs as a FastAPI server deployed on Railway
-(Hobby tier) with API key authentication and CORS restrictions.
+(Hobby tier) with per-team API key authentication and CORS restrictions.
 
 --------------------------------------------------------------------------------
   REPOSITORY STRUCTURE
@@ -77,62 +87,87 @@ or form triggers. AI-Scoring runs as a FastAPI server deployed on Railway
   │           └── WebApp_Send.html        Send controls and status
   │
   └── qa-automation/
-      ├── src/                  Google Apps Script files (.js)
-      │   ├── Main.js           Entry points and processing pipeline
-      │   ├── Config.js         Column mappings, scoring thresholds, sheet names
-      │   ├── QAEntry.js        Data model for a single QA row
-      │   ├── AnalystHistory.js Agent history tracking + Form AI enrichment
+      ├── src/                  Shared Apps Script logic (multi-team)
+      │   ├── Main.js           doPost endpoint — reads Analyst_History
+      │   │                     row and dispatches the QA email
+      │   ├── QAEntry.js        Data model — built via fromHistoryRow
+      │   │                     static factory from the new AH layout
+      │   ├── AnalystHistory.js Read-only access to Analyst_History
+      │   │                     (getHistory for progression card)
       │   ├── ScoreCard.js      HTML score breakdown visualization
       │   ├── FeedbackCard.js   HTML strengths/improvements visualization
       │   ├── ProgressionCard.js HTML trend and progression visualization
       │   ├── HtmlRenderer.js   Full email template assembly
-      │   └── EmailSender.js    Gmail integration (send or draft)
-      │
-      └── AI-Scoring/           Python backend (v2.0 — deployed on Railway)
+      │   └── EmailSender.js    Gmail integration
+      ├── teams/                Per-team Apps Script overlay
+      │   ├── member_support/
+      │   │   ├── Branding.js       Hand-edited: colors, email copy, goal
+      │   │   ├── Config.js         AUTO-GENERATED from JSON config
+      │   │   └── .clasp.json       Member Support Script ID
+      │   └── sales/                (same structure as member_support)
+      ├── scripts/              Python utilities (run from repo root)
+      │   ├── build_config.py            Regenerate teams/{id}/Config.js
+      │   ├── migration_utils.py         Shared helpers + rate limiter
+      │   ├── migrate_ms_history.py      Phase E — MS AH reorder
+      │   ├── import_sales_history.py    Phase E — Sales FR3 → AH import
+      │   └── backfill_sales_overall_scores.py   Scores!Y → AH!F
+      ├── push.projects         Manifest of deployable Apps Script projects
+      │                         consumed by ../push.sh
+      └── AI-Scoring/           Python backend (v2.1 — deployed on Railway)
           ├── references/
           │   ├── CLAUDE.md         Full project spec and roadmap
           │   ├── PhaseZero.md      Phase 0 handoff doc
           │   ├── PhaseOne.md       Phase 1 handoff + unified roadmap
+          │   ├── PhaseTwo.md       Phase 2 design + completion log
+          │   │                     (schema convergence + Sales onboarding)
           │   ├── PRD-MultiTeam.md  Multi-team expansion spec
           │   ├── AgentProgressionDashboard.md  Dashboard design doc
           │   └── TeamStatsBoard.md Team analytics design doc
           ├── backend/
           │   ├── main.py           FastAPI app entry point
+          │   ├── config/
+          │   │   ├── team_config.py        Pydantic TeamConfig schema
+          │   │   ├── history_layout.py     HistoryLayout(N) derived columns
+          │   │   ├── env.py                Per-team env var lookup
+          │   │   └── teams/                Per-team JSON config
+          │   │       ├── member_support.json
+          │   │       └── sales.json
           │   ├── middleware/
-          │   │   ├── auth.py       API key authentication
+          │   │   ├── auth.py       Per-team API key authentication
           │   │   └── audit.py      JSONL request audit logging
           │   ├── models/
           │   │   ├── scorecard.py  Scoring + approval models
           │   │   ├── dashboard.py  EvaluationRecord + progression models
           │   │   └── team_stats.py Team analytics models
           │   ├── prompts/
-          │   │   ├── qa_scoring_prompt.py   Call scoring prompt
+          │   │   ├── qa_scoring_prompt.py   Call scoring prompt (rubric-driven)
           │   │   └── progression_prompt.py  Agent coaching prompt
           │   ├── routes/
-          │   │   ├── scoring.py    /api/score + /api/score/{id}/approve
-          │   │   ├── dashboard.py  /api/agents + /api/agents/{name}/*
-          │   │   ├── team.py       /api/team/stats + /api/team/mails
-          │   │   └── datapoints.py /api/datapoints + /api/datapoints/{id}
+          │   │   ├── scoring.py    /api/{team}/score + /score/{id}/approve
+          │   │   ├── dashboard.py  Per-agent endpoints
+          │   │   ├── team.py       /team/stats + /team/mails + /team/sections
+          │   │   ├── datapoints.py /datapoints + /datapoints/{id}
+          │   │   └── lookup.py     Cross-team Dialpad lookup
           │   └── services/
           │       ├── scoring_service.py     Gemini call scoring pipeline
-          │       ├── sheets_service.py      Read/write Form Responses AI + 1
-          │       ├── dialpad_client.py      Dialpad API (calls, transcripts, details)
+          │       ├── sheets_service.py      4-stage write pipeline + email trigger
+          │       ├── data_normalization.py  Canonical timestamp + name parsing
+          │       ├── dialpad_client.py      Dialpad API client (cached, throttled)
           │       ├── data_provider.py       Abstract data provider
           │       ├── history_service.py     SheetsProvider (Analyst_History)
-          │       ├── team_stats.py          Statistical computations (EWMA, SPC, outliers)
-          │       ├── db_provider.py         PostgresProvider (stub)
+          │       ├── history_layout.py      Layout derivation utilities
+          │       ├── team_stats.py          Statistical computations
           │       ├── progression_service.py Gemini coaching assessments
-          │       └── notion_service.py      Notion SOP integration (stub)
+          │       ├── mails_service.py       Sales/MS Mails sheet readers
+          │       └── notion_service.py      Notion SOP integration
           ├── frontend/
-          │   ├── index.html        Call scoring + editable scorecard + Approve & Send
-          │   ├── dashboard.html    Per-agent progression dashboard (clickable trends)
+          │   ├── index.html        Scoring + editable scorecard (per-team)
+          │   ├── dashboard.html    Per-agent progression
           │   ├── team_dashboard.html Team analytics (outliers, SPC, distribution)
-          │   └── datapoint.html    Evaluation detail page (DataPoint drill-down)
-          ├── scripts/
-          │   ├── score_call.py     Phase 0 CLI scoring script
-          │   └── backfill_history.py One-time backfill for historical DataPoints
+          │   ├── datapoint.html    Single-evaluation drill-down
+          │   └── lookup.html       Cross-team Dialpad lookup
           ├── Procfile              Railway deployment start command
-          └── .env.example          Environment variable documentation
+          └── .env.example          Per-team env var documentation
 
 --------------------------------------------------------------------------------
   1. MASS NOTIFICATIONS
@@ -294,64 +329,92 @@ WHERE IT LIVES
   Apps Script project ID: 1fuuvwcA4Z3aka1rkJ9ixlRL8nFWD98BrFqseJw-T_k2t5LiE2iQDlpSu
   Google Form URL: https://docs.google.com/forms/d/e/1FAIpQLSchilaGKHW2fwD-IeslNq20NiWoQmsBHFcxSycEj2-ElljYng/viewform
 
-HOW IT WORKS (HIGH LEVEL)
-  Manual flow (Google Form):
-    1. A QA Analyst submits a completed evaluation via the Google Form.
-    2. Google Forms appends the response as a new row in "Form Responses 1" sheet.
-    3. QA Analyst reviews the row and selects an action from the custom UI Menu.
-    4. The script parses the row into a structured QA entry.
-    5. It retrieves the agent's past evaluations from the Analyst_History sheet.
-    6. It builds three HTML components:
-         - ScoreCard      — color-coded breakdown of all scored categories
-         - FeedbackCard   — key strengths, areas to improve, Dialpad call link
-         - ProgressionCard — trend table showing last N evaluations with score deltas
-    7. The full HTML email is sent to the agent's email address.
-    8. The new entry is appended to Analyst_History (cols A-O).
-    9. If the call was AI-scored, AnalystHistory enriches cols P-AK by looking
-       up the matching Dialpad link in Form Responses AI and copying reasoning,
-       confidence, key strengths, and improvements.
+HOW IT WORKS (HIGH LEVEL, POST-PHASE-2)
 
-  AI-assisted flow (Gemini + Approve & Send):
-    1. Manager uploads audio at the AI-Scoring frontend (Railway or localhost).
-    2. Gemini 2.5 Flash scores all sections with confidence + reasoning.
-    3. Results are written to Form Responses AI (cols A-P + reasoning cols Q-AI
-       + caller metadata cols AJ-AL).
-    4. Manager reviews the editable scorecard in the frontend — can modify
-       scores, reasoning, and feedback. Scores Documentation manually.
-    5. Manager clicks "Approve & Send".
-    6. Backend updates reasoning in Form Responses AI, writes approved scores
-       directly to Form Responses 1, waits for ARRAYFORMULA computation,
-       then triggers Apps Script doPost() web app endpoint.
-    7. Apps Script _processRow() handles: Analyst_History append + enrichment
-       + QA email send to the agent.
+  Single AI-assisted flow — the legacy Google-Form-trigger path was
+  retired with the Phase-C bridge cleanup (May 2026). All scoring now
+  goes through the Python backend; Apps Script's role is dispatching
+  the QA email from a finalized Analyst_History row.
 
-KEY SHEETS
-  - Form Responses 1    QA form submissions (auto-populated by Google Forms).
-  - Form Responses AI   AI-scored calls from the Gemini pipeline. Cols A-P mirror
-                        Form Responses 1; cols Q-AI contain per-section reasoning.
-  - Analyst_History     Running log of all past evaluations per agent (cols A-O
-                        from Apps Script + cols P-AK enriched from Form AI
-                        + cols AL-AN for call summary, caller name, caller phone).
-                        Source of truth for dashboards and DataPoint detail pages.
-  - Mails              Agent name-to-email mapping (cols A-B), supervisor (C),
-                        canonical name (D). Determines "active" agent roster.
+  Stage 1 (Score):
+    Manager uploads audio at /score/{team_id}. Gemini 2.5 Flash scores
+    AI-applicable sections with confidence + reasoning. The full draft
+    row (scores, reasoning, confidence, feedback, caller meta) is
+    written to that team's Form Responses AI sheet.
 
-QA SCORECARD CATEGORIES
-  Numeric (scored 1–5):
-    - Greeting & Introduction
-    - Call Purpose / Needs Assessment
-    - Match Moment
-    - Process Adherence
-    - Call Resolution
-    - Communication
-    - Efficiency
-    - Documentation (manual-only; not targeted for AI automation)
+  Stage 1.5 (Edit):
+    Manager reviews + edits the scorecard in the frontend. Manual
+    sections (Y/N or 1-5 depending on score_type) are scored at this
+    step with required reasoning. Edits stage back to FR-AI on Approve.
 
-  Binary (Yes / No):
-    - Identity Validation
-    - Customer Resolution
+  Stage 2 (Score destination):
+    Backend mirrors the row to the team's score-destination tab.
+    Member Support: a separate "Form Responses 1" tab with formulas.
+    Sales (post-May 2026): destination collapsed onto Form Responses
+    AI itself — Stage 2 short-circuits (no append), the same row holds
+    the ARRAYFORMULA-computed overall score in col F.
 
-  Overall score is calculated on a 0–100 scale. Goal threshold: 85.
+  Stage 3 (Readback):
+    Backend polls the score_readback_col until the team's weighted
+    ARRAYFORMULA fires (3-5 s typical). MS writes the resolved score
+    back to FR-AI col F; Sales skips the writeback (would clobber the
+    formula's output range on the same cell).
+
+  Stage 4 (Finalize):
+    Backend writes the canonical row to Analyst_History — agent_email
+    resolved via Mails lookup, evaluator_email locked in, timestamp
+    refreshed to approval time.
+
+  Stage 5 (Email):
+    Backend POSTs the Analyst_History row number to the team's Apps
+    Script doPost endpoint. Apps Script reads the row, constructs
+    ScoreCard + FeedbackCard + ProgressionCard, and sends the QA
+    evaluation email via Gmail. No second append, no enrichment lookup
+    — the row is already complete.
+
+KEY SHEETS (per-team — same tab names, different layouts)
+  - Form Responses AI   Draft row written by Gemini scoring + analyst
+                        edits. For Sales, also holds the
+                        ARRAYFORMULA-computed overall score (col F) —
+                        the score destination collapsed onto this tab.
+                        For MS, the score destination remains a
+                        separate "Form Responses 1" tab.
+  - Analyst_History     Source of truth for dashboards + DataPoint
+                        pages. Derived layout (HistoryLayout(N)):
+                        6 prefix + N scores + N reasoning + N
+                        confidence + 6 trailing. MS N=10 (42 cols);
+                        Sales N=19 (69 cols).
+  - Mails               Agent name-to-email mapping (cols A-B),
+                        supervisor (C), canonical name (D). Drives
+                        active-agent filtering on the team dashboard.
+  - Scores              (MS only — Sales' has been deprecated.) Mirror
+                        of FR-AI per row with the weighted scoring
+                        formula at the readback column.
+
+QA SCORECARD CATEGORIES (rubric per team — driven by JSON config)
+  Member Support (N=10):
+    Numeric 1-5 (AI-scored):  Greeting, Purpose of Call, Matching the
+      Moment, Process Adherence, Call Resolution, Communication,
+      Efficiency & Call Handling
+    Numeric 1-5 (manual):     Documentation
+    Y/N (AI-scored):          Caller Identity Validation,
+                              Customer Resolution Indicator
+
+  Sales (N=19):
+    Numeric 1-5 (AI-scored):  Situation Match, Landing Value Uplift,
+                              Landing Guarantee, Objection Handling
+    Y/N (manual, "manual_yn"): PB Created, MC Call Notes
+                              (supervisor-verified; AI cannot score)
+    Y/N (AI-scored):          13 sections covering greeting, reason
+                              for move, membership, FLEX, pricing,
+                              book attempt, urgency, follow-up,
+                              tonality/pace, hold usage, audio
+                              quality, screen recording, pre-send
+                              intro
+
+  Overall score is calculated on a 0–100 scale (per-section weights
+  live on each team's Sheet as an ARRAYFORMULA reference range). Goal
+  threshold: 85 (both teams).
 
 COLOR CODING (score → color)
   Numeric categories (1–5):   Green ≥ 4.25 / Amber ≥ 3.5 / Red < 3.5
@@ -365,29 +428,54 @@ TREND / PROGRESSION
     - First-evaluation messaging for brand-new agents
 
 DRY RUN / MANUAL TRIGGERS
-  A custom "QA Automation" menu is available in the Google Sheet with:
-    - Process Latest Row   — manually processes the most recent form response
-    - Create Draft         — generates a Gmail draft instead of sending (safe review)
-    - Rebuild History      — reconstructs Analyst_History from scratch from form data
+  Removed in v2.0.0. The custom "QA Automation" menu (Process Latest
+  Row, Create Draft, Rebuild History) operated on the legacy Google
+  Form path and the FR1 22-column layout. With Phase 2's schema
+  convergence + Tier 4.6 bridge strip, those entry points no longer
+  match the data shape. The /score frontend is now the only path.
 
-WHAT'S NEW IN v1.2.0
-  - AI reasoning + confidence are now surfaced inline in the agent email's
-    score breakdown (one row per scored section).
-  - Multi-team support: rubric and scoring config moved out of code and into
-    qa-automation/AI-Scoring/backend/config/teams/<team>.json. Push.sh stages
-    a per-team build dir from a shared base + team overrides.
-  - QA email scorecard polish (consistent typography, color contrast, spacing).
-  - Documentation section in progression + reasoning textbox carry into the
-    Analyst_History enrichment columns and the agent email.
+WHAT'S NEW IN v2.0.0 (Phase 2 — May 2026)
+  - Multi-team support. Sales onboarded as the second team. Rubric +
+    sheet layout + branding all per-team via JSON config. Adding a
+    new team requires authoring `backend/config/teams/{id}.json`,
+    `teams/{id}/Branding.js`, running `build_config.py {id}`, then
+    `./push.sh qa-{id}`. No core code edits.
+  - HistoryLayout(N) derived schema. Both MS and Sales Analyst_History
+    tabs share a canonical shape: 6 prefix + N scores + N reasoning +
+    N confidence + 6 trailing. Cross-team analytics walk this shape
+    using only `section_number` and `history_id`.
+  - Bridge strip (Tier 4.6). Apps Script reduced to a dumb email
+    dispatcher — no more `_processRow`, `onFormSubmit`,
+    `rebuildHistory`, FR1 layout, or enrichment lookup. ~994 lines
+    deleted across `src/`.
+  - `score_type='manual_yn'`. New schema value for analyst-input Y/N
+    sections that AI cannot score (Sales PB Created + MC Call Notes).
+  - Sales score destination collapsed onto Form Responses AI itself —
+    no more separate "Scores" tab. Stage 2 short-circuits, Stage 3
+    skips the writeback so the on-row ARRAYFORMULA stays intact.
+  - Team-level dashboards (/dashboard/{team_id}) data-drive every
+    section column from `/api/{team_id}/team/sections`. Per-agent
+    chart hides sections with no parseable data so legacy migrated
+    rows don't render as zero-height bars.
+  - Frontend pages emit `Cache-Control: no-cache` so reloads always
+    pick up fresh HTML during development.
+  - All team-aware page routes follow `/{role}/{team_id}/...` (e.g.
+    `/score/sales`, `/dashboard/member_support/agent/Erick`,
+    `/datapoint/sales/{call_id}`). Legacy single-team URLs still
+    redirect to `member_support` for 30 days.
 
 CURRENT LIMITATIONS / KNOWN ISSUES
-    - Columns with ARRAYFORMULAs (Overall Score, Agent Email) may not resolve
-      before the trigger fires; a 3-second sleep + Mails sheet lookup mitigates this.
-    - QA Analysts still manually pick and score calls unless using AI-Scoring.
-    - Dialpad API key expires regularly (~1 hour); must be refreshed in Railway
-      env vars until OAuth with Client ID/Secret is set up with engineering.
-    - Historical DataPoints may lack caller metadata and AI reasoning (only
-      scores and feedback are backfilled).
+    - Per-team ARRAYFORMULAs may take 3-5 s to resolve; the backend
+      polls with a bounded retry (5 attempts × 800 ms = 4 s ceiling).
+    - Manager-side: Sales `Mails` sheet currently has 0 supervisors
+      populated; supervisor filter on the Sales team dashboard is
+      always empty until that's filled in.
+    - Dialpad API key expires regularly (~1 hour); must be refreshed
+      in Railway env vars until OAuth with Client ID/Secret is set up
+      with engineering.
+    - Historical DataPoints from the Sales Phase-E migration may lack
+      caller metadata and AI reasoning (only scores + Y/N values were
+      migrated). Forward-going evaluations have the full set.
 
 CONTACTS / OWNERSHIP
   Script maintained by: Maximiliano Pérez García
@@ -448,25 +536,33 @@ DEPLOYMENT ROADMAP
   Step 1 (complete)      Security hardening + Railway deployment
   Step 1.5 (complete)    Manager approval workflow (Approve & Send)
   Step 2 (complete)      DataPoints — evaluation drill-down + clickable charts
-  Step 3 (next)          Rubric abstraction (JSON config per team)
-  Step 4 (planned)       Team routing + multi-team support
-  Step 5 (planned)       Sales team onboarding
-  Step 6 (planned)       SOP/Notion RAG integration
+  Step 3 (complete)      Rubric abstraction (JSON config per team)
+  Step 4 (complete)      Team routing + multi-team support
+  Step 5 (complete)      Sales team onboarding — May 2026
+  Step 6 (next)          SOP/Notion RAG integration
   Step 7 (planned)       Cost tracking + admin dashboard
   Step 8 (planned)       Dialpad webhook automation (fully hands-free)
   Step 9 (planned)       PostgreSQL migration
 
-  Full roadmap: qa-automation/AI-Scoring/references/PhaseOne.md
+  Phase 0/1 history:  qa-automation/AI-Scoring/references/PhaseOne.md
+  Phase 2 history:    qa-automation/AI-Scoring/references/PhaseTwo.md
 
 KEY PRINCIPLES
   - Human review is mandatory. AI proposes; managers approve via Approve & Send.
-  - Documentation (Section 9 of scorecard) is always scored manually by manager.
-  - The existing Apps Script email flow is preserved (triggered via doPost).
+  - Manual sections (MS Documentation, Sales PB Created + MC Call Notes)
+    are always scored by the manager — AI never sees them.
+  - Apps Script is a dumb email dispatcher. The entire scoring +
+    finalization pipeline lives in Python; Apps Script only reads the
+    Analyst_History row and sends the email.
   - Data isolation: original AI scores preserved in Form Responses AI as audit trail.
-  - Adding a new team should require configuration, not code changes.
+  - Adding a new team requires configuration, not code changes:
+    1) Author backend/config/teams/{id}.json, 2) Write teams/{id}/Branding.js,
+    3) Generate teams/{id}/Config.js via build_config.py,
+    4) ./push.sh qa-{id} to deploy.
 
   Full specification: qa-automation/AI-Scoring/references/CLAUDE.md
   Multi-team PRD: qa-automation/AI-Scoring/references/PRD-MultiTeam.md
+  Phase 2 retrospective: qa-automation/AI-Scoring/references/PhaseTwo.md
 
 --------------------------------------------------------------------------------
   GOOGLE APIS & PERMISSIONS USED
