@@ -650,7 +650,10 @@ function renderBinaryStats() {
     container.innerHTML = '';
     return;
   }
-  container.style.gridTemplateColumns = `repeat(${bs.length}, 1fr)`;
+  // auto-fit + minmax wraps to multiple rows when the team has many
+  // binary sections (Sales has 13, MS has 2). 160px min keeps the
+  // label readable.
+  container.style.gridTemplateColumns = 'repeat(auto-fit, minmax(160px, 1fr))';
   container.innerHTML = bs.map(section => {
     const pct = section.team_pct;
     return `<div class="kpi-box">

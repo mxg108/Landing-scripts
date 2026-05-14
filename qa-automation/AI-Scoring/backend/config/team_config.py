@@ -153,7 +153,11 @@ class SectionDef(BaseModel):
     history_id: str                          # dashboard/history ID (may differ)
     name: str                                # display name
     section_number: int
-    score_type: str                          # "numeric", "yn", or "manual"
+    score_type: str                          # "numeric" (1-5 AI), "yn" (Y/N AI),
+                                             # "manual" (1-5 analyst input), or
+                                             # "manual_yn" (Y/N analyst input —
+                                             # AI cannot score, e.g. cases that
+                                             # require supervisor verification)
     score_range: Optional[list[int]] = None  # e.g. [1, 5] for numeric
     audio_dependent: bool = False
     rubric_question: Optional[str] = None
@@ -207,28 +211,30 @@ class TeamConfig(BaseModel):
     def ai_scored_sections(self) -> list[SectionDef]:
         """Sections actually sent to Gemini.
 
-        Excludes both manual sections (analyst-only) and `auto_value`
-        sections (writer hardcodes them — Gemini never sees the question).
+        Excludes manual + manual_yn sections (analyst-only) and
+        `auto_value` sections (writer hardcodes them — Gemini never sees
+        the question).
         """
         return [
             s for s in self.sections
-            if s.score_type != "manual" and s.auto_value is None
+            if s.score_type not in ("manual", "manual_yn") and s.auto_value is None
         ]
 
     @property
     def numeric_sections(self) -> list[SectionDef]:
-        """Sections with 1-5 numeric scores (includes manual)."""
+        """Sections whose stored value is a 1-5 score (AI or manual)."""
         return [s for s in self.sections if s.score_type in ("numeric", "manual")]
 
     @property
     def yn_sections(self) -> list[SectionDef]:
-        """Y/N sections — includes auto_value sections (still Y/N for analytics)."""
-        return [s for s in self.sections if s.score_type == "yn"]
+        """Sections whose stored value is Y/N (AI or manual). Includes
+        `auto_value` sections (still Y/N data for analytics)."""
+        return [s for s in self.sections if s.score_type in ("yn", "manual_yn")]
 
     @property
     def manual_sections(self) -> list[SectionDef]:
-        """Sections filled by the analyst, not Gemini."""
-        return [s for s in self.sections if s.score_type == "manual"]
+        """Sections filled by the analyst, not Gemini — either shape."""
+        return [s for s in self.sections if s.score_type in ("manual", "manual_yn")]
 
     @property
     def auto_value_sections(self) -> list[SectionDef]:

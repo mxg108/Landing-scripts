@@ -98,19 +98,15 @@ def _render_categories(config: TeamConfig) -> str:
         body = ",\n".join(cat_obj(s) for s in sections)
         return f"CONFIG.{label} = [\n{body},\n];"
 
-    # NUMERIC_CATEGORIES = numeric + manual (both 1-5 scores).
-    # Order by section_number so the email score card renders sections in
-    # rubric order. Manual sections appear inline alongside AI-scored ones.
-    numeric_or_manual = [
-        s for s in sections_in_order if s.score_type in ("numeric", "manual")
-    ]
-    yn_sections = [s for s in sections_in_order if s.score_type == "yn"]
-    manual_only = [s for s in sections_in_order if s.score_type == "manual"]
-
+    # Partition by data shape (NUMERIC=1-5, BINARY=Y/N) and input source
+    # (MANUAL=analyst-entered, either shape). Drives the email scorecard
+    # rendering and the /score UI's manual-input panel. Source of truth
+    # lives on `TeamConfig` so adding a new score_type only touches the
+    # config layer.
     return "\n\n".join([
-        cat_block("NUMERIC_CATEGORIES", numeric_or_manual),
-        cat_block("BINARY_CATEGORIES", yn_sections),
-        cat_block("MANUAL_CATEGORIES", manual_only),
+        cat_block("NUMERIC_CATEGORIES", config.numeric_sections),
+        cat_block("BINARY_CATEGORIES", config.yn_sections),
+        cat_block("MANUAL_CATEGORIES", config.manual_sections),
     ])
 
 

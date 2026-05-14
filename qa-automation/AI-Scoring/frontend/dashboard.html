@@ -345,7 +345,7 @@
           _teamSections.map(s => [s.history_id || s.id, s.name])
         );
         _numericSectionKeys = _teamSections
-          .filter(s => s.score_type !== 'yn' && !s.auto_value)
+          .filter(s => (s.score_type === 'numeric' || s.score_type === 'manual') && !s.auto_value)
           .map(s => s.history_id || s.id);
       } catch (e) {
         console.error('Failed to load team sections:', e);

@@ -811,7 +811,18 @@
     const sectionRows = _teamSections
       .filter(ts => !ts.auto_value)
       .map(ts => {
-        if (ts.score_type === 'manual') {
+        if (ts.score_type === 'manual' || ts.score_type === 'manual_yn') {
+          const options = ts.score_type === 'manual_yn'
+            ? `<option value="" selected>—</option>
+               <option value="Y">Y</option>
+               <option value="N">N</option>
+               <option value="NA">NA</option>`
+            : `<option value="" selected>—</option>
+               <option value="1">1/5</option>
+               <option value="2">2/5</option>
+               <option value="3">3/5</option>
+               <option value="4">4/5</option>
+               <option value="5">5/5</option>`;
           return `
             <div class="section-row" style="border-left:3px solid var(--amber);">
               <div>
@@ -822,12 +833,7 @@
               </div>
               <div>
                 <select class="score-select" id="manual-score-${ts.id}-${jobId}" onchange="checkManualScores('${jobId}')">
-                  <option value="" selected>—</option>
-                  <option value="1">1/5</option>
-                  <option value="2">2/5</option>
-                  <option value="3">3/5</option>
-                  <option value="4">4/5</option>
-                  <option value="5">5/5</option>
+                  ${options}
                 </select>
               </div>
               <div><span class="confidence-badge" style="background:#e5e7eb; color:#6b7280;">MANUAL</span></div>
@@ -948,7 +954,7 @@
     if (!btn || !statusEl) return;
 
     const missing = _teamSections
-      .filter(s => s.score_type === 'manual')
+      .filter(s => s.score_type === 'manual' || s.score_type === 'manual_yn')
       .filter(s => {
         const sel = document.getElementById(`manual-score-${s.id}-${jobId}`);
         return !sel || !sel.value;
@@ -992,24 +998,28 @@
       };
     });
 
-    // Manual sections — analyst-entered scores from the dashboard inputs
-    _teamSections.filter(s => s.score_type === 'manual').forEach(ms => {
-      const scoreEl = document.getElementById(`manual-score-${ms.id}-${jobId}`);
-      const reasonEl = document.getElementById(`manual-reasoning-${ms.id}-${jobId}`);
-      const score = scoreEl && scoreEl.value ? parseInt(scoreEl.value) : null;
-      const reasoning = (reasonEl && reasonEl.value || '').trim();
-      sections.push({
-        id: ms.id,
-        name: ms.name,
-        score,
-        score_type: 'manual',
-        yn_value: null,
-        confidence: 'manual',
-        reasoning: reasoning || 'Scored manually by manager.',
-        audio_dependent: false,
-        flags: [],
+    // Manual sections — analyst-entered values from the dashboard inputs.
+    // `manual` stores a 1-5 score; `manual_yn` stores Y/N/NA in yn_value.
+    _teamSections
+      .filter(s => s.score_type === 'manual' || s.score_type === 'manual_yn')
+      .forEach(ms => {
+        const scoreEl = document.getElementById(`manual-score-${ms.id}-${jobId}`);
+        const reasonEl = document.getElementById(`manual-reasoning-${ms.id}-${jobId}`);
+        const rawValue = scoreEl && scoreEl.value ? scoreEl.value : '';
+        const isYn = ms.score_type === 'manual_yn';
+        const reasoning = (reasonEl && reasonEl.value || '').trim();
+        sections.push({
+          id: ms.id,
+          name: ms.name,
+          score: !isYn && rawValue ? parseInt(rawValue) : null,
+          score_type: ms.score_type,
+          yn_value: isYn && rawValue ? rawValue : null,
+          confidence: 'manual',
+          reasoning: reasoning || 'Scored manually by manager.',
+          audio_dependent: false,
+          flags: [],
+        });
       });
-    });
 
     const payload = {
       sections,

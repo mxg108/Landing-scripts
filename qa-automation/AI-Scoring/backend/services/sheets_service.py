@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
@@ -166,12 +167,33 @@ def _lookup_agent_email(agent_name: str, config: TeamConfig) -> Optional[str]:
 
 
 def _parse_appended_row_num(append_result: dict) -> int:
-    """Extract the 1-indexed row number from a gspread append_row result."""
+    """Extract the 1-indexed row number from a gspread append_row result.
+
+    The cell ref returned by Sheets uses A1 notation; column letters can
+    be 1+ chars (Sales' FR-AI extends past col Z). Match the trailing
+    digits explicitly rather than assuming a single column letter.
+    """
     updated_range = append_result.get("updates", {}).get("updatedRange", "")
     try:
-        return int(updated_range.split("!")[1].split(":")[0][1:])
+        first_cell = updated_range.split("!")[1].split(":")[0]
+        m = re.search(r"(\d+)$", first_cell)
+        return int(m.group(1)) if m else -1
     except (IndexError, ValueError):
         return -1
+
+
+def _next_data_row(sheet) -> int:
+    """Return the 1-indexed row that should receive the next append.
+
+    Inspects col A, col E (dialpad_link), and col G (first section) to
+    survive irregular header rows where some prefix cols may be blank.
+    Wider check than gspread's auto-detect-table path, which can latch
+    onto a partial column and produce an offset write.
+    """
+    a_len = len(sheet.col_values(1))
+    e_len = len(sheet.col_values(history_layout.COL_DIALPAD_LINK + 1))
+    g_len = len(sheet.col_values(history_layout.COL_OVERALL_SCORE + 2))  # col G = first section
+    return max(a_len, e_len, g_len) + 1
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +239,7 @@ def write_draft_to_fr_ai(scorecard: ScorecardWithMeta, config: TeamConfig) -> in
         if sec_def.auto_value is not None:
             row[L.col_score(i)] = sec_def.auto_value
             # reasoning + confidence stay blank
-        elif sec_def.score_type == "manual":
+        elif sec_def.score_type in ("manual", "manual_yn"):
             # blank — analyst will fill via dashboard
             pass
         else:
@@ -234,19 +256,40 @@ def write_draft_to_fr_ai(scorecard: ScorecardWithMeta, config: TeamConfig) -> in
     row[L.col_caller_phone] = scorecard.caller_phone or ""
     row[L.col_source] = "ai"
 
+    end_letter = col_index_to_letter(L.total_width - 1)
     existing_row = _find_row_by_dialpad_link(sheet, scorecard.dialpad_link or "")
-    if existing_row is not None:
-        end_letter = col_index_to_letter(L.total_width - 1)
+    target_row = existing_row if existing_row is not None else _next_data_row(sheet)
+
+    # Colocated FR-AI: col F holds an ARRAYFORMULA whose output range
+    # extends row-by-row. Writing any literal (including '') to col F
+    # would clobber the formula's output for this row, so split the
+    # write into A:E and G:end_letter and leave F untouched.
+    colocated = config.sheets.score_destination.tab_name == config.sheets.form_responses_ai.tab_name
+    if colocated:
+        prefix = row[: history_layout.COL_OVERALL_SCORE]                # cols A-E
+        suffix = row[history_layout.COL_OVERALL_SCORE + 1 :]            # cols G-end
+        sheet.batch_update([
+            {
+                "range": f"A{target_row}:E{target_row}",
+                "values": [prefix],
+            },
+            {
+                "range": f"G{target_row}:{end_letter}{target_row}",
+                "values": [suffix],
+            },
+        ], value_input_option="USER_ENTERED")
+    else:
         sheet.update(
-            f"A{existing_row}:{end_letter}{existing_row}",
+            f"A{target_row}:{end_letter}{target_row}",
             [row],
             value_input_option="USER_ENTERED",
         )
-        print(f"[stage_1] Overwrote FR-AI row {existing_row} for dialpad_link match.")
-        return existing_row
 
-    result = sheet.append_row(row, value_input_option="USER_ENTERED")
-    return _parse_appended_row_num(result)
+    if existing_row is not None:
+        print(f"[stage_1] Overwrote FR-AI row {target_row} for dialpad_link match.")
+    else:
+        print(f"[stage_1] Wrote new FR-AI row {target_row}.")
+    return target_row
 
 
 # ---------------------------------------------------------------------------
@@ -282,11 +325,16 @@ def apply_analyst_edits_to_fr_ai(
         if section is None:
             continue
 
-        score_value = (
-            _format_ai_score(sec_def, section)
-            if sec_def.score_type != "manual"
-            else str(section.get("score", ""))
-        )
+        # Manual sections carry an analyst-entered value rather than the
+        # AI's. `manual` stores a 1-5 score; `manual_yn` stores a Y/N/NA
+        # in yn_value (rendered via the same display map as AI yn).
+        if sec_def.score_type == "manual":
+            score_value = str(section.get("score", ""))
+        elif sec_def.score_type == "manual_yn":
+            yn = section.get("yn_value") or "NA"
+            score_value = YN_DISPLAY.get(yn, "Not Applicable")
+        else:
+            score_value = _format_ai_score(sec_def, section)
         score_letter = col_index_to_letter(L.col_score(i))
         reasoning_letter = col_index_to_letter(L.col_reasoning(i))
         confidence_letter = col_index_to_letter(L.col_confidence(i))
@@ -343,8 +391,6 @@ def write_to_score_destination(
     sd = config.sheets.score_destination
 
     fr_ai_sheet = _get_fr_ai_sheet(config)
-    fr_ai_row = fr_ai_sheet.row_values(fr_ai_row_num)
-    fr_ai_row = (fr_ai_row + [""] * L.total_width)[: L.total_width]
 
     # Persist evaluator_email to FR-AI col D so Stage 4 carries it forward.
     eval_letter = col_index_to_letter(history_layout.COL_EVALUATOR_EMAIL)
@@ -353,6 +399,18 @@ def write_to_score_destination(
         [[evaluator_email]],
         value_input_option="USER_ENTERED",
     )
+
+    # Colocated destination: when score_destination IS the FR-AI tab
+    # (Sales post-collapse), the FR-AI row already holds every value the
+    # destination would receive — sections, metadata, and the
+    # ARRAYFORMULA at score_readback_col fires on the same row. Skip the
+    # append and return fr_ai_row_num so Stage 3 polls the FR-AI row.
+    if sd.tab_name == config.sheets.form_responses_ai.tab_name:
+        print(f"[stage_2] Destination colocated with FR-AI ('{sd.tab_name}'); skipping append.")
+        return fr_ai_row_num
+
+    fr_ai_row = fr_ai_sheet.row_values(fr_ai_row_num)
+    fr_ai_row = (fr_ai_row + [""] * L.total_width)[: L.total_width]
 
     # Compute destination row width
     section_letters = list(sd.section_score_columns.keys())
@@ -376,7 +434,7 @@ def write_to_score_destination(
 
         if sec_def.auto_value is not None:
             dest_row[col_idx] = sec_def.auto_value
-        elif sec_def.score_type == "manual" and not fr_ai_value:
+        elif sec_def.score_type in ("manual", "manual_yn") and not fr_ai_value:
             dest_row[col_idx] = sec_def.manual_default_value or ""
         else:
             dest_row[col_idx] = fr_ai_value
@@ -449,6 +507,14 @@ async def read_score_and_writeback(
             f"have failed."
         )
         return ""
+
+    # Colocated destination: readback cell IS FR-AI col F. The
+    # ARRAYFORMULA already wrote the value there — writing it back as a
+    # literal would clobber the formula's output for this row. Skip the
+    # writeback in that case.
+    if sd.tab_name == config.sheets.form_responses_ai.tab_name:
+        print(f"[stage_3] Destination colocated with FR-AI; readback already at FR-AI col F. Skipping writeback.")
+        return overall
 
     fr_ai_sheet = _get_fr_ai_sheet(config)
     score_letter = col_index_to_letter(history_layout.COL_OVERALL_SCORE)
