@@ -56,24 +56,12 @@ _SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
 ]
 
-# ---------------------------------------------------------------------------
-# Timestamp parsing
-# ---------------------------------------------------------------------------
-_TS_FORMATS = [
-    "%m/%d/%Y %H:%M:%S",
-    "%Y-%m-%d %H:%M:%S",
-    "%m/%d/%Y %H:%M",
-    "%Y-%m-%dT%H:%M:%S",
-]
-
-
-def _parse_timestamp(value: str) -> datetime | None:
-    for fmt in _TS_FORMATS:
-        try:
-            return datetime.strptime(value.strip(), fmt)
-        except (ValueError, AttributeError):
-            continue
-    return None
+# Timestamp parsing — delegate to the canonical parser in
+# data_normalization so all readers (team_stats, history_service)
+# accept the same format set. A previous local copy of _TS_FORMATS
+# diverged and dropped Sales' date-only rows from per-agent views
+# while team-level views worked.
+from backend.services.data_normalization import parse_timestamp as _parse_timestamp  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
