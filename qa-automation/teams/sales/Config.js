@@ -44,8 +44,6 @@ CONFIG.HISTORY_LAYOUT = {
 // `key` is the section id (also matches history_id when they're equal),
 // `historyIdx` is the position in the derived layout's score range.
 CONFIG.NUMERIC_CATEGORIES = [
-  { key: "pb_creation", label: "PB Created", historyIdx: 1 },
-  { key: "mc_call_notes", label: "MC Call Notes", historyIdx: 2 },
   { key: "situation_match", label: "Situation Match (First 2 Min)", historyIdx: 3 },
   { key: "value_uplift", label: "Landing Value Uplift", historyIdx: 5 },
   { key: "landing_guarantee", label: "Landing Guarantee Explanation", historyIdx: 8 },
@@ -54,6 +52,8 @@ CONFIG.NUMERIC_CATEGORIES = [
 
 CONFIG.BINARY_CATEGORIES = [
   { key: "greeting", label: "Greeting & Lead Name", historyIdx: 0 },
+  { key: "pb_creation", label: "PB Created", historyIdx: 1 },
+  { key: "mc_call_notes", label: "MC Call Notes", historyIdx: 2 },
   { key: "reason_for_move_pitch", label: "Reason as Sales Argument", historyIdx: 4 },
   { key: "membership_explanation", label: "Membership Explanation", historyIdx: 6 },
   { key: "flex_long_stay_pitch", label: "FLEX Pitch (60+ Nights)", historyIdx: 7 },

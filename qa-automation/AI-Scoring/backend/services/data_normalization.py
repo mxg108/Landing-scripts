@@ -15,12 +15,16 @@ from typing import Iterable, Optional
 
 
 # Timestamp formats encountered in Analyst_History. Order matters: the
-# parser tries each in turn and returns the first match.
+# parser tries each in turn and returns the first match. Date-only forms
+# (no time component) cover migrated rows where the source sheet stored
+# just the call date — e.g. the Sales Phase-E import from FR3.
 _TS_FORMATS = (
     "%m/%d/%Y %H:%M:%S",
     "%Y-%m-%d %H:%M:%S",
     "%m/%d/%Y %H:%M",
     "%Y-%m-%dT%H:%M:%S",
+    "%m/%d/%Y",
+    "%Y-%m-%d",
 )
 
 

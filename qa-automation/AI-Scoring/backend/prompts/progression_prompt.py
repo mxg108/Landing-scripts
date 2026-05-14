@@ -37,6 +37,8 @@ def build_progression_prompt(
             type_hint = f"numeric {sec.score_range[0]}-{sec.score_range[1]}, scored manually by manager"
         elif sec.score_type == "numeric":
             type_hint = f"numeric {sec.score_range[0]}-{sec.score_range[1]}"
+        elif sec.score_type == "manual_yn":
+            type_hint = "binary Y/N/NA, scored manually by manager" if sec.na_applicable else "binary Y/N, scored manually by manager"
         else:
             type_hint = "binary Y/N/NA" if sec.na_applicable else "binary Y/N"
         section_lines.append(

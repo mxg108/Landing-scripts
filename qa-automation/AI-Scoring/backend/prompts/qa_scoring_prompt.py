@@ -28,7 +28,7 @@ def build_scoring_rubric(config: TeamConfig) -> str:
     lines = ["\n=== SCORING RUBRIC ===\n"]
 
     for sec in config.sections:
-        if sec.score_type == "manual":
+        if sec.score_type in ("manual", "manual_yn"):
             lines.append(
                 f"SECTION {sec.section_number} — {sec.name} "
                 f"(SKIP — always manual, never scored by AI)\n"
