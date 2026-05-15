@@ -179,6 +179,11 @@ function lookerSyncForWebApp(propertyName) {
     archiveAndClearMassNotificationQuiet_();
     const { pending, review } = populateRecipientsSheet_(sanitized);
 
+    // The Looker fetch is the source of truth for property_name once it
+    // succeeds — pin the campaign to this property so subject/body tokens
+    // and the email greeting line up with the recipients we just hydrated.
+    setConfigValue_('property_name', propertyName);
+
     const rows = sanitized.map(({ email, name, unit, status }) => ({
       email,
       name,
@@ -186,7 +191,7 @@ function lookerSyncForWebApp(propertyName) {
       status: status || 'PENDING',
     }));
 
-    return { ok: true, rows, pending, review, rawCount: raw.length };
+    return { ok: true, rows, pending, review, rawCount: raw.length, propertyName };
   } catch (e) {
     return { ok: false, error: e.message };
   }
