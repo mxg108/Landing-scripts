@@ -535,6 +535,16 @@ const Config = (() => {
       _buildTemplateChips(data.templates || []);
       _buildCardPicker(data.cards || [], cfg.notificationCard || '');
       _populateFields(cfg);
+
+      // Lock-on-reload: a campaign with both property_name set AND recipients
+      // already hydrated is mid-flight — typically the result of a prior
+      // Looker fetch (or an equivalent paste). Disable Property Name so the
+      // operator can't drift it out from under those recipients. Reset for
+      // next campaign clears property_name, which is the unlock path.
+      var recCount = (data.recipients && data.recipients.length) || 0;
+      if (cfg.propertyName && recCount > 0) {
+        lockPropertyName(cfg.propertyName);
+      }
     } catch (e) {
       console.error('[Config] init() error:', e);
     }
