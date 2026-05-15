@@ -66,6 +66,31 @@ function include(filename) {
   return HtmlService.createHtmlOutputFromFile(filename).getContent();
 }
 
+// ── WebApp config pin ─────────────────────────────────────────────────────────
+
+/**
+ * Returns loadConfig_() with recipientsSheetName pinned to
+ * DEFAULT_RECIPIENTS_SHEET.
+ *
+ * The WebApp UI is resident-only by design — its grid schema is
+ * email/name/unit/status, with no surface for the Move_In_Flow columns
+ * (reservation_id, property_email, vehicle/pet info, occupants, area
+ * manager, …). So every WebApp server endpoint must read/write
+ * Mass_Notification regardless of the operator's send_mode or
+ * recipients_sheet_name — those keys drive the Sheet-menu workflow
+ * (including MIF), which is the only correct surface for the MIF schema.
+ *
+ * Without this pin, mode-aware helpers (getRecipientsSheet_, archive,
+ * send dispatchers) silently redirect WebApp actions to Move_In_Flow,
+ * which is the failure mode the LookerSync fix already addressed at one
+ * call site; this generalises it to every WebApp entrypoint.
+ */
+function webAppCfg_() {
+  const cfg = loadConfig_();
+  cfg.recipientsSheetName = DEFAULT_RECIPIENTS_SHEET;
+  return cfg;
+}
+
 // ── Server → Client: initial load ─────────────────────────────────────────────
 
 /**
@@ -87,7 +112,7 @@ function getInitialData() {
   // Strip the non-serialisable Date objects from cfg before sending to the
   // client. Replace them with pre-formatted yyyy-MM-dd strings so that
   // <input type="date"> can consume them directly.
-  const cfg = loadConfig_();
+  const cfg = webAppCfg_();
   const tz  = cfg.timezone || 'America/Mexico_City';
   const clientCfg = Object.assign({}, cfg);
   delete clientCfg.start;
@@ -97,7 +122,7 @@ function getInitialData() {
 
   const result = {
     config:     clientCfg,
-    recipients: getRecipientsForWebApp_(cfg.recipientsSheetName),
+    recipients: getRecipientsForWebApp_(),
     templates:  Object.keys(EMAIL_TEMPLATES),
     cards:      Object.keys(CARD_REGISTRY),
   };
@@ -128,15 +153,17 @@ function _sheetCellToStr_(v) {
 }
 
 /**
- * Reads the recipients sheet and returns rows as plain objects.
+ * Reads the resident recipients sheet and returns rows as plain objects.
  * Skips blank rows (no email).
  *
- * @param  {string=} sheetName — overrides DEFAULT_RECIPIENTS_SHEET when supplied
+ * Always targets DEFAULT_RECIPIENTS_SHEET — see webAppCfg_() for the
+ * resident-only contract.
+ *
  * @return {Array<{email: string, name: string, unit: string}>}
  */
-function getRecipientsForWebApp_(sheetName) {
+function getRecipientsForWebApp_() {
   const ss = SpreadsheetApp.getActive();
-  const sh = ss.getSheetByName(sheetName || DEFAULT_RECIPIENTS_SHEET);
+  const sh = ss.getSheetByName(DEFAULT_RECIPIENTS_SHEET);
   if (!sh || sh.getLastRow() < 2) return [];
 
   return sh
@@ -176,8 +203,13 @@ function lookerSyncForWebApp(propertyName) {
 
     writeLookerDataSheet_(raw);
     const sanitized = sanitizeOccupants_(raw);
-    archiveAndClearRecipientsQuiet_();
+    archiveAndClearMassNotificationQuiet_();
     const { pending, review } = populateRecipientsSheet_(sanitized);
+
+    // The Looker fetch is the source of truth for property_name once it
+    // succeeds — pin the campaign to this property so subject/body tokens
+    // and the email greeting line up with the recipients we just hydrated.
+    setConfigValue_('property_name', propertyName);
 
     const rows = sanitized.map(({ email, name, unit, status }) => ({
       email,
@@ -186,7 +218,7 @@ function lookerSyncForWebApp(propertyName) {
       status: status || 'PENDING',
     }));
 
-    return { ok: true, rows, pending, review, rawCount: raw.length };
+    return { ok: true, rows, pending, review, rawCount: raw.length, propertyName };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -321,7 +353,7 @@ function resolveAttachmentNames(idsStr) {
  */
 function getEmailPreview() {
   try {
-    const cfg         = loadConfig_();
+    const cfg         = webAppCfg_();
     const result      = buildPreviewHtml_(cfg);
     // Merge config-level and per-row attachment IDs (matches real send pipeline).
     const cfgIds      = parseIdList_(cfg.attachmentFileIds || '');
@@ -399,8 +431,26 @@ function buildPreviewHtml_(cfg) {
  * }}
  */
 function webAppSend(skipWarnings) {
-  const cfg = loadConfig_();
-  const v   = validateConfig_(cfg);
+  const cfg = webAppCfg_();
+
+  // MOVE_IN runs only from the Sheet menu — its schema and per-row tokens
+  // have no surface in the WebApp grid. Block early with a clear error so
+  // the operator switches to INDIVIDUAL/BCC instead of silently sending
+  // resident-shaped emails under MOVE_IN's expectations.
+  if (String(cfg.sendMode).toUpperCase() === 'MOVE_IN') {
+    return {
+      ok: false,
+      errors: [
+        'send_mode is MOVE_IN — Move-In Flow is only supported from the ' +
+        'Sheet menu (Mass Notifications → Move-In mode). Switch send_mode ' +
+        'to INDIVIDUAL or BCC in the Config section to send from the WebApp.',
+      ],
+      warnings: [],
+      requiresConfirm: false,
+    };
+  }
+
+  const v = validateConfig_(cfg);
 
   if (v.errors.length) {
     return { ok: false, errors: v.errors, warnings: v.warnings || [], requiresConfirm: false };
@@ -425,16 +475,18 @@ function webAppSend(skipWarnings) {
 }
 
 /**
- * Archives + clears recipients and restores all config keys to safe defaults.
- * Wraps fullResetForNextUse() — safe from Web App because every internal
- * call uses safeAlert_() (which silently logs in non-UI context).
- * The client should reload the page after this returns.
+ * Archives + clears Mass_Notification and restores all Config keys to safe
+ * defaults. Resident-only by design (see webAppCfg_) — does NOT inherit
+ * fullResetForNextUse()'s mode-aware archive, which would route to
+ * Move_In_Flow when send_mode === 'MOVE_IN' and leave Mass_Notification's
+ * rows behind. The client should reload the page after this returns.
  *
- * @return {{ ok: boolean }}
+ * @return {{ ok: boolean, error?: string }}
  */
 function webAppReset() {
   try {
-    fullResetForNextUse();
+    archiveAndClearMassNotificationQuiet_();
+    resetConfigToDefaults_();
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };

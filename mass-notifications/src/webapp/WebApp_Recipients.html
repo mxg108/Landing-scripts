@@ -667,6 +667,13 @@ document.getElementById('rec-csv-input').addEventListener('change', function (e)
         document.getElementById('rec-tbody').innerHTML = '';
         res.rows.forEach(function (r) { Recipients.addRow(r); });
 
+        // Pin the campaign's Property Name to whatever Looker fetched for.
+        // The server already wrote it to the Config sheet; this disables the
+        // matching input in the Config section so the operator can't drift.
+        if (typeof Config !== 'undefined' && Config.lockPropertyName) {
+          Config.lockPropertyName(res.propertyName || propertyName);
+        }
+
         setStatus(
           'Fetched ' + res.rawCount + ' raw rows → ' +
           res.pending + ' PENDING, ' +

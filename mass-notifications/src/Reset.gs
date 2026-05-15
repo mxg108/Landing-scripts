@@ -89,7 +89,19 @@ function resetStatusesOnly() {
  */
 function fullResetForNextUse() {
   archiveAndClearRecipients();
+  resetConfigToDefaults_();
+  safeAlert_('Full reset complete.');
+}
 
+/**
+ * Restores Config keys to safe defaults — the config-mutation half of
+ * fullResetForNextUse(). Extracted so the WebApp reset can reuse it after
+ * its own (resident-only) archive step, without inheriting the mode-aware
+ * archive that fullResetForNextUse runs.
+ *
+ * Does not touch recipient sheets and does not alert; callers handle both.
+ */
+function resetConfigToDefaults_() {
   const genericSubject =
     'Notice: {{event_name | Property Needs Access}} — {{property_name}} ({{date_range}})';
 
@@ -131,8 +143,6 @@ function fullResetForNextUse() {
   setConfigValue_('sender_display_name',   'Landing Notifications');
   setConfigValue_('disclaimer_html',       genericDisclaimer);
   setConfigValue_('signature_html',        defaultSignature);
-
-  safeAlert_('Full reset complete.');
 }
 
 // ── Undo ──────────────────────────────────────────────────────────────────────

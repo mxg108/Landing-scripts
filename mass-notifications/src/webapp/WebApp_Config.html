@@ -93,6 +93,11 @@
     border-color: #1A61D9;
     background: #fff;
   }
+  .cfg-input:disabled, .cfg-textarea:disabled {
+    background: #eef0f4;
+    color: #6B7280;
+    cursor: not-allowed;
+  }
   .cfg-textarea { resize: vertical; min-height: 80px; }
 
   /* ── Segmented controls ─────────────────────────────────────────────── */
@@ -530,6 +535,16 @@ const Config = (() => {
       _buildTemplateChips(data.templates || []);
       _buildCardPicker(data.cards || [], cfg.notificationCard || '');
       _populateFields(cfg);
+
+      // Lock-on-reload: a campaign with both property_name set AND recipients
+      // already hydrated is mid-flight — typically the result of a prior
+      // Looker fetch (or an equivalent paste). Disable Property Name so the
+      // operator can't drift it out from under those recipients. Reset for
+      // next campaign clears property_name, which is the unlock path.
+      var recCount = (data.recipients && data.recipients.length) || 0;
+      if (cfg.propertyName && recCount > 0) {
+        lockPropertyName(cfg.propertyName);
+      }
     } catch (e) {
       console.error('[Config] init() error:', e);
     }
@@ -766,6 +781,21 @@ const Config = (() => {
     _showHint('\u26A0\uFE0F Save error: ' + (e && e.message ? e.message : 'unknown'));
   }
 
+  /**
+   * Locks the Property Name field to a value sourced from the Looker fetch.
+   * The server already persisted the value to the Config sheet as part of
+   * lookerSyncForWebApp(); this just mirrors the new value in the UI and
+   * disables the input so the campaign stays pinned to the property whose
+   * recipients we just hydrated.
+   */
+  function lockPropertyName(name) {
+    var el = document.getElementById('cfg-property_name');
+    if (!el) return;
+    el.value    = name || '';
+    el.disabled = true;
+    el.title    = 'Set by Looker fetch \u2014 reset the campaign to change.';
+  }
+
   // ── Phase 1 fires here — immediately when this script is parsed ───────────
   //
   // DOMContentLoaded is guaranteed to fire after this <script> block is
@@ -776,7 +806,7 @@ const Config = (() => {
     _wireStaticUI();
   });
 
-  return { init, getValues };
+  return { init, getValues, lockPropertyName };
 
 })();
 </script>
