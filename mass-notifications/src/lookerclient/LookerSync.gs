@@ -40,7 +40,7 @@ function syncFromLooker() {
     const sanitized = sanitizeOccupants_(raw);
 
     // 4. Archive & clear Mass_Notification (no intermediate alert)
-    archiveAndClearRecipientsQuiet_();
+    archiveAndClearMassNotificationQuiet_();
 
     // 5. Populate Mass_Notification
     const { pending, review } = populateRecipientsSheet_(sanitized);
@@ -58,6 +58,37 @@ function syncFromLooker() {
   } catch (e) {
     safeAlert_(`Looker sync failed:\n${e.message}`);
   }
+}
+
+// ── Archive & clear (Looker-specific, mode-agnostic) ─────────────────────────
+
+/**
+ * Archives + clears the Mass_Notification sheet, regardless of cfg.sendMode.
+ *
+ * Looker sync ALWAYS targets Mass_Notification, so it must not go through
+ * archiveAndClearRecipientsQuiet_ (mode-aware — clears Move_In_Flow when
+ * sendMode === 'MOVE_IN') or getRecipientsSheet_ (honors
+ * cfg.recipientsSheetName, which the MOVE_IN validator nudges operators to
+ * point at Move_In_Flow). Either path would route Looker writes to the
+ * wrong tab while MOVE_IN mode is active.
+ */
+function archiveAndClearMassNotificationQuiet_() {
+  const cfg  = loadConfig_();
+  const ss   = SpreadsheetApp.getActive();
+  const sh   = ss.getSheetByName(DEFAULT_RECIPIENTS_SHEET);
+  if (!sh) throw new Error(`Missing sheet: "${DEFAULT_RECIPIENTS_SHEET}".`);
+
+  const last = sh.getLastRow();
+  if (last < 2) return;
+
+  const data = sh.getRange(2, 1, last - 1, COL_MAX).getValues();
+  try {
+    archiveCampaignToDb_(cfg, sh.getName(), data);
+  } catch (e) {
+    // DB write failure must not block the sync; Run_Log RowStates is the fallback.
+    Logger.log('DB archive failed (data preserved in Run_Log): ' + e.message);
+  }
+  sh.getRange(2, 1, last - 1, COL_MAX).clearContent();
 }
 
 // ── Raw sheet writer ──────────────────────────────────────────────────────────
@@ -211,14 +242,19 @@ function sanitizeOccupants_(rows) {
 /**
  * Writes sanitised rows to Mass_Notification starting at row 2.
  * The sheet must already be cleared before calling this
- * (archiveAndClearRecipientsQuiet_ handles that).
+ * (archiveAndClearMassNotificationQuiet_ handles that).
+ *
+ * Always targets DEFAULT_RECIPIENTS_SHEET directly — Looker is mode-agnostic
+ * and must not honor cfg.recipientsSheetName, which would route writes to
+ * Move_In_Flow when MOVE_IN mode is active.
  *
  * @param {Array<{email, name, unit, status, notes}>} rows
  * @return {{ pending: number, review: number }}
  */
 function populateRecipientsSheet_(rows) {
-  const cfg = loadConfig_();
-  const sh  = getRecipientsSheet_(cfg);
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName(DEFAULT_RECIPIENTS_SHEET);
+  if (!sh) throw new Error(`Missing sheet: "${DEFAULT_RECIPIENTS_SHEET}".`);
   let pending = 0, review = 0;
 
   const data = rows.map(({ email, name, unit, status, notes }) => {

@@ -176,7 +176,7 @@ function lookerSyncForWebApp(propertyName) {
 
     writeLookerDataSheet_(raw);
     const sanitized = sanitizeOccupants_(raw);
-    archiveAndClearRecipientsQuiet_();
+    archiveAndClearMassNotificationQuiet_();
     const { pending, review } = populateRecipientsSheet_(sanitized);
 
     const rows = sanitized.map(({ email, name, unit, status }) => ({
