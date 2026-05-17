@@ -27,3 +27,8 @@ mass-notifications/src/lookerclient/Looker_API_Reference_and_Apps_Script_Plan.md
 # AI assistant context / spec docs (kept locally, not shared via git)
 CLAUDE.md
 **/CLAUDE.md
+
+# Local-only onboarding walkthrough for new contributors. CONTRIBUTING.md is
+# the shared/tracked policy doc; this file is the tutor-style companion that
+# lives only on the lead's machine.
+docs/git-for-the-recruit.md
