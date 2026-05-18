@@ -1,9 +1,10 @@
 """
 Dialpad API client.
-Handles: user lookup, call listing by agent + timeframe, transcript fetching.
-Recording download is stubbed — requires recordings_export scope (contact BI Manager).
+Handles: user lookup, call listing by agent + timeframe, transcript fetching,
+recording download.
 """
 
+import asyncio
 import os
 from datetime import datetime
 from typing import Optional
@@ -11,6 +12,19 @@ import httpx
 
 BASE_URL = "https://dialpad.com/api/v2"
 CALL_DURATION_FLAG_MS = 25 * 60 * 1000  # 25 minutes — flag for manager review
+
+# Cap concurrent Dialpad requests. Multi-upload flows fan out background tasks
+# that all hit /transcripts and /call/{id}; without this, bursts get 429'd and
+# silently return empty metadata for every call after the first.
+_SEMAPHORE = asyncio.Semaphore(5)
+
+
+class DialpadRateLimited(Exception):
+    """Raised when Dialpad returns 429 — caller may choose to retry."""
+
+
+class NoRecordingAvailable(Exception):
+    """Raised when a call has no associated recording to download."""
 
 # Dialpad moment types to strip before passing to the scoring model (noise)
 FILTERED_MOMENT_TYPES = {
@@ -47,7 +61,7 @@ async def get_user_by_email(email: str) -> Optional[dict]:
         return None
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with _SEMAPHORE, httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{BASE_URL}/users",
                 headers=hdrs,
@@ -104,7 +118,7 @@ async def get_user_id_by_name(agent_name: str) -> Optional[str]:
     Matches case-insensitively on display_name or first+last name.
     Returns None if no match found.
     """
-    async with httpx.AsyncClient() as client:
+    async with _SEMAPHORE, httpx.AsyncClient() as client:
         response = await client.get(
             f"{BASE_URL}/users",
             headers=_headers(),
@@ -153,7 +167,7 @@ async def list_calls_for_user(
         params["cursor"] = cursor
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with _SEMAPHORE, httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{BASE_URL}/call",
                 headers=hdrs,
@@ -226,7 +240,7 @@ async def get_calls_for_agent(
     started_after = int(date_start.timestamp() * 1000)
     started_before = int(date_end.timestamp() * 1000)
 
-    async with httpx.AsyncClient() as client:
+    async with _SEMAPHORE, httpx.AsyncClient() as client:
         response = await client.get(
             f"{BASE_URL}/stats/calls",
             headers=_headers(),
@@ -271,7 +285,7 @@ async def get_recording_share_link(
 
     hdrs["Content-Type"] = "application/json"
     try:
-        async with httpx.AsyncClient() as client:
+        async with _SEMAPHORE, httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{BASE_URL}/recordingsharelink",
                 headers=hdrs,
@@ -320,7 +334,7 @@ async def get_call_details(call_id: str) -> dict:
         return empty
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with _SEMAPHORE, httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{BASE_URL}/call/{call_id}",
                 headers=_headers(),
@@ -328,29 +342,36 @@ async def get_call_details(call_id: str) -> dict:
             )
             resp.raise_for_status()
             data = resp.json()
-
-            contact = data.get("contact", {})
-            target = data.get("target", {})
-
-            return {
-                "caller_name": contact.get("name", "") or "",
-                "caller_phone": contact.get("phone", "") or data.get("external_number", "") or "",
-                "caller_email": contact.get("email", "") or "",
-                "direction": data.get("direction", ""),
-                "external_number": data.get("external_number", ""),
-                "internal_number": data.get("internal_number", ""),
-                "was_recorded": data.get("was_recorded", False),
-                "is_transferred": data.get("is_transferred", False),
-                "mos_score": data.get("mos_score"),
-                "date_connected": data.get("date_connected", ""),
-                "date_ended": data.get("date_ended", ""),
-                "total_duration": data.get("total_duration", 0),
-                "target_name": target.get("name", "") or "",
-                "target_type": target.get("type", "") or "",
-            }
-    except Exception as e:
-        print(f"[dialpad_client] get_call_details failed for {call_id}: {e}")
+    except httpx.HTTPStatusError as e:
+        status = e.response.status_code
+        if status == 429:
+            print(f"[dialpad_client] get_call_details rate-limited for {call_id} — metadata blank")
+            raise DialpadRateLimited(f"429 on /call/{call_id}") from e
+        print(f"[dialpad_client] get_call_details HTTP {status} for {call_id}: {e}")
         return empty
+    except httpx.RequestError as e:
+        print(f"[dialpad_client] get_call_details request error for {call_id}: {e}")
+        return empty
+
+    contact = data.get("contact", {})
+    target = data.get("target", {})
+
+    return {
+        "caller_name": contact.get("name", "") or "",
+        "caller_phone": contact.get("phone", "") or data.get("external_number", "") or "",
+        "caller_email": contact.get("email", "") or "",
+        "direction": data.get("direction", ""),
+        "external_number": data.get("external_number", ""),
+        "internal_number": data.get("internal_number", ""),
+        "was_recorded": data.get("was_recorded", False),
+        "is_transferred": data.get("is_transferred", False),
+        "mos_score": data.get("mos_score"),
+        "date_connected": data.get("date_connected", ""),
+        "date_ended": data.get("date_ended", ""),
+        "total_duration": data.get("total_duration", 0),
+        "target_name": target.get("name", "") or "",
+        "target_type": target.get("type", "") or "",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +391,7 @@ async def get_transcript(call_id: str) -> dict:
         }
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with _SEMAPHORE, httpx.AsyncClient() as client:
             response = await client.get(
                 f"{BASE_URL}/transcripts/{call_id}",
                 headers=_headers(),
@@ -460,47 +481,50 @@ async def get_transcript(call_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Recording download (requires recordings_export scope — stubbed for now)
+# Recording download (requires recordings_export scope on the API key)
 # ---------------------------------------------------------------------------
 
-async def download_recording(call_id: str, dest_path: str) -> str:
+async def download_recording(call_id: str) -> bytes:
     """
-    Download call recording audio to dest_path.
+    Fetch the call recording audio bytes for `call_id`.
 
-    REQUIRES: recordings_export scope on the Dialpad API key.
-    Contact your BI Manager to enable this scope.
+    Two-step: GET /call/{id} → extract recording_details[0].url,
+    then GET that URL with apikey query param (Dialpad serves the audio
+    via a signed-redirect).
 
-    Until enabled, this raises NotImplementedError.
-    Once the scope is confirmed, replace the raise with the implementation below.
+    Raises:
+      RuntimeError          — DIALPAD_API_KEY missing.
+      NoRecordingAvailable  — call has no recording_details.
+      DialpadRateLimited    — Dialpad returned 429 on either step.
+      httpx.HTTPStatusError — any other non-2xx (401 = missing scope).
     """
-    raise NotImplementedError(
-        "Recording auto-download requires the recordings_export API scope. "
-        "Enable it via Admin Settings > Authentication > API Keys, "
-        "or contact your BI Manager. In the meantime, upload audio files manually."
-    )
+    token = os.getenv("DIALPAD_API_KEY")
+    if not token:
+        raise RuntimeError("DIALPAD_API_KEY not set")
 
-    # --- Implementation (uncomment when scope is enabled) ---
-    # import httpx, os
-    # token = os.getenv("DIALPAD_API_KEY")
-    # async with httpx.AsyncClient() as client:
-    #     # Step 1: get recording URL from call details
-    #     r = await client.get(f"{BASE_URL}/call/{call_id}", headers=_headers(), timeout=15)
-    #     r.raise_for_status()
-    #     details = r.json().get("recording_details", [])
-    #     if not details:
-    #         raise ValueError(f"No recording_details found for call {call_id}")
-    #     recording_url = details[0]["url"]
-    #
-    #     # Step 2: download with apikey query param (required by Dialpad)
-    #     audio = await client.get(
-    #         recording_url,
-    #         params={"apikey": token},
-    #         headers={"bearer": token},
-    #         follow_redirects=True,
-    #         timeout=60,
-    #     )
-    #     audio.raise_for_status()
-    #
-    # with open(dest_path, "wb") as f:
-    #     f.write(audio.content)
-    # return dest_path
+    async with _SEMAPHORE, httpx.AsyncClient(follow_redirects=True) as client:
+        meta = await client.get(
+            f"{BASE_URL}/call/{call_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15,
+        )
+        if meta.status_code == 429:
+            raise DialpadRateLimited(f"429 on /call/{call_id}")
+        meta.raise_for_status()
+
+        details = meta.json().get("recording_details") or []
+        if not details:
+            raise NoRecordingAvailable(f"No recording_details for call {call_id}")
+        recording_url = details[0].get("url")
+        if not recording_url:
+            raise NoRecordingAvailable(f"recording_details[0].url missing for call {call_id}")
+
+        audio = await client.get(
+            recording_url,
+            params={"apikey": token},
+            timeout=60,
+        )
+        if audio.status_code == 429:
+            raise DialpadRateLimited(f"429 on recording fetch for {call_id}")
+        audio.raise_for_status()
+        return audio.content
