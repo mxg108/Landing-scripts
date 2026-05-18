@@ -14,191 +14,48 @@
 -->
 
 <style>
-  /* ── Section card ─────────────────────────────────────────────────────── */
-  #section-recipients {
-    background: #ffffff;
-    border: 1px solid #dce3f0;
-    border-radius: 10px;
-    padding: 24px 28px;
-    margin-bottom: 28px;
-  }
-
-  /* ── Header row ─────────────────────────────────────────────────────── */
-  .rec-header {
+  /* ── Subtitle / counter row ──────────────────────────────────────────── */
+  .rec-subtitle-row {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    margin-bottom: 16px;
-  }
-  .rec-header h2 {
-    font-size: 17px;
-    font-weight: 700;
-    color: #15192D;
-    margin: 0 0 4px;
+    gap: 12px;
+    margin-bottom: 1.25rem;
   }
   .rec-subtitle {
-    font-size: 12px;
-    color: #4A4A4A;
+    font-size: 0.78rem;
+    color: var(--muted);
     margin: 0;
+    line-height: 1.6;
   }
 
-  /* ── Row counter badge ──────────────────────────────────────────────── */
+  /* ── Row counter pill ────────────────────────────────────────────────── */
   #rec-counter {
-    font-size: 13px;
-    font-weight: 600;
-    background: #E7EFFB;
-    color: #1A61D9;
-    border-radius: 20px;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 500;
+    background: var(--bg);
+    color: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
     padding: 4px 12px;
     white-space: nowrap;
+    letter-spacing: 0.02em;
   }
   #rec-counter.rec-over-limit {
-    background: #fde8e8;
-    color: #D9534F;
-  }
-
-  /* ── Toolbar ────────────────────────────────────────────────────────── */
-  .rec-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 14px;
-    flex-wrap: wrap;
-  }
-  .rec-btn {
-    font-size: 13px;
-    font-family: Arial, Helvetica, sans-serif;
-    border-radius: 6px;
-    padding: 6px 14px;
-    cursor: pointer;
-    border: none;
-    transition: opacity .15s;
-  }
-  .rec-btn:hover { opacity: .85; }
-  .rec-btn-primary {
-    background: #1A61D9;
-    color: #fff;
-  }
-  .rec-btn-secondary {
-    background: #E7EFFB;
-    color: #15192D;
-    border: 1px solid #c3d4ef;
-  }
-  .rec-toolbar-hint {
-    font-size: 12px;
-    color: #888;
-    margin-left: 4px;
-  }
-  /* Drag-over visual feedback on the toolbar drop zone */
-  .rec-toolbar.rec-drag-over {
-    background: #E7EFFB;
-    border: 2px dashed #1A61D9;
-    border-radius: 8px;
-    padding: 8px 10px;
-  }
-
-  /* ── Table ──────────────────────────────────────────────────────────── */
-  .rec-table-wrap {
-    overflow-x: auto;
-    border: 1px solid #dce3f0;
-    border-radius: 8px;
-  }
-  #rec-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-  }
-  #rec-table thead tr {
-    background: #f5f7fa;
-  }
-  #rec-table th {
-    text-align: left;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: .5px;
-    color: #4A4A4A;
-    padding: 9px 10px;
-    border-bottom: 1px solid #dce3f0;
-  }
-  #rec-table td {
-    padding: 4px 6px;
-    border-bottom: 1px solid #f0f2f7;
-    vertical-align: middle;
-  }
-  #rec-table tbody tr:last-child td { border-bottom: none; }
-  #rec-table tbody tr:hover { background: #fafbfd; }
-
-  /* ── Column widths ──────────────────────────────────────────────────── */
-  .rec-col-num  { width: 36px; text-align: center; color: #aaa; font-size: 12px; }
-  .rec-col-email{ min-width: 220px; }
-  .rec-col-name { min-width: 160px; }
-  .rec-col-unit { min-width: 90px;  }
-  .rec-col-del  { width: 36px; text-align: center; }
-
-  /* ── Inputs inside table cells ──────────────────────────────────────── */
-  .rec-input {
-    width: 100%;
-    box-sizing: border-box;
-    border: 1px solid transparent;
-    border-radius: 4px;
-    padding: 5px 8px;
-    font-size: 13px;
-    font-family: Arial, Helvetica, sans-serif;
-    color: #15192D;
-    background: transparent;
-    outline: none;
-    transition: border-color .15s, background .15s;
-  }
-  .rec-input:focus {
-    border-color: #1A61D9;
-    background: #fff;
-  }
-  /* Email states set by JS on blur */
-  .rec-input.rec-invalid {
-    border-color: #D9534F;
-    background: #fff5f5;
-  }
-  .rec-input.rec-valid {
-    border-color: #28A745;
-  }
-
-  /* ── Delete button ──────────────────────────────────────────────────── */
-  .rec-del-btn {
-    background: none;
-    border: none;
-    color: #ccc;
-    cursor: pointer;
-    font-size: 14px;
-    line-height: 1;
-    padding: 4px 6px;
-    border-radius: 4px;
-    transition: color .15s, background .15s;
-  }
-  .rec-del-btn:hover {
-    color: #D9534F;
-    background: #fde8e8;
-  }
-
-  /* ── Required asterisk ──────────────────────────────────────────────── */
-  .rec-req { color: #D9534F; margin-left: 2px; }
-
-  /* ── Empty state ────────────────────────────────────────────────────── */
-  #rec-empty {
-    text-align: center;
-    padding: 32px 16px;
-    color: #aaa;
-    font-size: 13px;
-    display: none;
+    background: var(--error-bg);
+    color: var(--error);
+    border-color: var(--error-bg);
   }
 
   /* ── Looker fetch panel ──────────────────────────────────────────────── */
   .looker-panel {
-    background: #F5F7FA;
-    border: 1px solid #dce3f0;
-    border-radius: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: var(--radius-ctrl);
     padding: 14px 16px;
-    margin-bottom: 20px;
+    margin-bottom: 1.25rem;
   }
   .looker-panel-row {
     display: flex;
@@ -207,72 +64,229 @@
     flex-wrap: wrap;
   }
   .looker-panel-label {
-    font-size: 13px;
-    font-weight: 600;
-    color: #15192D;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--text);
     white-space: nowrap;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
   .looker-panel-label span {
     font-weight: 400;
-    font-size: 11px;
-    color: #888;
-    margin-left: 4px;
+    font-size: 0.68rem;
+    color: var(--muted);
+    margin-left: 6px;
+    text-transform: none;
+    letter-spacing: 0;
   }
   #looker-property-input {
     flex: 1;
     min-width: 180px;
     max-width: 320px;
     box-sizing: border-box;
-    border: 1px solid #c3d4ef;
-    border-radius: 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-ctrl);
     padding: 7px 10px;
-    font-size: 13px;
-    font-family: Arial, Helvetica, sans-serif;
-    color: #15192D;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--text);
+    background: var(--surface);
     outline: none;
     transition: border-color .15s;
   }
-  #looker-property-input:focus { border-color: #1A61D9; }
+  #looker-property-input:focus { border-color: var(--accent); }
   #looker-fetch-btn {
-    font-size: 13px;
-    font-family: Arial, Helvetica, sans-serif;
-    background: #15192D;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    font-weight: 500;
+    background: var(--accent);
     color: #fff;
-    border: none;
-    border-radius: 6px;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-ctrl);
     padding: 7px 16px;
     cursor: pointer;
     white-space: nowrap;
-    transition: opacity .15s;
+    transition: background .15s;
   }
-  #looker-fetch-btn:hover    { opacity: .85; }
-  #looker-fetch-btn:disabled { opacity: .5; cursor: not-allowed; }
+  #looker-fetch-btn:hover    { background: var(--accent-hover); }
+  #looker-fetch-btn:disabled { background: var(--border); border-color: var(--border); cursor: not-allowed; }
   #looker-status-line {
     margin-top: 10px;
-    font-size: 12px;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
     min-height: 18px;
     display: none;
   }
-  .looker-status-ok    { color: #1A7F37; }
-  .looker-status-error { color: #D9534F; }
-  .looker-status-info  { color: #555; }
+  .looker-status-ok    { color: var(--success); }
+  .looker-status-error { color: var(--error); }
+  .looker-status-info  { color: var(--muted); }
+
+  /* ── Toolbar ─────────────────────────────────────────────────────────── */
+  .rec-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+  }
+  .rec-btn {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    font-weight: 500;
+    border-radius: var(--radius-ctrl);
+    padding: 7px 14px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background .15s, color .15s, border-color .15s;
+  }
+  .rec-btn-primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  .rec-btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .rec-btn-secondary {
+    background: transparent;
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  .rec-btn-secondary:hover { background: var(--bg); }
+  .rec-toolbar-hint {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--muted);
+    margin-left: 4px;
+  }
+  .rec-toolbar.rec-drag-over {
+    background: var(--bg);
+    border: 2px dashed var(--accent);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+
+  /* ── Table ───────────────────────────────────────────────────────────── */
+  .rec-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  #rec-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+  }
+  #rec-table thead tr {
+    background: var(--navy);
+  }
+  #rec-table th {
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: rgba(255, 255, 255, 0.85);
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--navy);
+  }
+  #rec-table td {
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+    background: var(--surface);
+  }
+  #rec-table tbody tr:last-child td { border-bottom: none; }
+  #rec-table tbody tr:hover td { background: var(--bg); }
+
+  /* ── Column widths ───────────────────────────────────────────────────── */
+  .rec-col-num    { width: 36px; text-align: center; color: var(--muted); font-size: 0.7rem; }
+  .rec-col-email  { min-width: 220px; }
+  .rec-col-name   { min-width: 160px; }
+  .rec-col-unit   { min-width: 90px;  }
+  .rec-col-status { width: 84px; text-align: center; }
+  .rec-col-del    { width: 36px; text-align: center; }
+
+  /* ── Inputs inside table cells ───────────────────────────────────────── */
+  .rec-input {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid transparent;
+    border-radius: var(--radius-ctrl);
+    padding: 5px 8px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--text);
+    background: transparent;
+    outline: none;
+    transition: border-color .15s, background .15s;
+  }
+  .rec-input:focus {
+    border-color: var(--accent);
+    background: var(--surface);
+  }
+  .rec-input.rec-invalid {
+    border-color: var(--red);
+    background: var(--error-bg);
+  }
+  .rec-input.rec-valid { border-color: var(--green); }
+
+  /* ── Delete button ───────────────────────────────────────────────────── */
+  .rec-del-btn {
+    background: none;
+    border: none;
+    color: var(--border);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 4px 6px;
+    border-radius: var(--radius-ctrl);
+    transition: color .15s, background .15s;
+  }
+  .rec-del-btn:hover {
+    color: var(--red);
+    background: var(--error-bg);
+  }
+
+  .rec-req { color: var(--red); margin-left: 2px; }
+
+  /* ── Empty state ─────────────────────────────────────────────────────── */
+  #rec-empty {
+    text-align: center;
+    padding: 32px 16px;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    display: none;
+  }
 
   /* ── Status badges ───────────────────────────────────────────────────── */
-  .rec-col-status { width: 80px; text-align: center; }
   .rec-status-badge {
     display: inline-block;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: .3px;
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    font-weight: 500;
+    letter-spacing: .08em;
+    text-transform: uppercase;
     padding: 2px 8px;
-    border-radius: 10px;
+    border-radius: var(--radius-pill);
     white-space: nowrap;
   }
-  .rec-status-pending { background: #E7EFFB; color: #1A61D9; }
-  .rec-status-review  { background: #FDE8E8; color: #D9534F; }
+  .rec-status-pending { background: var(--bg);        color: var(--accent);  }
+  .rec-status-review  { background: var(--error-bg);  color: var(--error);   }
 </style>
 
 <section id="section-recipients">
+  <h2>Recipients</h2>
+
+  <div class="rec-subtitle-row">
+    <p class="rec-subtitle">
+      Maps to <code>Mass_Notification</code> sheet — col A (Email), B (Name), C (Unit).
+      Saving will overwrite the sheet.
+    </p>
+    <span id="rec-counter">0 / 500</span>
+  </div>
 
   <!-- ── Looker fetch panel ─────────────────────────────────────────── -->
   <div class="looker-panel">
@@ -290,17 +304,6 @@
       <button id="looker-fetch-btn">Fetch recipients</button>
     </div>
     <div id="looker-status-line"></div>
-  </div>
-
-  <div class="rec-header">
-    <div>
-      <h2>Recipients</h2>
-      <p class="rec-subtitle">
-        Maps to Mass_Notification sheet — col A (Email), B (Name), C (Unit).
-        Saving will overwrite the sheet.
-      </p>
-    </div>
-    <span id="rec-counter">0 / 500</span>
   </div>
 
   <div class="rec-toolbar">

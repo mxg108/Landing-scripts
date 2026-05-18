@@ -1,39 +1,33 @@
 <style>
   /* ── Section card ────────────────────────────────────────────────────────── */
-  #section-send {
-    background: #ffffff;
-    border: 1px solid #dce3f0;
-    border-radius: 10px;
-    padding: 24px 28px;
-    margin-bottom: 28px;
-  }
-  #section-send h2 {
-    font-size: 17px;
-    font-weight: 700;
-    color: #15192D;
-    margin: 0 0 20px;
-  }
+  /* Section card scaffolding lives in Index.html. */
 
   /* ── Send summary card ───────────────────────────────────────────────────── */
   #send-summary {
-    background: #f5f7fa;
-    border: 1px solid #dce3f0;
-    border-radius: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: var(--radius-ctrl);
     padding: 14px 18px;
     margin-bottom: 20px;
-    font-size: 13px;
-    color: #15192D;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--text);
     line-height: 1.7;
     display: none; /* shown when summary loads */
   }
-  #send-summary strong { color: #1A61D9; }
+  #send-summary strong {
+    color: var(--accent);
+    font-weight: 500;
+  }
 
   /* ── Banners ─────────────────────────────────────────────────────────────── */
   .send-banner {
-    border-radius: 8px;
+    border-radius: var(--radius-ctrl);
     padding: 12px 16px;
     margin-bottom: 16px;
-    font-size: 13px;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
     line-height: 1.6;
     display: none;
   }
@@ -42,19 +36,22 @@
     padding-left: 18px;
   }
   #send-error-banner {
-    background: #FEF2F2;
-    border: 1px solid #FCA5A5;
-    color: #991B1B;
+    background: var(--error-bg);
+    border: 1px solid var(--red);
+    border-left: 4px solid var(--red);
+    color: var(--error);
   }
   #send-warning-banner {
-    background: #FFFBEB;
-    border: 1px solid #FCD34D;
-    color: #92400E;
+    background: var(--warning-bg);
+    border: 1px solid var(--amber);
+    border-left: 4px solid var(--amber);
+    color: var(--warning);
   }
   #send-success-banner {
-    background: #F0FDF4;
-    border: 1px solid #86EFAC;
-    color: #166534;
+    background: var(--success-bg);
+    border: 1px solid var(--green);
+    border-left: 4px solid var(--green);
+    color: var(--success);
   }
 
   /* ── Action row ──────────────────────────────────────────────────────────── */
@@ -70,19 +67,19 @@
   #send-reset-row {
     margin-top: 16px;
     padding-top: 14px;
-    border-top: 1px solid #f0f2f7;
+    border-top: 1px solid var(--border);
   }
 
   /* ── Buttons ─────────────────────────────────────────────────────────────── */
   .send-btn {
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 13px;
-    font-weight: 600;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    font-weight: 500;
     padding: 9px 22px;
-    border-radius: 6px;
-    border: none;
+    border-radius: var(--radius-ctrl);
+    border: 1px solid transparent;
     cursor: pointer;
-    transition: background .15s, opacity .15s;
+    transition: background .15s, opacity .15s, color .15s, border-color .15s;
     display: inline-flex;
     align-items: center;
     gap: 7px;
@@ -90,32 +87,40 @@
   .send-btn:disabled { opacity: .5; cursor: default; }
 
   #btn-send-primary {
-    background: #15192D;
+    background: var(--accent);
     color: #fff;
+    border-color: var(--accent);
   }
-  #btn-send-primary:hover:not(:disabled) { background: #1e2540; }
+  #btn-send-primary:hover:not(:disabled) {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+  }
 
   #btn-send-proceed {
-    background: #D97706;
+    background: var(--amber);
     color: #fff;
+    border-color: var(--amber);
     display: none;
   }
-  #btn-send-proceed:hover:not(:disabled) { background: #B45309; }
+  #btn-send-proceed:hover:not(:disabled) {
+    background: var(--warning);
+    border-color: var(--warning);
+  }
 
   #btn-send-cancel {
-    background: #f5f7fa;
-    color: #15192D;
-    border: 1px solid #dce3f0;
+    background: transparent;
+    color: var(--text);
+    border-color: var(--border);
     display: none;
   }
-  #btn-send-cancel:hover:not(:disabled) { background: #e8ecf4; }
+  #btn-send-cancel:hover:not(:disabled) { background: var(--bg); }
 
   #btn-send-reset {
-    background: #f5f7fa;
-    color: #15192D;
-    border: 1px solid #dce3f0;
+    background: transparent;
+    color: var(--accent);
+    border-color: var(--accent);
   }
-  #btn-send-reset:hover:not(:disabled) { background: #e8ecf4; }
+  #btn-send-reset:hover:not(:disabled) { background: var(--bg); }
 
   /* ── Spinner ─────────────────────────────────────────────────────────────── */
   .send-spinner {
