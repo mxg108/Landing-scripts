@@ -190,6 +190,43 @@ if [[ -n "$DIRTY" ]]; then
 fi
 echo ""
 
+# ── Pre-push manifest preview ─────────────────────────────────────────────────
+# Ask clasp (or count staging inputs) what this push will actually deploy.
+# Catches the rootDir silent-no-op failure mode: a misconfigured .clasp.json
+# pointing at a non-existent dir lets `clasp push` exit 0 with zero files
+# transferred, so .push-log records "success" while nothing reaches GAS.
+echo "  Files clasp will push:"
+if [[ -n "$BUILD_DIR" ]]; then
+  # Multi-team: BUILD_DIR is created post-confirmation (staging step), so
+  # clasp status can't be queried here. Fall back to staging-input counts.
+  _count_pushable() {
+    find "$1" -type f \
+      \( -name '*.gs' -o -name '*.js' -o -name '*.html' -o -name '*.json' \) \
+      2>/dev/null | wc -l | tr -d ' '
+  }
+  BASE_FILES=$(_count_pushable "$REPO_ROOT/$BASE_DIR")
+  OVERLAY_FILES=$(_count_pushable "$REPO_ROOT/$CLASP_DIR")
+  echo "    (multi-team — exact manifest available only after staging)"
+  echo "    Base files     : $BASE_FILES  (from $BASE_DIR)"
+  echo "    Overlay files  : $OVERLAY_FILES  (from $CLASP_DIR)"
+else
+  TRACKED=$(cd "$REPO_ROOT/$CLASP_DIR" && clasp status 2>/dev/null \
+            | awk '/^Tracked files:/{f=1; next} /^Untracked files:/{f=0} f && NF{print}')
+  TRACKED_COUNT=$(echo "$TRACKED" | awk 'NF{c++} END{print c+0}')
+  if (( TRACKED_COUNT == 0 )); then
+    echo ""
+    echo "  ❌ clasp sees zero tracked files in $CLASP_DIR."
+    echo "     Check rootDir in $CLASP_DIR/.clasp.json — a misconfigured"
+    echo "     rootDir makes clasp push silently no-op."
+    echo ""
+    exit 1
+  fi
+  echo "$TRACKED" | sed 's/^/    /'
+  echo "    ──"
+  echo "    Total: $TRACKED_COUNT file(s)"
+fi
+echo ""
+
 if [[ "$LIVE" == "yes" ]]; then
   echo "  ┌───────────────────────────────────────────────┐"
   echo "  │  ⚠️  $TARGET is LIVE                          "
