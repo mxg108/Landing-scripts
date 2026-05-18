@@ -24,7 +24,13 @@ from backend.services.sheets_service import (
     finalize_to_analyst_history,
     trigger_apps_script,
 )
-from backend.services.dialpad_client import get_user_id_by_name, get_calls_for_agent
+from backend.services.dialpad_client import (
+    get_user_id_by_name,
+    get_calls_for_agent,
+    get_transcript,
+    get_call_details,
+    DialpadRateLimited,
+)
 
 router = APIRouter(tags=["scoring"])
 
@@ -102,6 +108,15 @@ async def score_single_call(
     _jobs[key] = {"status": "pending", "call_id": call_id}
     config = get_team_config(team_id)
 
+    # Pre-fetch Dialpad metadata in the handler (sequential per request) so
+    # fan-out background tasks don't burst Dialpad and lose metadata to 429s.
+    transcript_data = await get_transcript(call_id)
+    try:
+        call_details = await get_call_details(call_id)
+    except DialpadRateLimited:
+        print(f"[score] Dialpad rate-limited fetching call_details for {call_id}; proceeding with blanks")
+        call_details = None
+
     async def run():
         try:
             _jobs[key]["status"] = "scoring"
@@ -113,6 +128,8 @@ async def score_single_call(
                 manager_email=manager_email,
                 config=config,
                 duration_ms=duration_ms,
+                transcript_data=transcript_data,
+                call_details=call_details,
             )
             row_num = write_draft_to_fr_ai(scorecard, config)
             _jobs[key]["status"] = "complete"

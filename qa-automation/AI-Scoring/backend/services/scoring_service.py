@@ -5,7 +5,7 @@ Ties together: Dialpad transcript -> Notion SOP -> Gemini scoring.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from backend.models.scorecard import ScorecardWithMeta
 from backend.services.audio_service import score_audio
@@ -24,16 +24,22 @@ async def score_call(
     manager_email: str,
     config: TeamConfig,
     duration_ms: float = 0,
+    transcript_data: Optional[dict] = None,
+    call_details: Optional[dict] = None,
 ) -> ScorecardWithMeta:
     """
     Full pipeline for one call:
-    1. Fetch transcript + moments from Dialpad
+    1. Fetch transcript + moments from Dialpad (or use caller-supplied)
     2. Fetch matching SOP from Notion
     3. Score with Gemini (audio + transcript + SOP)
     4. Return enriched scorecard
+
+    `transcript_data` and `call_details` may be pre-fetched by the route handler
+    to avoid concurrent Dialpad bursts across fan-out background tasks.
     """
     # Step 1: Dialpad transcript
-    transcript_data = await get_transcript(call_id)
+    if transcript_data is None:
+        transcript_data = await get_transcript(call_id)
     transcript_text = transcript_data["transcript_text"]
     moments_text = transcript_data["moments_text"]
 
@@ -79,7 +85,8 @@ async def score_call(
     )
 
     # Step 4: Caller metadata from Dialpad
-    call_details = await get_call_details(call_id)
+    if call_details is None:
+        call_details = await get_call_details(call_id)
 
     return ScorecardWithMeta(
         **scorecard.model_dump(),
