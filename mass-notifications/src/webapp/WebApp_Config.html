@@ -22,33 +22,22 @@
 -->
 
 <style>
-  /* ── Section card ─────────────────────────────────────────────────────── */
-  #section-config {
-    background: #ffffff;
-    border: 1px solid #dce3f0;
-    border-radius: 10px;
-    padding: 24px 28px;
-    margin-bottom: 28px;
-  }
-  #section-config h2 {
-    font-size: 17px;
-    font-weight: 700;
-    color: #15192D;
-    margin: 0 0 20px;
-  }
+  /* Section card scaffolding lives in Index.html. Below: inner controls. */
 
   /* ── Form groups ────────────────────────────────────────────────────── */
   .cfg-group {
-    border-top: 1px solid #f0f2f7;
+    border-top: 1px solid var(--border);
     padding: 18px 0 4px;
     margin-bottom: 6px;
   }
+  .cfg-group:first-of-type { border-top: none; padding-top: 0; }
   .cfg-group-label {
-    font-size: 11px;
-    font-weight: 700;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 500;
     text-transform: uppercase;
-    letter-spacing: .6px;
-    color: #1A61D9;
+    letter-spacing: .1em;
+    color: var(--accent);
     margin-bottom: 14px;
   }
 
@@ -60,14 +49,19 @@
     margin-bottom: 14px;
   }
   .cfg-field label {
-    font-size: 12px;
-    font-weight: 600;
-    color: #15192D;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
   .cfg-token-hint {
     font-weight: 400;
-    color: #888;
-    font-size: 11px;
+    color: var(--muted);
+    font-size: 0.7rem;
+    text-transform: none;
+    letter-spacing: 0;
   }
   .cfg-row-2 { display: grid; grid-template-columns: 1fr 1fr;     gap: 14px; }
   .cfg-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
@@ -77,12 +71,12 @@
 
   /* ── Inputs & textareas ─────────────────────────────────────────────── */
   .cfg-input, .cfg-textarea {
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 13px;
-    color: #15192D;
-    background: #fafbfd;
-    border: 1px solid #dce3f0;
-    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-ctrl);
     padding: 7px 10px;
     outline: none;
     transition: border-color .15s, background .15s;
@@ -90,12 +84,12 @@
     box-sizing: border-box;
   }
   .cfg-input:focus, .cfg-textarea:focus {
-    border-color: #1A61D9;
-    background: #fff;
+    border-color: var(--accent);
+    background: var(--surface);
   }
   .cfg-input:disabled, .cfg-textarea:disabled {
     background: #eef0f4;
-    color: #6B7280;
+    color: var(--muted);
     cursor: not-allowed;
   }
   .cfg-textarea { resize: vertical; min-height: 80px; }
@@ -103,25 +97,27 @@
   /* ── Segmented controls ─────────────────────────────────────────────── */
   .cfg-segmented {
     display: inline-flex;
-    border: 1px solid #dce3f0;
-    border-radius: 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-ctrl);
     overflow: hidden;
     width: fit-content;
   }
   .cfg-segmented button {
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 12px;
-    font-weight: 600;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 500;
     padding: 6px 18px;
     border: none;
-    background: #f5f7fa;
-    color: #4A4A4A;
+    background: var(--surface);
+    color: var(--muted);
     cursor: pointer;
     transition: background .15s, color .15s;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
-  .cfg-segmented button + button { border-left: 1px solid #dce3f0; }
+  .cfg-segmented button + button { border-left: 1px solid var(--border); }
   .cfg-segmented button.cfg-active {
-    background: #1A61D9;
+    background: var(--accent);
     color: #fff;
   }
 
@@ -133,79 +129,97 @@
     min-height: 28px;
   }
   .cfg-chip {
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 12px;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
     padding: 5px 13px;
-    border: 1px solid #c3d4ef;
-    border-radius: 20px;
-    background: #E7EFFB;
-    color: #15192D;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    background: var(--bg);
+    color: var(--text);
     cursor: pointer;
     transition: background .15s, border-color .15s, color .15s;
   }
-  .cfg-chip:hover { background: #d0e2f7; }
-  .cfg-chip.cfg-active { background: #1A61D9; color: #fff; border-color: #1A61D9; }
+  .cfg-chip:hover { background: #d0ddf0; }
+  .cfg-chip.cfg-active { background: var(--accent); color: #fff; border-color: var(--accent); }
 
   /* ── Card picker ────────────────────────────────────────────────────── */
   #cfg-cards { display: flex; flex-wrap: wrap; gap: 8px; min-height: 28px; }
   .cfg-card-btn {
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 12px;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
     padding: 6px 14px;
-    border: 1px solid #dce3f0;
-    border-radius: 6px;
-    background: #f5f7fa;
-    color: #15192D;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-ctrl);
+    background: var(--surface);
+    color: var(--text);
     cursor: pointer;
     transition: background .15s, border-color .15s, color .15s;
   }
-  .cfg-card-btn:hover { background: #E7EFFB; border-color: #c3d4ef; }
-  .cfg-card-btn.cfg-active { background: #15192D; color: #fff; border-color: #15192D; }
+  .cfg-card-btn:hover { background: var(--bg); border-color: var(--accent); }
+  .cfg-card-btn.cfg-active { background: var(--navy); color: #fff; border-color: var(--navy); }
 
   /* ── Body editor (Quill or textarea fallback) ───────────────────────── */
   #cfg-body-wrap {
-    border: 1px solid #dce3f0;
-    border-radius: 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-ctrl);
     overflow: hidden;
-    background: #fafbfd;
+    background: var(--bg);
   }
-  #cfg-body-wrap:focus-within { border-color: #1A61D9; }
+  #cfg-body-wrap:focus-within { border-color: var(--accent); }
   /* Quill-specific overrides when loaded successfully */
   #cfg-body-wrap .ql-toolbar.ql-snow {
     border: none;
-    border-bottom: 1px solid #dce3f0;
-    background: #f5f7fa;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
   }
   #cfg-body-wrap .ql-container.ql-snow { border: none; }
-  #cfg-body-wrap .ql-editor { min-height: 140px; font-size: 13px; }
+  #cfg-body-wrap .ql-editor {
+    min-height: 140px;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    background: var(--surface);
+  }
   /* Textarea fallback */
   #cfg-body-textarea {
     width: 100%; box-sizing: border-box;
     min-height: 160px; resize: vertical;
     border: none; outline: none;
     padding: 10px 12px;
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 13px; color: #15192D;
-    background: #fafbfd;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--text);
+    background: var(--surface);
   }
 
   /* ── Token list ─────────────────────────────────────────────────────── */
   .cfg-token-list {
-    font-size: 11px; color: #888;
-    margin-top: 8px; line-height: 2;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--muted);
+    margin-top: 8px;
+    line-height: 2;
   }
   .cfg-token-list code {
-    background: #f0f2f7; border-radius: 3px;
-    padding: 1px 5px; font-size: 11px; color: #1A61D9;
+    background: var(--bg);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 0.7rem;
+    color: var(--accent);
   }
 
   /* ── Template hint toast ────────────────────────────────────────────── */
   #cfg-hint-toast {
     display: none;
-    background: #E7EFFB; border: 1px solid #c3d4ef;
-    border-radius: 6px; padding: 10px 14px;
-    font-size: 12px; color: #15192D;
-    white-space: pre-line; margin-bottom: 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: var(--radius-ctrl);
+    padding: 10px 14px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--text);
+    white-space: pre-line;
+    margin-bottom: 14px;
   }
 </style>
 

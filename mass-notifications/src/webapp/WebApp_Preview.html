@@ -1,62 +1,57 @@
 <style>
   /* ── Section card ────────────────────────────────────────────────────────── */
-  #section-preview {
-    background: #ffffff;
-    border: 1px solid #dce3f0;
-    border-radius: 10px;
-    padding: 24px 28px;
-    margin-bottom: 28px;
-  }
+  /* Section card scaffolding lives in Index.html. */
 
   /* ── Header row ──────────────────────────────────────────────────────────── */
   #preview-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 18px;
     flex-wrap: wrap;
     gap: 10px;
   }
-  #section-preview h2 {
-    font-size: 17px;
-    font-weight: 700;
-    color: #15192D;
-    margin: 0;
-  }
+  #section-preview h2 { color: #fff; }
   #preview-recipient-tag {
-    font-size: 11px;
-    color: #888;
-    background: #f0f2f7;
-    border-radius: 20px;
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: rgba(255, 255, 255, 0.85);
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: var(--radius-pill);
     padding: 3px 10px;
     display: none;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
   }
 
   /* ── Refresh button ──────────────────────────────────────────────────────── */
   #btn-preview-refresh {
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 12px;
-    font-weight: 600;
-    padding: 7px 16px;
-    border: 1px solid #dce3f0;
-    border-radius: 6px;
-    background: #f5f7fa;
-    color: #15192D;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 500;
+    padding: 6px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: var(--radius-ctrl);
+    background: transparent;
+    color: #fff;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    transition: background .15s;
+    transition: background .15s, border-color .15s;
   }
-  #btn-preview-refresh:hover:not(:disabled) { background: #E7EFFB; border-color: #c3d4ef; }
+  #btn-preview-refresh:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.5);
+  }
   #btn-preview-refresh:disabled { opacity: .5; cursor: default; }
 
   /* ── Spinner (reuse animation from Send section) ─────────────────────────── */
   .preview-spinner {
     display: inline-block;
     width: 12px; height: 12px;
-    border: 2px solid rgba(26,97,217,.3);
-    border-top-color: #1A61D9;
+    border: 2px solid rgba(255,255,255,.3);
+    border-top-color: #fff;
     border-radius: 50%;
     animation: spin .7s linear infinite;
     vertical-align: middle;
@@ -69,32 +64,37 @@
     align-items: center;
     justify-content: center;
     min-height: 180px;
-    color: #aaa;
-    font-size: 13px;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
     gap: 10px;
-    border: 1px dashed #dce3f0;
+    border: 1px dashed var(--border);
     border-radius: 8px;
   }
   #preview-placeholder svg { opacity: .35; }
 
-  /* ── Error banner ────────────────────────────────────────────────────────── */
+  /* Error banner */
   #preview-error {
     display: none;
-    background: #FEF2F2;
-    border: 1px solid #FCA5A5;
-    color: #991B1B;
-    border-radius: 8px;
+    background: var(--error-bg);
+    border: 1px solid var(--red);
+    border-left: 4px solid var(--red);
+    color: var(--error);
+    border-radius: var(--radius-ctrl);
     padding: 12px 16px;
-    font-size: 13px;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
   }
 
-  /* ── iframe wrapper ──────────────────────────────────────────────────────── */
+  /* iframe wrapper: navy top/bottom borders mirror AI-Scoring scorecard panels */
   #preview-frame-wrap {
     display: none;
-    border: 1px solid #dce3f0;
-    border-radius: 8px;
+    border: 1px solid var(--border);
+    border-top: 4px solid var(--navy);
+    border-bottom: 4px solid var(--navy);
+    border-radius: 0;
     overflow: hidden;
-    background: #fff;
+    background: var(--surface);
   }
   #preview-frame {
     width: 100%;
@@ -103,21 +103,23 @@
     display: block;
   }
 
-  /* ── Attachment list ─────────────────────────────────────────────────────── */
+  /* Attachment list */
   #preview-attachments {
     display: none;
-    border-top: 1px solid #f0f2f7;
+    border-top: 1px solid var(--border);
     padding: 10px 14px;
-    font-size: 12px;
-    color: #4A4A4A;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text);
     line-height: 1.9;
-    background: #fafbfd;
+    background: var(--bg);
   }
   #preview-attachments strong {
-    color: #15192D;
-    font-size: 11px;
+    color: var(--text);
+    font-size: 0.65rem;
+    font-weight: 500;
     text-transform: uppercase;
-    letter-spacing: .5px;
+    letter-spacing: .08em;
     display: block;
     margin-bottom: 4px;
   }
