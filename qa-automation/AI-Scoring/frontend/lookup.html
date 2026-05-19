@@ -132,6 +132,57 @@
 
     .hidden { display: none; }
 
+    /* Action buttons in calls table */
+    .row-action {
+      display: inline-block; font-family: 'DM Mono', monospace; font-size: 0.7rem;
+      padding: 3px 10px; border-radius: 4px; border: 1px solid var(--accent);
+      color: var(--accent); background: transparent; cursor: pointer; margin-right: 4px;
+      white-space: nowrap;
+    }
+    .row-action:hover:not(:disabled) { background: var(--accent); color: #fff; }
+    .row-action:disabled,
+    .row-action.disabled {
+      opacity: 0.4; cursor: not-allowed; border-color: var(--muted); color: var(--muted);
+    }
+    .row-action.score { border-color: var(--green); color: #137333; }
+    .row-action.score:hover:not(:disabled):not(.disabled) { background: var(--green); color: #fff; }
+    .score-status {
+      font-size: 0.7rem; color: var(--muted); display: inline-block; margin-left: 6px;
+    }
+    .score-status.complete { color: #137333; }
+    .score-status.error { color: var(--red); }
+
+    /* Team-pick modal */
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(21,25,45,0.5);
+      display: flex; align-items: center; justify-content: center; z-index: 100;
+    }
+    /* Specificity bump — .hidden alone loses to .modal-backdrop's display:flex
+       because .modal-backdrop is declared later in this stylesheet. */
+    .modal-backdrop.hidden { display: none; }
+    .modal {
+      background: var(--surface); border-radius: 12px; padding: 24px; max-width: 360px;
+      width: calc(100% - 32px); box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+    }
+    .modal h3 { font-size: 1rem; margin-bottom: 8px; }
+    .modal p { font-size: 0.8rem; color: var(--muted); margin-bottom: 16px; }
+    .modal .options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+    .modal .option {
+      display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+      border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+      font-size: 0.85rem;
+    }
+    .modal .option:hover { background: var(--bg); }
+    .modal .option input { cursor: pointer; }
+    .modal .actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .modal .actions button {
+      font-family: 'DM Mono', monospace; font-size: 0.8rem; padding: 6px 16px;
+      border-radius: 6px; cursor: pointer; border: 1px solid var(--border);
+    }
+    .modal .actions .primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .modal .actions .primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .modal .actions .secondary { background: transparent; color: var(--text); }
+
     @media (max-width: 600px) {
       .info-grid { grid-template-columns: 1fr; }
       .search-bar { flex-direction: column; align-items: stretch; }
@@ -209,7 +260,7 @@
               <th>Contact</th>
               <th>Duration</th>
               <th>Recorded</th>
-              <th>Link</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody id="callsBody"></tbody>
@@ -223,17 +274,33 @@
     </div>
   </div>
 
+  <!-- Team-pick modal (privileged + unrostered agent) -->
+  <div id="teamPickModal" class="modal-backdrop hidden">
+    <div class="modal">
+      <h3>Choose target team</h3>
+      <p>This agent isn't in any team's roster. Pick which team's scoring pipeline should evaluate this call.</p>
+      <div class="options" id="teamPickOptions"></div>
+      <div class="actions">
+        <button class="secondary" onclick="closeTeamPick()">Cancel</button>
+        <button class="primary" id="teamPickConfirm" onclick="confirmTeamPick()" disabled>Score</button>
+      </div>
+    </div>
+  </div>
+
 <script>
 const TEAM_ID = (location.pathname.match(/^\/lookup\/([^\/]+)/) || [, 'member_support'])[1];
 const API_BASE = `/api/${TEAM_ID}`;
 
 const $ = id => document.getElementById(id);
 
+// localStorage (not sessionStorage) so the new tab opened by "Open editor"
+// inherits the API key + manager email without re-prompting. Same browser,
+// same origin, but a new tab has its own sessionStorage.
 function getApiKey() {
-  let key = sessionStorage.getItem('qa_api_key');
+  let key = localStorage.getItem('qa_api_key');
   if (!key) {
     key = prompt('Enter your QA API key:');
-    if (key) sessionStorage.setItem('qa_api_key', key);
+    if (key) localStorage.setItem('qa_api_key', key);
   }
   return key;
 }
@@ -242,9 +309,24 @@ function authHeaders() {
   return key ? { 'Authorization': 'Bearer ' + key } : {};
 }
 
+function getManagerEmail() {
+  let email = localStorage.getItem('qa_manager_email');
+  if (!email) {
+    email = prompt('Enter your evaluator email (you, the manager scoring this call):');
+    if (email) localStorage.setItem('qa_manager_email', email.trim());
+  }
+  return email;
+}
+
 let currentUserId = null;
+let currentSearchEmail = null;
+let currentScoringPermission = null;
 let nextCursor = null;
 let totalLoaded = 0;
+
+// Configured team list — keep in sync with backend/config/teams/*.json.
+// Drives the team-pick modal options for privileged + unrostered cases.
+const TEAMS = ['member_support', 'sales'];
 
 // Default date range: past 7 days
 function initDateDefaults() {
@@ -288,7 +370,11 @@ async function doSearch() {
     }
     const user = await resp.json();
     currentUserId = user.id;
+    currentSearchEmail = email;
     renderUser(user);
+    // Fetch scoring permission once per agent (same for every row) so
+    // renderCalls can decide Score Call button state without a per-row probe.
+    currentScoringPermission = await fetchScoringPermission(email);
     // Show calls section and auto-fetch
     $('callsCard').classList.remove('hidden');
     fetchCalls();
@@ -387,6 +473,14 @@ function renderCalls(calls, append) {
   $('callsCount').textContent = `${totalLoaded} call${totalLoaded !== 1 ? 's' : ''} loaded`;
   $('callsCount').classList.remove('hidden');
 
+  const perm = currentScoringPermission;
+  const canScore = !!(perm && perm.can_score);
+  // Tooltip explaining why Score Call is disabled. Same reason for every
+  // row when the calling key has no scoring access for this agent.
+  let disabledReason = '';
+  if (!perm) disabledReason = 'Could not check scoring permission';
+  else if (!perm.can_score) disabledReason = 'API key not authorized to score this agent';
+
   const rows = calls.map(c => {
     const dir = c.direction || 'unknown';
     const dirCls = dir === 'inbound' ? 'inbound' : 'outbound';
@@ -395,17 +489,36 @@ function renderCalls(calls, append) {
     const contact = c.contact_name || c.external_number || c.contact_phone || '-';
     const dateStr = fmtDateTime(c.date_started || c.date_connected);
     const rec = c.was_recorded ? 'Yes' : 'No';
-    let linkCell = '-';
+
+    // Share Link (renamed Generate)
+    let shareCell = '';
     if (c.recording_id) {
-      linkCell = `<a href="#" class="gen-link" data-rid="${esc(c.recording_id)}" data-rtype="${esc(c.recording_type)}" onclick="generateLink(event, this)">Generate</a>`;
+      shareCell = `<a href="#" class="row-action gen-link" data-rid="${esc(c.recording_id)}" data-rtype="${esc(c.recording_type)}" onclick="generateLink(event, this)">Share Link</a>`;
     }
+
+    // Score Call — needs call_id + recording + permission
+    let scoreCell = '';
+    const hasCall = !!c.call_id;
+    const recOk = !!c.was_recorded;
+    if (hasCall) {
+      const blocked = !recOk || !canScore;
+      const reason = !recOk ? 'No recording on this call' : disabledReason;
+      const cls = blocked ? 'row-action score disabled' : 'row-action score';
+      const onclick = blocked ? '' : `onclick="scoreCall(this, '${esc(c.call_id)}')"`;
+      const titleAttr = blocked ? ` title="${esc(reason)}"` : '';
+      const disabledAttr = blocked ? ' disabled' : '';
+      scoreCell = `<button class="${cls}" data-call-id="${esc(c.call_id)}"${onclick}${titleAttr}${disabledAttr}>Score Call</button><span class="score-status" data-status></span>`;
+    }
+
+    const actionsCell = (shareCell || scoreCell) ? `${shareCell}${scoreCell}` : '-';
+
     return `<tr class="${flagCls}">
       <td>${esc(dateStr)}</td>
       <td><span class="direction-badge ${dirCls}">${esc(dir)}</span></td>
       <td>${esc(contact)}</td>
       <td>${esc(dur)}</td>
       <td>${rec}</td>
-      <td>${linkCell}</td>
+      <td>${actionsCell}</td>
     </tr>`;
   }).join('');
 
@@ -496,6 +609,144 @@ function esc(s) {
   const d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
+}
+
+// ---------------------------------------------------------------------
+// Scoring-permission probe + Score Call flow (LookupToScore.md PR 5)
+// ---------------------------------------------------------------------
+
+async function fetchScoringPermission(email) {
+  try {
+    const resp = await fetch(
+      `${API_BASE}/lookup/scoring-permission?email=${encodeURIComponent(email)}`,
+      { headers: authHeaders() }
+    );
+    if (!resp.ok) {
+      console.warn(`scoring-permission ${resp.status}`);
+      return { agent_email: email, resolved_team: null, can_score: false, needs_team_pick: false };
+    }
+    return await resp.json();
+  } catch (e) {
+    console.warn('scoring-permission failed', e);
+    return { agent_email: email, resolved_team: null, can_score: false, needs_team_pick: false };
+  }
+}
+
+let _pendingTeamPick = null;  // { btn, callId, resolve }
+
+function openTeamPick(callId, btn) {
+  const opts = TEAMS.map(t => `
+    <label class="option">
+      <input type="radio" name="targetTeam" value="${esc(t)}" onchange="$('teamPickConfirm').disabled = false;">
+      <span>${esc(t)}</span>
+    </label>`).join('');
+  $('teamPickOptions').innerHTML = opts;
+  $('teamPickConfirm').disabled = true;
+  $('teamPickModal').classList.remove('hidden');
+  return new Promise(resolve => {
+    _pendingTeamPick = { btn, callId, resolve };
+  });
+}
+
+function closeTeamPick() {
+  $('teamPickModal').classList.add('hidden');
+  if (_pendingTeamPick) {
+    _pendingTeamPick.resolve(null);
+    _pendingTeamPick = null;
+  }
+}
+
+function confirmTeamPick() {
+  const picked = document.querySelector('input[name="targetTeam"]:checked');
+  if (!picked) return;
+  const team = picked.value;
+  $('teamPickModal').classList.add('hidden');
+  if (_pendingTeamPick) {
+    _pendingTeamPick.resolve(team);
+    _pendingTeamPick = null;
+  }
+}
+
+async function scoreCall(btn, callId) {
+  if (!currentSearchEmail || !currentScoringPermission) {
+    alert('Refresh: missing agent context.');
+    return;
+  }
+  const managerEmail = getManagerEmail();
+  if (!managerEmail) {
+    alert('Manager email is required to score a call.');
+    return;
+  }
+
+  // Resolve target team: needs_team_pick (privileged + unrostered) → modal.
+  // Otherwise use the resolved team (if present) or the path team for team keys.
+  let targetTeam;
+  if (currentScoringPermission.needs_team_pick) {
+    targetTeam = await openTeamPick(callId, btn);
+    if (!targetTeam) return;  // cancelled
+  } else {
+    targetTeam = currentScoringPermission.resolved_team || TEAM_ID;
+  }
+
+  const statusEl = btn.parentElement.querySelector('[data-status]');
+  btn.disabled = true;
+  btn.classList.add('disabled');
+  statusEl.textContent = 'Submitting...';
+  statusEl.className = 'score-status';
+
+  const form = new FormData();
+  form.append('call_id', callId);
+  form.append('agent_email', currentSearchEmail);
+  form.append('manager_email', managerEmail);
+
+  let jobId;
+  try {
+    const resp = await fetch(`/api/${targetTeam}/score`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: form,
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(data.detail || `HTTP ${resp.status}`);
+    }
+    jobId = data.job_id;
+    statusEl.textContent = `${data.status || 'pending'}...`;
+  } catch (e) {
+    statusEl.textContent = 'Failed';
+    statusEl.className = 'score-status error';
+    statusEl.title = e.message;
+    btn.disabled = false;
+    btn.classList.remove('disabled');
+    return;
+  }
+
+  // Poll until terminal.
+  pollScoreJob(targetTeam, jobId, statusEl, btn);
+}
+
+function pollScoreJob(targetTeam, jobId, statusEl, btn) {
+  const interval = setInterval(async () => {
+    try {
+      const r = await fetch(`/api/${targetTeam}/score/${jobId}`, { headers: authHeaders() });
+      const data = await r.json();
+      const status = data.status || '?';
+      statusEl.textContent = status;
+      if (['complete', 'approved'].includes(status)) {
+        statusEl.className = 'score-status complete';
+        statusEl.innerHTML = `complete · <a href="/scorecard/${esc(targetTeam)}/${esc(jobId)}" target="_blank">Open editor</a>`;
+        clearInterval(interval);
+      } else if (status === 'error') {
+        statusEl.className = 'score-status error';
+        statusEl.title = data.error || '';
+        btn.disabled = false;
+        btn.classList.remove('disabled');
+        clearInterval(interval);
+      }
+    } catch (e) {
+      // Transient — keep polling. A long outage will be visible as "pending..." stalling.
+    }
+  }, 3000);
 }
 </script>
 </body>

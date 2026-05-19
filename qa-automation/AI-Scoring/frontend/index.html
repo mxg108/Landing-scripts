@@ -539,11 +539,13 @@
     if (dashLink) dashLink.href = `/dashboard/${TEAM_ID}`;
   });
 
+  // localStorage (not sessionStorage) so /lookup, /scorecard, and /score
+  // share one auth state across tabs. Previously each tab re-prompted.
   function getApiKey() {
-    let key = sessionStorage.getItem('qa_api_key');
+    let key = localStorage.getItem('qa_api_key');
     if (!key) {
       key = prompt('Enter your QA API key:');
-      if (key) sessionStorage.setItem('qa_api_key', key);
+      if (key) localStorage.setItem('qa_api_key', key);
     }
     return key;
   }
@@ -692,7 +694,7 @@
 
       const res = await fetch(`${API_BASE}/score`, { method: 'POST', body: formData, headers: authHeaders() });
       if (res.status === 401) {
-        sessionStorage.removeItem('qa_api_key');
+        localStorage.removeItem('qa_api_key');
         alert('Invalid API key. Please reload and try again.');
         submitBtn.textContent = 'Score Calls';
         return;
@@ -824,9 +826,9 @@
                <option value="4">4/5</option>
                <option value="5">5/5</option>`;
           return `
-            <div class="section-row" style="border-left:3px solid var(--amber);">
+            <div class="section-row" style="border-left:3px solid var(--warning);">
               <div>
-                <div class="section-name" style="color:var(--amber);">${ts.name} — Score Required</div>
+                <div class="section-name" style="color:var(--warning);">${ts.name} — Score Required</div>
                 <textarea class="section-reasoning" id="manual-reasoning-${ts.id}-${jobId}"
                   placeholder="Enter reasoning for ${ts.name} score (persisted for progression analysis)"
                   rows="2" style="width:100%; margin-top:0.4rem; font-family:'DM Mono',monospace; font-size:0.82rem; border:1px solid #d1d5db; border-radius:4px; padding:0.4rem; resize:vertical;"></textarea>
@@ -1035,7 +1037,7 @@
       });
 
       if (res.status === 401) {
-        sessionStorage.removeItem('qa_api_key');
+        localStorage.removeItem('qa_api_key');
         alert('Invalid API key. Please reload and try again.');
         btn.disabled = false;
         btn.textContent = 'Approve & Send';
