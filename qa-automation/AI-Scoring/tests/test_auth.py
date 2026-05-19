@@ -117,17 +117,10 @@ def test_require_team_access_privileged_bypasses(monkeypatch):
 # check_scoring_access
 # ---------------------------------------------------------------------------
 
-def _stub_roster(*emails: str):
-    """Return an email_in_team_mails-shaped callable for tests."""
-    rostered = {e.lower() for e in emails}
-    return lambda email, team_id: bool(email) and email.lower() in rostered
-
-
 def test_check_scoring_access_team_key_in_roster_allows():
     key = KeyIdentity(role="team", team_id="member_support")
     check_scoring_access(
-        key, "member_support", "luis@landing.com",
-        email_in_team_mails=_stub_roster("luis@landing.com"),
+        key, "member_support", "luis@landing.com", is_in_roster=True,
     )
 
 
@@ -135,8 +128,7 @@ def test_check_scoring_access_team_key_unrostered_rejected():
     key = KeyIdentity(role="team", team_id="member_support")
     with pytest.raises(HTTPException) as exc:
         check_scoring_access(
-            key, "member_support", "unknown@landing.com",
-            email_in_team_mails=_stub_roster(),
+            key, "member_support", "unknown@landing.com", is_in_roster=False,
         )
     assert exc.value.status_code == 403
 
@@ -145,8 +137,7 @@ def test_check_scoring_access_team_key_cross_team_rejected():
     key = KeyIdentity(role="team", team_id="member_support")
     with pytest.raises(HTTPException) as exc:
         check_scoring_access(
-            key, "sales", "luis@landing.com",
-            email_in_team_mails=_stub_roster("luis@landing.com"),
+            key, "sales", "luis@landing.com", is_in_roster=True,
         )
     assert exc.value.status_code == 403
 
@@ -154,8 +145,7 @@ def test_check_scoring_access_team_key_cross_team_rejected():
 def test_check_scoring_access_privileged_bypasses_roster():
     key = KeyIdentity(role="privileged", team_id=None)
     check_scoring_access(
-        key, "sales", "contractor@external.com",
-        email_in_team_mails=_stub_roster(),  # empty roster — bypassed
+        key, "sales", "contractor@external.com", is_in_roster=False,
     )
 
 
@@ -163,7 +153,6 @@ def test_check_scoring_access_team_key_missing_email_rejected():
     key = KeyIdentity(role="team", team_id="member_support")
     with pytest.raises(HTTPException) as exc:
         check_scoring_access(
-            key, "member_support", None,
-            email_in_team_mails=_stub_roster("luis@landing.com"),
+            key, "member_support", None, is_in_roster=True,
         )
     assert exc.value.status_code == 403

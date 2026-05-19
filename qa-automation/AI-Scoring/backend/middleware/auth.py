@@ -105,18 +105,18 @@ def check_scoring_access(
     team_id: str,
     agent_email: Optional[str],
     *,
-    email_in_team_mails,
+    is_in_roster: bool,
 ) -> None:
     """Raise 403 unless ``identity`` is allowed to score ``agent_email`` for ``team_id``.
 
     Called from ``/score`` after the multipart form has been parsed, so
-    it can't be a ``Depends``-style FastAPI dependency. The Mails-check
-    callable is injected to keep this module free of service imports
-    (avoids the auth -> services -> sheets dep cycle).
+    it can't be a ``Depends``-style FastAPI dependency. The roster
+    membership is supplied as a precomputed bool — the handler does the
+    async Mails fetch and passes the result here. This keeps auth.py
+    free of service imports while avoiding awkward sync/async bridging.
 
     Rules:
-      * Team key: must match ``team_id`` AND ``agent_email`` must appear
-        in that team's Mails roster.
+      * Team key: must match ``team_id`` AND ``is_in_roster`` must be True.
       * Privileged key: any real ``team_id`` is fine; roster membership
         is NOT required (the frontend confirms intent via the team-pick
         dialog when the agent is unrostered).
@@ -128,7 +128,7 @@ def check_scoring_access(
             status_code=403,
             detail=f"API key not authorized for team '{team_id}'",
         )
-    if not agent_email or not email_in_team_mails(agent_email, team_id):
+    if not agent_email or not is_in_roster:
         raise HTTPException(
             status_code=403,
             detail=f"Agent '{agent_email}' is not in team '{team_id}' roster",
