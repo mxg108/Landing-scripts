@@ -332,3 +332,8 @@ def get_team_config(team_id: str = "member_support") -> TeamConfig:
         raise FileNotFoundError(f"No config for team '{team_id}': {path}")
     raw = json.loads(path.read_text(encoding="utf-8"))
     return TeamConfig(**raw)
+
+
+def get_all_team_ids() -> list[str]:
+    """Return sorted list of team_ids with a JSON config on disk."""
+    return sorted(p.stem for p in _CONFIG_DIR.glob("*.json"))

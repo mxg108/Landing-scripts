@@ -10,7 +10,7 @@ column letters live in ``score_destination.section_score_columns`` and
 
 from __future__ import annotations
 
-from backend.config.team_config import TeamConfig
+from backend.config.team_config import TeamConfig, get_all_team_ids
 
 
 def test_config_loads_and_exposes_derived_props(config: TeamConfig):
@@ -89,3 +89,12 @@ def test_score_destination_readback_col_outside_section_range(config: TeamConfig
         f"{config.team_id}: score_readback_col '{sd.score_readback_col}' "
         f"collides with a section_score_columns letter"
     )
+
+
+def test_get_all_team_ids_returns_configured_teams():
+    """Discovery helper used by resolve_team_for_agent must list every
+    team whose JSON config exists in backend/config/teams/."""
+    ids = get_all_team_ids()
+    assert "member_support" in ids
+    assert "sales" in ids
+    assert ids == sorted(ids)

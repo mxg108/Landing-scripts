@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Scorecard — Landing QA</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,300;0,400;0,600;1,300&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #E7EFFB;
+      --surface: #ffffff;
+      --border: #c9d5e8;
+      --text: #15192D;
+      --muted: #5a6478;
+      --accent: #1A61D9;
+      --navy: #15192D;
+      --success: #2d6a4f;
+      --warning: #b45309;
+      --error: #991b1b;
+      --badge-high: #d1fae5;
+      --badge-medium: #fef3c7;
+      --badge-low: #fee2e2;
+    }
+
+    body {
+      font-family: 'DM Mono', monospace;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 0;
+    }
+
+    /* Navy banner header — matches index.html typography exactly so the
+       /score and /scorecard pages feel like one app. The flex layout +
+       header-nav are scorecard-only (back link + scoring link). */
+    header {
+      background: var(--navy);
+      color: #ffffff;
+      padding: 1.5rem 2rem;
+      margin-bottom: 2rem;
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+    }
+    header h1 {
+      font-family: 'Fraunces', serif;
+      font-weight: 300;
+      font-size: 2rem;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.25rem;
+      color: #ffffff;
+    }
+    header p { color: rgba(255, 255, 255, 0.7); font-size: 0.8rem; }
+    .header-nav { display: flex; gap: 8px; }
+    .header-nav a {
+      color: #ffffff; text-decoration: none; font-size: 0.82rem;
+      padding: 8px 16px; border: 1px solid rgba(255,255,255,0.3); border-radius: 6px;
+      transition: background 0.2s;
+    }
+    .header-nav a:hover { background: rgba(255,255,255,0.1); }
+
+    /* Card wrapper — mirrors index.html so the panel sits inside a white
+       surface with a navy h2 header (same shape as /score's "Scoring Progress"
+       card). */
+    .card {
+      max-width: 720px;
+      margin: 0 auto 1.5rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .card h2 {
+      font-family: 'Fraunces', serif;
+      font-weight: 400;
+      font-size: 1.1rem;
+      padding: 0.75rem 1.25rem;
+      margin: 0;
+      background: var(--navy);
+      color: #ffffff;
+    }
+    .job-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      padding: 1rem 1.25rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .job-row .err-detail { color: var(--error); font-size: 0.78rem; }
+
+    /* --- Scorecard panel styles (mirrored from index.html so this page renders
+       a panel identical to the upload flow). Keep these in sync until the
+       shared-module extraction lands as a follow-up. --- */
+
+    .status-badge { padding: 0.2rem 0.6rem; border-radius: 20px; font-size: 0.7rem; font-weight: 500; }
+    .status-pending  { background: #e5e7eb; color: #374151; }
+    .status-scoring  { background: #dbeafe; color: #1e40af; }
+    .status-complete { background: var(--badge-high); color: var(--success); }
+    .status-error    { background: var(--badge-low); color: var(--error); }
+
+    .scorecard-panel {
+      margin-top: 0.5rem; margin-bottom: 3rem;
+      border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+      border-top: 4px solid var(--navy); border-bottom: 4px solid var(--navy);
+    }
+
+    .scorecard-header {
+      padding: 1rem 1.25rem; background: var(--navy); color: #ffffff;
+      display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem;
+    }
+
+    .scorecard-header .header-meta {
+      font-size: 0.7rem; color: rgba(255,255,255,0.6); margin-top: 2px;
+      display: flex; gap: 0.75rem; align-items: center;
+    }
+
+    .scorecard-avg {
+      font-family: 'Fraunces', serif; font-size: 1.3rem; font-weight: 300; color: #ffffff;
+    }
+
+    .long-call-flag {
+      font-size: 0.72rem; padding: 0.2rem 0.6rem; background: #fef3c7; color: #b45309;
+      border-radius: 20px;
+    }
+
+    .section-row {
+      display: grid; grid-template-columns: 1fr 60px 80px; gap: 0.5rem;
+      align-items: start; padding: 0.85rem 1rem; border-bottom: 1px solid var(--border);
+      font-size: 0.78rem;
+    }
+    .section-row:last-child { border-bottom: none; }
+    .section-name { font-weight: 500; }
+    .section-reasoning { color: var(--muted); font-size: 0.72rem; margin-top: 0.2rem; }
+    .section-flags { color: var(--warning); font-size: 0.68rem; margin-top: 0.15rem; }
+
+    .confidence-badge {
+      font-size: 0.65rem; padding: 0.15rem 0.4rem; border-radius: 3px;
+      text-transform: uppercase; letter-spacing: 0.05em; text-align: center;
+    }
+
+    .notes-section {
+      padding: 1rem 1.25rem; background: #f9fafe; border-top: 2px solid var(--border);
+      font-size: 0.78rem;
+    }
+    .notes-label {
+      font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--muted); margin-bottom: 0.35rem;
+    }
+
+    .transcript-panel { border-top: 2px solid var(--navy); margin-top: 0.5rem; }
+    .transcript-toggle {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.65rem 1rem; cursor: pointer; font-size: 0.78rem; font-weight: 500;
+      background: var(--navy); color: #ffffff; user-select: none;
+    }
+    .transcript-toggle:hover { background: #1e2340; }
+    .transcript-toggle .arrow {
+      transition: transform 0.2s; font-size: 0.7rem; color: rgba(255, 255, 255, 0.7);
+    }
+    .transcript-toggle.open .arrow { transform: rotate(90deg); }
+    .transcript-body {
+      display: none; max-height: 400px; overflow-y: auto; padding: 0.5rem 1rem;
+      font-size: 0.75rem; line-height: 1.6;
+    }
+    .transcript-body.open { display: block; }
+    .transcript-line {
+      display: grid; grid-template-columns: 48px 1fr; gap: 0.5rem;
+      padding: 0.3rem 0; border-bottom: 1px solid #edf2fa;
+    }
+    .transcript-line:last-child { border-bottom: none; }
+    .transcript-ts { color: var(--muted); font-size: 0.7rem; font-variant-numeric: tabular-nums; padding-top: 0.1rem; }
+    .transcript-speaker { font-weight: 500; margin-right: 0.3rem; }
+    .moments-list { padding: 0.5rem 1rem; border-top: 1px solid var(--border); }
+    .moment-item {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      padding: 0.2rem 0.55rem; margin: 0.2rem 0.2rem; background: #d0ddf0;
+      border-radius: 12px; font-size: 0.68rem; color: var(--text);
+    }
+    .moment-ts { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+    .score-select, .confidence-select {
+      font-family: 'DM Mono', monospace; padding: 0.2rem 0.3rem;
+      border: 1px solid var(--border); border-radius: 4px; background: var(--bg);
+      color: var(--text); text-align: center; width: 100%; cursor: pointer;
+    }
+    .score-select { font-size: 0.78rem; }
+    .confidence-select { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .score-select:focus, .confidence-select:focus { border-color: var(--accent); outline: none; }
+    .score-select:disabled, .confidence-select:disabled { opacity: 0.6; cursor: default; }
+
+    .reasoning-textarea, .notes-textarea {
+      font-family: 'DM Mono', monospace; width: 100%;
+      border: 1px solid var(--border); border-radius: 4px;
+      padding: 0.35rem 0.5rem; resize: vertical; background: var(--bg); line-height: 1.4;
+    }
+    .reasoning-textarea { font-size: 0.72rem; color: var(--muted); margin-top: 0.2rem; min-height: 2.5rem; }
+    .notes-textarea { font-size: 0.78rem; min-height: 3rem; background: #fff; line-height: 1.5; padding: 0.5rem; }
+    .reasoning-textarea:focus, .notes-textarea:focus { border-color: var(--accent); outline: none; }
+    .reasoning-textarea:disabled, .notes-textarea:disabled { opacity: 0.6; cursor: default; }
+
+    .approve-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 1rem 1.25rem; background: var(--navy);
+    }
+    .btn-approve {
+      font-family: 'DM Mono', monospace; font-size: 0.82rem;
+      padding: 0.7rem 2rem; background: var(--success); color: white;
+      border: none; border-radius: 4px; cursor: pointer; font-weight: 500;
+      transition: background 0.15s;
+    }
+    .btn-approve:hover { background: #245a42; }
+    .btn-approve:disabled { background: var(--border); cursor: not-allowed; }
+    .approve-status { font-size: 0.78rem; color: rgba(255,255,255,0.7); }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Scorecard</h1>
+    <p id="scHeaderMeta">Loading job…</p>
+  </div>
+  <div class="header-nav">
+    <a id="backLink" href="#">← Back to lookup</a>
+    <a href="/" target="_self">Scoring</a>
+  </div>
+</header>
+
+<div class="card">
+  <h2>Scoring Progress</h2>
+  <div id="job-list">
+    <div id="loadingRow" class="job-row">
+      <span>Loading scorecard…</span>
+      <span id="loadingPill" class="status-badge status-pending">pending</span>
+      <span id="loadingDetail" class="err-detail"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+// Path: /scorecard/{team_id}/{job_id}
+const _pathParts = location.pathname.split('/').filter(Boolean);
+const TEAM_ID = _pathParts[1] || 'member_support';
+const JOB_ID  = _pathParts[2] || '';
+const API_BASE = `/api/${TEAM_ID}`;
+
+document.getElementById('backLink').href = `/lookup/${TEAM_ID}`;
+
+// --- Auth — localStorage so the API key carries across tabs (new tab from
+// /lookup must inherit auth without re-prompting). ---
+function getApiKey() {
+  let key = localStorage.getItem('qa_api_key');
+  if (!key) {
+    key = prompt('Enter your QA API key:');
+    if (key) localStorage.setItem('qa_api_key', key);
+  }
+  return key;
+}
+function authHeaders() {
+  const key = getApiKey();
+  return key ? { 'Authorization': 'Bearer ' + key } : {};
+}
+
+// --- Team-section cache (drives manual-section rows + approve-gate logic) ---
+let _teamSections = [];
+let _scorecardData = {};
+
+async function loadTeamSections() {
+  if (_teamSections.length > 0) return _teamSections;
+  const res = await fetch(`${API_BASE}/team/sections`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`team/sections HTTP ${res.status}`);
+  _teamSections = await res.json();
+  return _teamSections;
+}
+
+// --- Bootstrap ---
+(async function init() {
+  if (!JOB_ID) {
+    showLoadError('No job_id in URL.');
+    return;
+  }
+  try {
+    await loadTeamSections();
+  } catch (e) {
+    showLoadError(`Could not load team sections: ${e.message}`);
+    return;
+  }
+  pollAndRender();
+})();
+
+let _pollTimer = null;
+
+async function pollAndRender() {
+  try {
+    const res = await fetch(`${API_BASE}/score/${JOB_ID}`, { headers: authHeaders() });
+    if (res.status === 401) {
+      localStorage.removeItem('qa_api_key');
+      showLoadError('Invalid API key. Reload to re-enter.');
+      return;
+    }
+    if (res.status === 404) {
+      showLoadError('Job not found. It may have been started in a different browser session.');
+      return;
+    }
+    if (!res.ok) {
+      showLoadError(`HTTP ${res.status}`);
+      return;
+    }
+    const data = await res.json();
+    updateLoadingPill(data.status);
+
+    if (data.status === 'complete' || data.status === 'approved') {
+      renderPanel(data);
+      return;
+    }
+    if (data.status === 'error') {
+      showLoadError(`Scoring error: ${data.error || 'unknown'}`);
+      return;
+    }
+    // pending / scoring — keep polling
+    _pollTimer = setTimeout(pollAndRender, 3000);
+  } catch (e) {
+    showLoadError(e.message);
+  }
+}
+
+function updateLoadingPill(status) {
+  const pill = document.getElementById('loadingPill');
+  if (!pill) return;  // already removed once the panel rendered
+  pill.textContent = status || 'pending';
+  pill.className = `status-badge status-${status || 'pending'}`;
+  document.getElementById('scHeaderMeta').textContent =
+    `Job ${JOB_ID} — ${TEAM_ID} — ${status || 'pending'}`;
+}
+
+function showLoadError(msg) {
+  const detail = document.getElementById('loadingDetail');
+  const pill = document.getElementById('loadingPill');
+  if (detail) detail.textContent = msg;
+  if (pill) {
+    pill.className = 'status-badge status-error';
+    pill.textContent = 'error';
+  }
+}
+
+function renderPanel(data) {
+  const loadingRow = document.getElementById('loadingRow');
+  if (loadingRow) loadingRow.remove();
+  document.getElementById('scHeaderMeta').textContent =
+    `Job ${JOB_ID} — ${TEAM_ID} — ${data.status}`;
+  // Filename isn't stored server-side; synthesize from call_id for the header.
+  const callId = (data.scorecard && data.scorecard.call_id) || JOB_ID.split('_')[0];
+  const filename = `${callId}.mp3`;
+  const panel = buildScorecardPanel(JOB_ID, data.scorecard, filename, callId, data.sheets_row);
+  // Append into the card's job-list (mirrors index.html's DOM structure).
+  document.getElementById('job-list').appendChild(panel);
+
+  // If we arrived after approval, lock everything down.
+  if (data.status === 'approved') {
+    panel.querySelectorAll('select, textarea').forEach(el => el.disabled = true);
+    const btn = document.getElementById(`approve-btn-${JOB_ID}`);
+    if (btn) { btn.disabled = true; btn.textContent = 'Sent'; btn.style.background = '#065f46'; }
+    const statusEl = document.getElementById(`approve-status-${JOB_ID}`);
+    if (statusEl) statusEl.textContent = 'Approved — evaluation email already dispatched.';
+  }
+}
+
+// --------------------------------------------------------------------
+// Below: scorecard-panel rendering + edit + approve logic mirrored from
+// frontend/index.html. Kept in sync manually; see the panel-style block
+// at the top of this file for the matching CSS.
+// --------------------------------------------------------------------
+
+function buildScorecardPanel(jobId, sc, filename, callId, sheetsRow) {
+  _scorecardData[jobId] = sc;
+
+  const numericScores = sc.sections
+    .filter(s => s.score_type === 'numeric' && s.score !== null)
+    .map(s => s.score);
+  const avg = numericScores.length
+    ? (numericScores.reduce((a, b) => a + b, 0) / numericScores.length).toFixed(2)
+    : 'N/A';
+
+  const flagged = sc.flagged_long_call;
+  const panel = document.createElement('div');
+  panel.id = `scorecard-${jobId}`;
+  panel.className = 'scorecard-panel';
+
+  const sheetsNote = sheetsRow > 0 ? `<span>Sheets row ${sheetsRow}</span>` : '';
+
+  const header = `
+    <div class="scorecard-header">
+      <div>
+        <div>${filename}</div>
+        <div class="header-meta">
+          <span>Call ${callId || ''}</span>
+          <span class="status-badge status-complete">complete</span>
+          ${sheetsNote}
+        </div>
+      </div>
+      <div style="display:flex; gap:0.5rem; align-items:center;">
+        ${flagged ? '<span class="long-call-flag">Long call — manager review</span>' : ''}
+        <span class="scorecard-avg">${avg}<span style="font-family:'DM Mono'; font-size:0.75rem; color:rgba(255,255,255,0.7);">/5</span></span>
+      </div>
+    </div>
+  `;
+
+  const aiById = Object.fromEntries(sc.sections.map(s => [s.id, s]));
+
+  const sectionRows = _teamSections
+    .filter(ts => !ts.auto_value)
+    .map(ts => {
+      if (ts.score_type === 'manual' || ts.score_type === 'manual_yn') {
+        const options = ts.score_type === 'manual_yn'
+          ? `<option value="" selected>—</option>
+             <option value="Y">Y</option>
+             <option value="N">N</option>
+             <option value="NA">NA</option>`
+          : `<option value="" selected>—</option>
+             <option value="1">1/5</option>
+             <option value="2">2/5</option>
+             <option value="3">3/5</option>
+             <option value="4">4/5</option>
+             <option value="5">5/5</option>`;
+        return `
+          <div class="section-row" style="border-left:3px solid var(--warning);">
+            <div>
+              <div class="section-name" style="color:var(--warning);">${ts.name} — Score Required</div>
+              <textarea class="section-reasoning" id="manual-reasoning-${ts.id}-${jobId}"
+                placeholder="Enter reasoning for ${ts.name} score (persisted for progression analysis)"
+                rows="2" style="width:100%; margin-top:0.4rem; font-family:'DM Mono',monospace; font-size:0.82rem; border:1px solid #d1d5db; border-radius:4px; padding:0.4rem; resize:vertical;"></textarea>
+            </div>
+            <div>
+              <select class="score-select" id="manual-score-${ts.id}-${jobId}" onchange="checkManualScores('${jobId}')">
+                ${options}
+              </select>
+            </div>
+            <div><span class="confidence-badge" style="background:#e5e7eb; color:#6b7280;">MANUAL</span></div>
+          </div>
+        `;
+      }
+
+      const s = aiById[ts.id];
+      if (!s) {
+        console.warn(`No AI data for section "${ts.id}"`);
+        return '';
+      }
+      const flags = s.flags && s.flags.length
+        ? `<div class="section-flags">${s.flags.join(', ')}</div>` : '';
+      const audioTag = s.audio_dependent ? ' <span style="color:var(--muted); font-size:0.68rem;">[audio]</span>' : '';
+
+      let scoreControl;
+      if (s.score_type === 'yn') {
+        scoreControl = `<select class="score-select" data-section-id="${s.id}" data-field="yn_value">
+          <option value="Y" ${s.yn_value==='Y'?'selected':''}>Y</option>
+          <option value="N" ${s.yn_value==='N'?'selected':''}>N</option>
+          <option value="NA" ${s.yn_value==='NA'?'selected':''}>NA</option>
+        </select>`;
+      } else {
+        scoreControl = `<select class="score-select" data-section-id="${s.id}" data-field="score">
+          ${[1,2,3,4,5].map(v => `<option value="${v}" ${s.score===v?'selected':''}>${v}/5</option>`).join('')}
+        </select>`;
+      }
+
+      const confControl = `<select class="confidence-select" data-section-id="${s.id}" data-field="confidence">
+        <option value="high" ${s.confidence==='high'?'selected':''}>HIGH</option>
+        <option value="medium" ${s.confidence==='medium'?'selected':''}>MEDIUM</option>
+        <option value="low" ${s.confidence==='low'?'selected':''}>LOW</option>
+      </select>`;
+
+      return `
+        <div class="section-row">
+          <div>
+            <div class="section-name">${s.name}${audioTag}</div>
+            <textarea class="reasoning-textarea" data-section-id="${s.id}" data-field="reasoning" rows="2">${s.reasoning}</textarea>
+            ${flags}
+          </div>
+          <div>${scoreControl}</div>
+          <div>${confControl}</div>
+        </div>
+      `;
+    });
+
+  const notes = `
+    <div class="notes-section">
+      ${sc.call_summary ? `<div class="notes-label">Call Summary</div><div style="margin-bottom:0.75rem;">${sc.call_summary}</div>` : ''}
+      <div class="notes-label">Key Strengths</div>
+      <textarea class="notes-textarea" id="strengths-${jobId}" rows="3">${sc.key_strengths || ''}</textarea>
+      <div style="margin-top:0.75rem;">
+        <div class="notes-label">Opportunities for Improvement</div>
+        <textarea class="notes-textarea" id="opportunities-${jobId}" rows="3">${sc.opportunities || ''}</textarea>
+      </div>
+    </div>
+  `;
+
+  const manualSecs = _teamSections.filter(s => s.score_type === 'manual' || s.score_type === 'manual_yn');
+  const initialDisabled = manualSecs.length > 0;
+  const initialStatus = initialDisabled
+    ? `Score ${manualSecs.map(s => s.name).join(' + ')} to enable Approve & Send.`
+    : 'Review scores and click to send evaluation email.';
+  const approveBar = `
+    <div class="approve-bar" id="approve-bar-${jobId}">
+      <span class="approve-status" id="approve-status-${jobId}">${initialStatus}</span>
+      <button class="btn-approve" id="approve-btn-${jobId}" onclick="approveScorecard('${jobId}')" ${initialDisabled ? 'disabled' : ''}>Approve & Send</button>
+    </div>
+  `;
+
+  const transcriptId = `transcript-${jobId}`;
+  let transcriptPanel = '';
+  if (sc.transcript_display && sc.transcript_display.length > 0) {
+    const transcriptLines = sc.transcript_display.map(line => `
+      <div class="transcript-line">
+        <div class="transcript-ts">${line.timestamp || ''}</div>
+        <div><span class="transcript-speaker">${line.speaker}:</span> ${line.text}</div>
+      </div>
+    `).join('');
+
+    const momentsHtml = sc.moments_display && sc.moments_display.length > 0
+      ? `<div class="moments-list">
+          <div class="notes-label" style="margin-bottom:0.4rem;">Signal Moments</div>
+          ${sc.moments_display.map(m => `
+            <span class="moment-item"><span class="moment-ts">${m.timestamp || ''}</span> ${m.type}</span>
+          `).join('')}
+        </div>`
+      : '';
+
+    transcriptPanel = `
+      <div class="transcript-panel">
+        <div class="transcript-toggle" onclick="
+          this.classList.toggle('open');
+          document.getElementById('${transcriptId}').classList.toggle('open');
+        ">
+          <span>Transcript (${sc.transcript_display.length} lines)</span>
+          <span class="arrow">&#9654;</span>
+        </div>
+        <div class="transcript-body" id="${transcriptId}">
+          ${transcriptLines}
+        </div>
+        ${momentsHtml}
+      </div>
+    `;
+  }
+
+  panel.innerHTML = header + sectionRows.join('') + approveBar + notes + transcriptPanel;
+  return panel;
+}
+
+function checkManualScores(jobId) {
+  const btn = document.getElementById(`approve-btn-${jobId}`);
+  const statusEl = document.getElementById(`approve-status-${jobId}`);
+  if (!btn || !statusEl) return;
+
+  const missing = _teamSections
+    .filter(s => s.score_type === 'manual' || s.score_type === 'manual_yn')
+    .filter(s => {
+      const sel = document.getElementById(`manual-score-${s.id}-${jobId}`);
+      return !sel || !sel.value;
+    });
+  if (missing.length === 0) {
+    btn.disabled = false;
+    statusEl.textContent = 'Review scores and click to send evaluation email.';
+  } else {
+    btn.disabled = true;
+    statusEl.textContent = `Score ${missing.map(s => s.name).join(' + ')} to enable Approve & Send.`;
+  }
+}
+
+async function approveScorecard(jobId) {
+  const btn = document.getElementById(`approve-btn-${jobId}`);
+  const statusEl = document.getElementById(`approve-status-${jobId}`);
+  const panel = document.getElementById(`scorecard-${jobId}`);
+
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+  statusEl.textContent = 'Updating sheets and sending email...';
+
+  const sc = _scorecardData[jobId];
+
+  const sections = sc.sections.map(s => {
+    const scoreEl = panel.querySelector(`[data-section-id="${s.id}"][data-field="score"]`);
+    const ynEl = panel.querySelector(`[data-section-id="${s.id}"][data-field="yn_value"]`);
+    const confEl = panel.querySelector(`[data-section-id="${s.id}"][data-field="confidence"]`);
+    const reasonEl = panel.querySelector(`[data-section-id="${s.id}"][data-field="reasoning"]`);
+
+    return {
+      id: s.id,
+      name: s.name,
+      score: scoreEl ? parseInt(scoreEl.value) : null,
+      score_type: s.score_type,
+      yn_value: ynEl ? ynEl.value : null,
+      confidence: confEl ? confEl.value : s.confidence,
+      reasoning: reasonEl ? reasonEl.value : s.reasoning,
+      audio_dependent: s.audio_dependent,
+      flags: s.flags || [],
+    };
+  });
+
+  _teamSections
+    .filter(s => s.score_type === 'manual' || s.score_type === 'manual_yn')
+    .forEach(ms => {
+      const scoreEl = document.getElementById(`manual-score-${ms.id}-${jobId}`);
+      const reasonEl = document.getElementById(`manual-reasoning-${ms.id}-${jobId}`);
+      const rawValue = scoreEl && scoreEl.value ? scoreEl.value : '';
+      const isYn = ms.score_type === 'manual_yn';
+      const reasoning = (reasonEl && reasonEl.value || '').trim();
+      sections.push({
+        id: ms.id,
+        name: ms.name,
+        score: !isYn && rawValue ? parseInt(rawValue) : null,
+        score_type: ms.score_type,
+        yn_value: isYn && rawValue ? rawValue : null,
+        confidence: 'manual',
+        reasoning: reasoning || 'Scored manually by manager.',
+        audio_dependent: false,
+        flags: [],
+      });
+    });
+
+  const payload = {
+    sections,
+    key_strengths: document.getElementById(`strengths-${jobId}`).value,
+    opportunities: document.getElementById(`opportunities-${jobId}`).value,
+  };
+
+  try {
+    const res = await fetch(`${API_BASE}/score/${jobId}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(payload),
+    });
+
+    if (res.status === 401) {
+      localStorage.removeItem('qa_api_key');
+      alert('Invalid API key. Please reload and try again.');
+      btn.disabled = false;
+      btn.textContent = 'Approve & Send';
+      return;
+    }
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || 'Unknown error');
+    }
+
+    const data = await res.json();
+
+    btn.textContent = 'Sent';
+    btn.style.background = '#065f46';
+    statusEl.textContent = `Approved — destination row ${data.destination_row}. Email dispatched.`;
+    panel.querySelectorAll('select, textarea').forEach(el => el.disabled = true);
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}. You can retry.`;
+    statusEl.style.color = '#fca5a5';
+    btn.disabled = false;
+    btn.textContent = 'Retry Approve & Send';
+  }
+}
+</script>
+
+</body>
+</html>

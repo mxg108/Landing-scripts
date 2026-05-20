@@ -9,27 +9,38 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile, File, Form
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, UploadFile, File, Form
 
+from backend.config import score_audit as audit_cfg
 from backend.config.team_config import get_team_config
-from backend.middleware.auth import team_id_from_path
+from backend.middleware.auth import (
+    KeyIdentity,
+    check_scoring_access,
+    require_api_key,
+    team_id_from_path,
+)
 from backend.models.scorecard import ApprovalRequest
+from backend.services.history_service import agent_name_for_email, email_in_team_mails
 from backend.services.scoring_service import score_call
 from backend.services.sheets_service import (
-    write_draft_to_fr_ai,
+    append_score_audit_row,
     apply_analyst_edits_to_fr_ai,
-    write_to_score_destination,
-    read_score_and_writeback,
     finalize_to_analyst_history,
+    read_score_and_writeback,
     trigger_apps_script,
+    write_draft_to_fr_ai,
+    write_to_score_destination,
 )
 from backend.services.dialpad_client import (
-    get_user_id_by_name,
-    get_calls_for_agent,
-    get_transcript,
-    get_call_details,
     DialpadRateLimited,
+    NoRecordingAvailable,
+    download_recording,
+    get_calls_for_agent,
+    get_call_details,
+    get_transcript,
+    get_user_id_by_name,
 )
 
 router = APIRouter(tags=["scoring"])
@@ -37,6 +48,22 @@ router = APIRouter(tags=["scoring"])
 # In-memory job store. Keyed by f"{team_id}:{job_id}" so jobs from one team
 # cannot be read by another.
 _jobs: dict[str, dict] = {}
+
+# Per-API-key concurrent-jobs semaphore. Keyed on KeyIdentity (frozen
+# dataclass, hashable) so two requests with the same key share a slot
+# pool. Acquired inside the background task — the HTTP response still
+# returns immediately, but the Gemini scoring call queues behind the
+# cap so a single privileged operator can't fan out 50 calls at once.
+_KEY_CONCURRENT_LIMIT = 5
+_key_semaphores: dict[KeyIdentity, asyncio.Semaphore] = {}
+
+
+def _semaphore_for_key(identity: KeyIdentity) -> asyncio.Semaphore:
+    sem = _key_semaphores.get(identity)
+    if sem is None:
+        sem = asyncio.Semaphore(_KEY_CONCURRENT_LIMIT)
+        _key_semaphores[identity] = sem
+    return sem
 
 
 def _job_key(team_id: str, job_id: str) -> str:
@@ -89,24 +116,140 @@ async def list_calls(agent_name: str, date_start: str, date_end: str):
 async def score_single_call(
     request: Request,
     background_tasks: BackgroundTasks,
-    audio_file: UploadFile = File(...),
+    identity: KeyIdentity = Depends(require_api_key),
+    audio_file: Optional[UploadFile] = File(default=None),
     call_id: str = Form(...),
-    agent_name: str = Form(...),
+    agent_email: Optional[str] = Form(default=None),
+    agent_name: Optional[str] = Form(default=None),
     manager_email: str = Form(...),
     duration_ms: float = Form(default=0),
 ):
-    """
-    Score a single call.
-    Accepts an audio file upload + form fields.
-    Runs scoring in background and writes result to Google Sheets.
-    Returns a job_id to poll for status.
+    """Score a single call.
+
+    Two input modes:
+      * **Manual upload** (legacy) — caller sends ``audio_file`` + ``agent_name``.
+      * **Lookup-driven** (new) — caller sends ``call_id`` + ``agent_email``;
+        the backend downloads the recording via ``download_recording`` and
+        resolves ``agent_name`` from the team's Mails roster.
+
+    Returns ``{job_id, status}``. Idempotent against double-clicks: a
+    second POST with the same ``(team_id, call_id, agent_name)`` while a
+    prior job is still ``pending``/``scoring`` returns that job's id
+    instead of starting a new run.
+
+    Auth notes:
+      * Team key: ``agent_email`` (or the email resolved from
+        ``agent_name``) must be in the team's Mails roster.
+      * Privileged key: any real ``team_id`` is allowed; roster
+        membership is NOT required (caller picks the target team via the
+        frontend's team-pick dialog when the agent is unrostered).
     """
     team_id = team_id_from_path(request)
-    audio_bytes = await audio_file.read()
+    config = get_team_config(team_id)
+
+    if not agent_email and not agent_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Must supply agent_email or agent_name",
+        )
+
+    # Resolve agent_name from email if missing. For team keys we also
+    # resolve email→name when both are present so the audit row carries
+    # the canonical display name.
+    if agent_email:
+        resolved_name = await agent_name_for_email(agent_email, team_id)
+        if resolved_name and not agent_name:
+            agent_name = resolved_name
+
+    if not agent_name:
+        # Unrostered + privileged caller may legitimately have only an
+        # email — fall back to the local part so the job key stays stable.
+        agent_name = (agent_email or "").split("@", 1)[0] or "unknown"
+
+    # Auth: precompute roster membership (async I/O) then run the sync
+    # check. On denial, write a denied-audit row before raising.
+    is_in_roster = (
+        await email_in_team_mails(agent_email, team_id)
+        if agent_email else False
+    )
+    try:
+        check_scoring_access(
+            identity, team_id, agent_email, is_in_roster=is_in_roster,
+        )
+    except HTTPException as exc:
+        append_score_audit_row(
+            api_key_role=identity.role,
+            evaluator_email=manager_email,
+            agent_email=agent_email or "",
+            agent_name=agent_name,
+            call_id=call_id,
+            target_team=team_id,
+            action=audit_cfg.ACTION_DENIED,
+            result_row=None,
+            notes=f"http_{exc.status_code}",
+        )
+        raise
+
+    # Idempotency: return an existing in-flight job_id rather than
+    # launching a duplicate background run on double-click.
     job_id = _make_job_id(call_id, agent_name)
     key = _job_key(team_id, job_id)
-    _jobs[key] = {"status": "pending", "call_id": call_id}
-    config = get_team_config(team_id)
+    existing = _jobs.get(key)
+    if existing and existing.get("status") in {"pending", "scoring"}:
+        return {"job_id": job_id, "status": existing["status"]}
+
+    # Resolve audio bytes — either uploaded or fetched from Dialpad.
+    audio_bytes: bytes
+    filename: str
+    if audio_file is not None:
+        audio_bytes = await audio_file.read()
+        filename = audio_file.filename or f"{call_id}.mp3"
+    else:
+        try:
+            audio_bytes = await download_recording(call_id)
+        except NoRecordingAvailable:
+            append_score_audit_row(
+                api_key_role=identity.role,
+                evaluator_email=manager_email,
+                agent_email=agent_email or "",
+                agent_name=agent_name,
+                call_id=call_id,
+                target_team=team_id,
+                action=audit_cfg.ACTION_DENIED,
+                result_row=None,
+                notes="no_recording",
+            )
+            raise HTTPException(
+                status_code=422,
+                detail="Call has no recording in Dialpad",
+            )
+        except DialpadRateLimited:
+            append_score_audit_row(
+                api_key_role=identity.role,
+                evaluator_email=manager_email,
+                agent_email=agent_email or "",
+                agent_name=agent_name,
+                call_id=call_id,
+                target_team=team_id,
+                action=audit_cfg.ACTION_DENIED,
+                result_row=None,
+                notes="rate_limited",
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Dialpad rate-limited; retry shortly",
+            )
+        filename = f"{call_id}.mp3"
+
+    _jobs[key] = {
+        "status": "pending",
+        "call_id": call_id,
+        # Persisted so /score/{job_id}/approve can write a complete
+        # Score_Audit row without re-deriving identity from the scorecard.
+        "agent_email": agent_email or "",
+        "agent_name": agent_name,
+        "manager_email": manager_email,
+    }
 
     # Pre-fetch Dialpad metadata in the handler (sequential per request) so
     # fan-out background tasks don't burst Dialpad and lose metadata to 429s.
@@ -117,20 +260,37 @@ async def score_single_call(
         print(f"[score] Dialpad rate-limited fetching call_details for {call_id}; proceeding with blanks")
         call_details = None
 
+    # Audit row written before the background task is scheduled so the
+    # operator action is logged even if the worker crashes.
+    append_score_audit_row(
+        api_key_role=identity.role,
+        evaluator_email=manager_email,
+        agent_email=agent_email or "",
+        agent_name=agent_name,
+        call_id=call_id,
+        target_team=team_id,
+        action=audit_cfg.ACTION_SCORED,
+        result_row=None,
+        notes="",
+    )
+
+    semaphore = _semaphore_for_key(identity)
+
     async def run():
         try:
             _jobs[key]["status"] = "scoring"
-            scorecard = await score_call(
-                audio_bytes=audio_bytes,
-                filename=audio_file.filename,
-                call_id=call_id,
-                agent_name=agent_name,
-                manager_email=manager_email,
-                config=config,
-                duration_ms=duration_ms,
-                transcript_data=transcript_data,
-                call_details=call_details,
-            )
+            async with semaphore:
+                scorecard = await score_call(
+                    audio_bytes=audio_bytes,
+                    filename=filename,
+                    call_id=call_id,
+                    agent_name=agent_name,
+                    manager_email=manager_email,
+                    config=config,
+                    duration_ms=duration_ms,
+                    transcript_data=transcript_data,
+                    call_details=call_details,
+                )
             row_num = write_draft_to_fr_ai(scorecard, config)
             _jobs[key]["status"] = "complete"
             _jobs[key]["sheets_row"] = row_num
@@ -213,11 +373,20 @@ async def score_batch(
 
 
 @router.post("/score/{job_id}/approve")
-async def approve_scorecard(request: Request, job_id: str, approval: ApprovalRequest):
+async def approve_scorecard(
+    request: Request,
+    job_id: str,
+    approval: ApprovalRequest,
+    identity: KeyIdentity = Depends(require_api_key),
+):
     """
     Manager approves a scored call (optionally with edits).
     Updates Form Responses AI, copies to Form Responses 1,
     waits for ARRAYFORMULA, then triggers Apps Script email pipeline.
+
+    Writes a Score_Audit row with action="approved" once Stage 4
+    succeeds — captured before the Apps Script email dispatch so an
+    Apps Script failure still leaves the audit trail intact.
     """
     team_id = team_id_from_path(request)
     key = _job_key(team_id, job_id)
@@ -286,6 +455,22 @@ async def approve_scorecard(request: Request, job_id: str, approval: ApprovalReq
             config=config,
         )
         print(f"[approve] Stage 4 complete. Analyst_History row: {history_row}")
+
+        # Audit the approval BEFORE Stage 5 so a downstream Apps Script
+        # failure doesn't lose the record. Identity comes from the API key
+        # used to hit /approve (may differ from the one that hit /score —
+        # e.g. a privileged operator approving on behalf of a team).
+        append_score_audit_row(
+            api_key_role=identity.role,
+            evaluator_email=evaluator_email,
+            agent_email=job.get("agent_email", ""),
+            agent_name=job.get("agent_name") or sc.get("agent_name") or "",
+            call_id=job.get("call_id", ""),
+            target_team=team_id,
+            action=audit_cfg.ACTION_APPROVED,
+            result_row=history_row,
+            notes="",
+        )
 
         # Stage 5 — dispatch QA email via Apps Script (reads AH row).
         print(f"[approve] Triggering Apps Script doPost (history_row={history_row})...")

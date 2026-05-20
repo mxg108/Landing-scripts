@@ -90,6 +90,11 @@ async def serve_lookup_page(team_id: str):
     return FileResponse(_frontend_dir / "lookup.html", headers=_HTML_NO_CACHE)
 
 
+@app.get("/scorecard/{team_id}/{job_id}", include_in_schema=False)
+async def serve_scorecard_page(team_id: str, job_id: str):
+    return FileResponse(_frontend_dir / "scorecard.html", headers=_HTML_NO_CACHE)
+
+
 # --- Legacy page redirects (30-day transition) ---
 
 @app.get("/", include_in_schema=False)

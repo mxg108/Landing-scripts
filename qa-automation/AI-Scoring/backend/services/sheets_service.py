@@ -573,6 +573,96 @@ def finalize_to_analyst_history(
 # Phase C will switch to Analyst_History row)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Score_Audit append (LookupToScore.md design)
+# ---------------------------------------------------------------------------
+
+def _build_score_audit_row(
+    *,
+    timestamp: str,
+    api_key_role: str,
+    evaluator_email: str,
+    agent_email: str,
+    agent_name: str,
+    call_id: str,
+    target_team: str,
+    action: str,
+    result_row: int | None,
+    notes: str,
+) -> list[str]:
+    """Compose one Score_Audit row in COLUMNS order.
+
+    Kept pure (no gspread, no clock) so tests can drive it directly and
+    the live-Sheets append helper stays a thin wrapper.
+    """
+    from backend.config import score_audit as audit_cfg
+
+    if action not in audit_cfg.ACTIONS:
+        raise ValueError(f"unknown audit action '{action}'")
+    if api_key_role not in audit_cfg.ROLES:
+        raise ValueError(f"unknown api_key_role '{api_key_role}'")
+
+    return [
+        timestamp,
+        api_key_role,
+        evaluator_email,
+        agent_email,
+        agent_name,
+        call_id,
+        target_team,
+        action,
+        "" if result_row is None else str(result_row),
+        notes,
+    ]
+
+
+def append_score_audit_row(
+    *,
+    api_key_role: str,
+    evaluator_email: str,
+    agent_email: str,
+    agent_name: str,
+    call_id: str,
+    target_team: str,
+    action: str,
+    result_row: int | None = None,
+    notes: str = "",
+) -> int:
+    """Append one row to the Score_Audit tab on the host spreadsheet.
+
+    Writes timestamp as ISO 8601 UTC. Always targets the audit host
+    team's spreadsheet (member_support) regardless of ``target_team`` —
+    a privileged evaluator scoring a Sales call still appends to the
+    same audit log.
+
+    Returns the appended row number (1-indexed), or -1 if the gspread
+    response can't be parsed (matches the rest of this module).
+    """
+    from backend.config import score_audit as audit_cfg
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    row = _build_score_audit_row(
+        timestamp=timestamp,
+        api_key_role=api_key_role,
+        evaluator_email=evaluator_email,
+        agent_email=agent_email,
+        agent_name=agent_name,
+        call_id=call_id,
+        target_team=target_team,
+        action=action,
+        result_row=result_row,
+        notes=notes,
+    )
+
+    sheet = _get_spreadsheet(audit_cfg.HOST_TEAM_ID).worksheet(audit_cfg.TAB_NAME)
+    result = sheet.append_row(row, value_input_option="USER_ENTERED")
+    return _parse_appended_row_num(result)
+
+
+# ---------------------------------------------------------------------------
+# Apps Script trigger
+# ---------------------------------------------------------------------------
+
 def trigger_apps_script(history_row_num: int, team_id: str) -> dict:
     """POST to the team's Apps Script web app to dispatch the QA email.
 

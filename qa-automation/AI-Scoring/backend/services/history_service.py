@@ -284,3 +284,72 @@ class SheetsProvider(DataProvider):
             records.append(rec)
         records.sort(key=lambda r: r.timestamp)
         return records
+
+
+# ---------------------------------------------------------------------------
+# Mails-tab helpers (used by /score auth + /lookup/scoring-permission)
+# ---------------------------------------------------------------------------
+# Pure logic lives in `_email_in_mails_rows` so tests can drive it with
+# synthetic list[list[str]] fixtures (matches the load_and_clean pattern).
+# The async wrappers fetch the Mails tab via the cached SheetsProvider.
+
+def _email_in_mails_rows(email: str, mails_rows: list[list[str]]) -> bool:
+    """Return True if ``email`` appears in column B of Mails (case-insensitive)."""
+    if not email:
+        return False
+    needle = email.strip().lower()
+    if not needle:
+        return False
+    for row in mails_rows[1:]:  # skip header
+        if len(row) < 2:
+            continue
+        if row[1].strip().lower() == needle:
+            return True
+    return False
+
+
+def _agent_name_for_email_in_rows(email: str, mails_rows: list[list[str]]) -> str | None:
+    """Return the agent_name (col A) for ``email`` (col B), or None.
+
+    Uses the canonical name (col D) if present, else the raw name.
+    Case-insensitive on email; preserves the original casing of the name.
+    """
+    if not email:
+        return None
+    needle = email.strip().lower()
+    if not needle:
+        return None
+    for row in mails_rows[1:]:  # skip header
+        if len(row) < 2:
+            continue
+        if row[1].strip().lower() != needle:
+            continue
+        canonical = row[3].strip() if len(row) > 3 and row[3].strip() else ""
+        name = row[0].strip()
+        return canonical or name or None
+    return None
+
+
+async def email_in_team_mails(email: str, team_id: str) -> bool:
+    """Return True if ``email`` is in the active Mails roster for ``team_id``."""
+    from backend.services.data_provider import get_provider
+    provider = await get_provider(team_id)
+    rows = provider._get_mails_sheet()
+    return _email_in_mails_rows(email, rows)
+
+
+async def agent_name_for_email(email: str, team_id: str) -> str | None:
+    """Resolve ``email`` to an agent display name via ``team_id``'s Mails tab."""
+    from backend.services.data_provider import get_provider
+    provider = await get_provider(team_id)
+    rows = provider._get_mails_sheet()
+    return _agent_name_for_email_in_rows(email, rows)
+
+
+async def resolve_team_for_agent(email: str) -> str | None:
+    """Return the team_id whose Mails roster contains ``email``, or None."""
+    from backend.config.team_config import get_all_team_ids
+    for team_id in get_all_team_ids():
+        if await email_in_team_mails(email, team_id):
+            return team_id
+    return None

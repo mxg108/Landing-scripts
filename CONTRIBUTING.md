@@ -103,6 +103,57 @@ dirty. The wrapper will warn but not block.
 
 ---
 
+## AI-Scoring operator notes
+
+### API key tiers
+
+`qa-automation/AI-Scoring` has two key tiers, both Bearer tokens in env vars:
+
+| Env var | Role | Reach |
+|---|---|---|
+| `API_KEY_MEMBER_SUPPORT`, `API_KEY_SALES` | `team` | Locked to that team's `/api/{team_id}/...` routes; only that team's Mails roster can be scored. |
+| `API_KEY_PRIVILEGED` | `privileged` | Cross-team. Bypasses the path-team check and the roster check; the frontend's team-pick dialog supplies the target team when the agent isn't rostered anywhere. |
+
+Generate a new key with `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Both `.env.example` and the Railway env are the source of truth — keep them in sync.
+
+### One-time setup
+
+The audit log lives in a single `Score_Audit` tab on the **member_support** Google Sheet (one row per `/score` POST and per `/score/{job_id}/approve`, regardless of `target_team`). Create it once per Sheets host:
+
+```bash
+cd qa-automation/AI-Scoring
+python3 scripts/init_score_audit_tab.py [--dry-run]
+```
+
+The script is idempotent — re-running it on an existing tab is a no-op.
+
+### End-to-end smoke
+
+`scripts/score_by_call_id.py` exercises the full Lookup-to-Score pipeline against a running backend: `/score` (Dialpad download → Gemini scoring → FR-AI write → audit row) → poll → `/score/{job_id}/approve` (Stage 1.5 → 2 → 3 → 4 → Apps Script email dispatch). **Real side effects** — writes to Sheets and sends a QA evaluation email.
+
+```bash
+AI_SCORING_API_KEY=$API_KEY_PRIVILEGED \
+  python3 scripts/score_by_call_id.py \
+    --team member_support \
+    --call-id <dialpad-call-id> \
+    --agent-email agent@hellolanding.com \
+    --manager-email you@hellolanding.com
+```
+
+Pass `--score-only` to stop after scoring (skips the approve step + email). `--yes` skips the approve confirmation prompt; reserve it for CI.
+
+### Pages
+
+| Path | Purpose |
+|---|---|
+| `/score/{team}` | Upload-driven scoring — drag a recording, fill in metadata, score, approve. |
+| `/lookup/{team}` | Search a Dialpad agent by email, list their calls, one-click **Score Call** per row (no upload — backend downloads via `download_recording`). |
+| `/scorecard/{team}/{job_id}` | Dedicated editor for a single in-progress or completed scoring job. Reached via the **Open editor** link from `/lookup` after scoring completes. |
+
+The API key + manager email are stored in `localStorage` (shared across tabs), so the typical flow is: enter once on first page load → reused everywhere until the browser closes or you clear storage.
+
+---
+
 ## Substantial refactors
 
 For any change estimated at **more than half a day** of work, write a design
