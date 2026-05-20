@@ -1,0 +1,7 @@
+2026-05-20 — Railway GCP outage retry. PR #28 merged but Railway's deploy
+queue was broken by the upstream Google Cloud disruption (status page:
+"Major Outage" Edge Network 2026-05-19 22:29 UTC onward). Existing deploy
+attempt didn't appear in the dashboard list so "Deploy Latest Commit"
+wasn't an option; using a Watch-Path-touching commit instead.
+
+Future triggers: bump the timestamp + note above.
