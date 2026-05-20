@@ -1,7 +1,17 @@
-2026-05-20 — Railway GCP outage retry. PR #28 merged but Railway's deploy
-queue was broken by the upstream Google Cloud disruption (status page:
-"Major Outage" Edge Network 2026-05-19 22:29 UTC onward). Existing deploy
-attempt didn't appear in the dashboard list so "Deploy Latest Commit"
-wasn't an option; using a Watch-Path-touching commit instead.
+2026-05-20 18:44 UTC — Railway Pro upgrade retry. The prior trigger
+commit (d965ffb) didn't build because Hobby-plan Deployments were still
+disabled (Railway tightened policy after the 2026-05-19 GCP outage).
+Plan now upgraded to Pro; this commit re-touches the watch path so the
+deploy actually fires this time.
 
-Future triggers: bump the timestamp + note above.
+Timestamp format: include time-of-day (HH:MM UTC) so consecutive triggers
+on the same calendar day are still distinguishable from each other.
+
+Prior triggers (most recent first):
+- 2026-05-20 18:44 UTC — Pro upgrade retry (this commit)
+- 2026-05-20 ~02:00 UTC — initial trigger after PR #28 merge / GCP
+  outage retry (commit d965ffb); skipped due to Hobby-plan deploy block.
+
+Future triggers: bump the timestamp + add a one-line entry to the
+"Prior triggers" log above. The git history is authoritative; the log
+here is just for quick "why did we trigger?" context without `git log`.
