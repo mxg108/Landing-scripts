@@ -329,6 +329,65 @@ def test_score_endpoint_privileged_bypasses_roster(client, monkeypatch):
 # 400 validation
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Approve writes the audit row
+# ---------------------------------------------------------------------------
+
+def test_approve_writes_audit_row(client, monkeypatch):
+    """Stage 4 success appends a Score_Audit row with action="approved"."""
+    # Pre-seed a completed job with the metadata the approve handler reads.
+    job_id = "call-approve_Luis_Rubio"
+    key = scoring_module._job_key("member_support", job_id)
+    scoring_module._jobs[key] = {
+        "status": "complete",
+        "call_id": "call-approve",
+        "agent_email": "luis@landing.com",
+        "agent_name": "Luis Rubio",
+        "manager_email": "ana@landing.com",
+        "sheets_row": 99,
+        "scorecard": {
+            "manager_email": "ana@landing.com",
+            "agent_name": "Luis Rubio",
+            "sections": [],
+            "call_summary": "",
+            "key_strengths": "",
+            "opportunities": "",
+        },
+    }
+
+    # Stub the four sheets stages + Apps Script trigger so we don't hit gspread.
+    monkeypatch.setattr(scoring_module, "apply_analyst_edits_to_fr_ai", lambda **kw: None)
+    monkeypatch.setattr(scoring_module, "write_to_score_destination", lambda **kw: 200)
+    async def fake_readback(**kw): return "85"
+    monkeypatch.setattr(scoring_module, "read_score_and_writeback", fake_readback)
+    monkeypatch.setattr(scoring_module, "finalize_to_analyst_history", lambda **kw: 555)
+    monkeypatch.setattr(scoring_module, "trigger_apps_script", lambda row, team_id: {"status": "ok"})
+
+    resp = client.post(
+        f"/api/member_support/score/{job_id}/approve",
+        headers={
+            "Authorization": f"Bearer {TEAM_TOKEN}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "sections": [],
+            "key_strengths": "x",
+            "opportunities": "y",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    approved = [r for r in client.audit_rows if r["action"] == "approved"]
+    assert len(approved) == 1
+    row = approved[0]
+    assert row["api_key_role"] == "team"
+    assert row["evaluator_email"] == "ana@landing.com"
+    assert row["agent_email"] == "luis@landing.com"
+    assert row["agent_name"] == "Luis Rubio"
+    assert row["call_id"] == "call-approve"
+    assert row["target_team"] == "member_support"
+    assert row["result_row"] == 555
+
+
 def test_score_endpoint_rejects_missing_agent_identity(client):
     resp = client.post(
         "/api/member_support/score",

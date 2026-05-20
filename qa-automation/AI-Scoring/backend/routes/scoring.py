@@ -241,7 +241,15 @@ async def score_single_call(
             )
         filename = f"{call_id}.mp3"
 
-    _jobs[key] = {"status": "pending", "call_id": call_id}
+    _jobs[key] = {
+        "status": "pending",
+        "call_id": call_id,
+        # Persisted so /score/{job_id}/approve can write a complete
+        # Score_Audit row without re-deriving identity from the scorecard.
+        "agent_email": agent_email or "",
+        "agent_name": agent_name,
+        "manager_email": manager_email,
+    }
 
     # Pre-fetch Dialpad metadata in the handler (sequential per request) so
     # fan-out background tasks don't burst Dialpad and lose metadata to 429s.
@@ -365,11 +373,20 @@ async def score_batch(
 
 
 @router.post("/score/{job_id}/approve")
-async def approve_scorecard(request: Request, job_id: str, approval: ApprovalRequest):
+async def approve_scorecard(
+    request: Request,
+    job_id: str,
+    approval: ApprovalRequest,
+    identity: KeyIdentity = Depends(require_api_key),
+):
     """
     Manager approves a scored call (optionally with edits).
     Updates Form Responses AI, copies to Form Responses 1,
     waits for ARRAYFORMULA, then triggers Apps Script email pipeline.
+
+    Writes a Score_Audit row with action="approved" once Stage 4
+    succeeds — captured before the Apps Script email dispatch so an
+    Apps Script failure still leaves the audit trail intact.
     """
     team_id = team_id_from_path(request)
     key = _job_key(team_id, job_id)
@@ -438,6 +455,22 @@ async def approve_scorecard(request: Request, job_id: str, approval: ApprovalReq
             config=config,
         )
         print(f"[approve] Stage 4 complete. Analyst_History row: {history_row}")
+
+        # Audit the approval BEFORE Stage 5 so a downstream Apps Script
+        # failure doesn't lose the record. Identity comes from the API key
+        # used to hit /approve (may differ from the one that hit /score —
+        # e.g. a privileged operator approving on behalf of a team).
+        append_score_audit_row(
+            api_key_role=identity.role,
+            evaluator_email=evaluator_email,
+            agent_email=job.get("agent_email", ""),
+            agent_name=job.get("agent_name") or sc.get("agent_name") or "",
+            call_id=job.get("call_id", ""),
+            target_team=team_id,
+            action=audit_cfg.ACTION_APPROVED,
+            result_row=history_row,
+            notes="",
+        )
 
         # Stage 5 — dispatch QA email via Apps Script (reads AH row).
         print(f"[approve] Triggering Apps Script doPost (history_row={history_row})...")
