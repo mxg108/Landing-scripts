@@ -15,22 +15,32 @@ from backend.config.team_config import TeamConfig, get_all_team_ids
 
 def test_config_loads_and_exposes_derived_props(config: TeamConfig):
     """All variants validate cleanly and the derived properties are
-    consistent with the raw section list."""
+    consistent with the raw section list.
+
+    Four score_types exist today: ``numeric`` and ``yn`` (AI-scored),
+    plus ``manual`` and ``manual_yn`` (analyst-entered 1-5 score / Y-N
+    value, respectively). ``auto_value`` is an orthogonal axis — any
+    score_type can have a hardcoded value the writer injects.
+    """
     assert len(config.sections) >= 1
     assert config.team_id
 
     n_numeric = sum(1 for s in config.sections if s.score_type == "numeric")
     n_yn = sum(1 for s in config.sections if s.score_type == "yn")
     n_manual = sum(1 for s in config.sections if s.score_type == "manual")
+    n_manual_yn = sum(1 for s in config.sections if s.score_type == "manual_yn")
     n_auto_value = sum(1 for s in config.sections if s.auto_value is not None)
-    assert n_numeric + n_yn + n_manual == len(config.sections)
+    assert n_numeric + n_yn + n_manual + n_manual_yn == len(config.sections)
 
-    # numeric_sections includes manual; yn_sections includes auto_value.
-    # ai_scored_sections excludes BOTH manual AND auto_value (Gemini sees
-    # neither — manual is analyst-filled, auto_value is writer-hardcoded).
+    # Rollup partitions (see TeamConfig section-partition properties):
+    #   numeric_sections = numeric + manual         (any 1-5 stored value)
+    #   yn_sections      = yn      + manual_yn      (any Y/N stored value)
+    #   manual_sections  = manual  + manual_yn      (any analyst-entered value)
+    # ai_scored_sections excludes both manual variants AND auto_value (Gemini
+    # sees neither — manual is analyst-filled, auto_value is writer-hardcoded).
     assert len(config.numeric_sections) == n_numeric + n_manual
-    assert len(config.yn_sections) == n_yn
-    assert len(config.manual_sections) == n_manual
+    assert len(config.yn_sections) == n_yn + n_manual_yn
+    assert len(config.manual_sections) == n_manual + n_manual_yn
     assert len(config.auto_value_sections) == n_auto_value
     assert len(config.ai_scored_sections) == (n_numeric + n_yn) - n_auto_value
 
