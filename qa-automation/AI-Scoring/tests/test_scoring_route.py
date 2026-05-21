@@ -399,3 +399,112 @@ def test_score_endpoint_rejects_missing_agent_identity(client):
     )
     assert resp.status_code == 400
     assert "agent_email" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# /score/batch — parity with /score for audit / idempotency / semaphore
+# ---------------------------------------------------------------------------
+
+def _batch_files(*pairs):
+    """Build httpx files-tuples for multiple audio uploads.
+
+    httpx's TestClient repeats the ``audio_files`` field when given a
+    list of 2-tuples (field, filetuple), matching FastAPI's expectation.
+    """
+    return [("audio_files", (name, body, "audio/mpeg")) for name, body in pairs]
+
+
+def test_batch_writes_one_audit_row_per_call(client):
+    resp = client.post(
+        "/api/member_support/score/batch",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        data={
+            "call_ids": "call-a,call-b,call-c",
+            "agent_name": "Luis Rubio",
+            "manager_email": "ana@landing.com",
+        },
+        files=_batch_files(
+            ("a.mp3", b"AAA"),
+            ("b.mp3", b"BBB"),
+            ("c.mp3", b"CCC"),
+        ),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["count"] == 3
+    assert len(body["job_ids"]) == 3
+
+    scored = [r for r in client.audit_rows if r["action"] == "scored"]
+    assert len(scored) == 3
+    assert all(r["api_key_role"] == "team" for r in scored)
+    assert all(r["agent_name"] == "Luis Rubio" for r in scored)
+    assert all(r["target_team"] == "member_support" for r in scored)
+    assert all(r["notes"] == "batch_upload" for r in scored)
+    assert sorted(r["call_id"] for r in scored) == ["call-a", "call-b", "call-c"]
+
+
+def test_batch_idempotent_on_in_flight_row(client):
+    """A row whose job is already pending/scoring is returned unchanged
+    — no duplicate audit row, no second background task scheduled."""
+    expected_job_id = "call-existing_Luis_Rubio"
+    scoring_module._jobs[
+        scoring_module._job_key("member_support", expected_job_id)
+    ] = {"status": "scoring", "call_id": "call-existing"}
+
+    resp = client.post(
+        "/api/member_support/score/batch",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        data={
+            "call_ids": "call-existing,call-new",
+            "agent_name": "Luis Rubio",
+            "manager_email": "ana@landing.com",
+        },
+        files=_batch_files(
+            ("a.mp3", b"AAA"),
+            ("b.mp3", b"BBB"),
+        ),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    # Both job_ids returned (idempotent caller still gets a stable handle).
+    assert body["job_ids"] == [expected_job_id, "call-new_Luis_Rubio"]
+    # Only ONE audit row — the new call. The in-flight one is skipped.
+    scored = [r for r in client.audit_rows if r["action"] == "scored"]
+    assert len(scored) == 1
+    assert scored[0]["call_id"] == "call-new"
+
+
+def test_batch_mismatch_returns_400(client):
+    resp = client.post(
+        "/api/member_support/score/batch",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        data={
+            "call_ids": "call-a,call-b",
+            "agent_name": "Luis Rubio",
+            "manager_email": "ana@landing.com",
+        },
+        files=_batch_files(("a.mp3", b"AAA")),  # 1 file, 2 ids
+    )
+    assert resp.status_code == 400
+    assert "mismatch" in resp.json()["detail"].lower()
+    # No audit rows for a malformed request.
+    assert client.audit_rows == []
+
+
+def test_batch_privileged_role_recorded_in_audit(client):
+    resp = client.post(
+        "/api/sales/score/batch",
+        headers={"Authorization": f"Bearer {PRIV_TOKEN}"},
+        data={
+            "call_ids": "call-priv-batch",
+            "agent_name": "External Contractor",
+            "manager_email": "hr@landing.com",
+        },
+        files=_batch_files(("c.mp3", b"BYTES")),
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(client.audit_rows) == 1
+    row = client.audit_rows[0]
+    assert row["api_key_role"] == "privileged"
+    assert row["target_team"] == "sales"
+    assert row["notes"] == "batch_upload"
