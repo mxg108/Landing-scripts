@@ -317,15 +317,31 @@ async def get_score_result(request: Request, job_id: str):
 async def score_batch(
     request: Request,
     background_tasks: BackgroundTasks,
+    identity: KeyIdentity = Depends(require_api_key),
     audio_files: list[UploadFile] = File(...),
     call_ids: str = Form(...),        # comma-separated, matching order of audio_files
     agent_name: str = Form(...),
     manager_email: str = Form(...),
     durations_ms: str = Form(default=""),  # comma-separated, matching order
 ):
-    """
-    Score multiple calls in one submission.
-    audio_files and call_ids must be in the same order.
+    """Score multiple calls in one submission.
+
+    ``audio_files`` and ``call_ids`` must be in the same order. Each row
+    in the batch goes through the same plumbing as a single ``/score``
+    POST: an in-flight (``pending``/``scoring``) job for the same key
+    short-circuits (no duplicate scheduling, no second audit row), a
+    Score_Audit row is appended before the background task is scheduled,
+    and the Gemini ``score_call`` await runs inside the per-``KeyIdentity``
+    concurrent-jobs semaphore.
+
+    Unlike ``/score``, ``audio_files`` is still required — the batch
+    upload form is the path that provides files directly. The Dialpad
+    download fallback is single-call only (``/score``).
+
+    Roster check: ``/score/batch`` does NOT enforce the team-key roster
+    membership rule that ``/score`` does. The form has no ``agent_email``
+    field; tightening this would change the upload UI contract. Audit
+    rows still capture the operator's key role + chosen agent_name.
     """
     team_id = team_id_from_path(request)
     id_list = [cid.strip() for cid in call_ids.split(",")]
@@ -338,27 +354,56 @@ async def score_batch(
         )
 
     config = get_team_config(team_id)
-    job_ids = []
+    semaphore = _semaphore_for_key(identity)
+    job_ids: list[str] = []
     for i, (audio_file, call_id) in enumerate(zip(audio_files, id_list)):
-        audio_bytes = await audio_file.read()
         duration = dur_list[i] if i < len(dur_list) else 0
         job_id = _make_job_id(call_id, agent_name)
         key = _job_key(team_id, job_id)
-        _jobs[key] = {"status": "pending", "call_id": call_id}
         job_ids.append(job_id)
+
+        # Idempotency — a row that already has an in-flight job reuses
+        # that job_id, no new background task, no second audit row.
+        existing = _jobs.get(key)
+        if existing and existing.get("status") in {"pending", "scoring"}:
+            continue
+
+        audio_bytes = await audio_file.read()
+        _jobs[key] = {
+            "status": "pending",
+            "call_id": call_id,
+            # Persisted so /score/{job_id}/approve can write a complete
+            # audit row (batch entries don't carry an agent_email).
+            "agent_email": "",
+            "agent_name": agent_name,
+            "manager_email": manager_email,
+        }
+
+        append_score_audit_row(
+            api_key_role=identity.role,
+            evaluator_email=manager_email,
+            agent_email="",
+            agent_name=agent_name,
+            call_id=call_id,
+            target_team=team_id,
+            action=audit_cfg.ACTION_SCORED,
+            result_row=None,
+            notes="batch_upload",
+        )
 
         async def run(ab=audio_bytes, fn=audio_file.filename, cid=call_id, k=key, dur=duration):
             try:
                 _jobs[k]["status"] = "scoring"
-                scorecard = await score_call(
-                    audio_bytes=ab,
-                    filename=fn,
-                    call_id=cid,
-                    agent_name=agent_name,
-                    manager_email=manager_email,
-                    config=config,
-                    duration_ms=dur,
-                )
+                async with semaphore:
+                    scorecard = await score_call(
+                        audio_bytes=ab,
+                        filename=fn,
+                        call_id=cid,
+                        agent_name=agent_name,
+                        manager_email=manager_email,
+                        config=config,
+                        duration_ms=dur,
+                    )
                 row_num = write_draft_to_fr_ai(scorecard, config)
                 _jobs[k]["status"] = "complete"
                 _jobs[k]["sheets_row"] = row_num
