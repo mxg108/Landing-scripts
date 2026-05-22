@@ -266,9 +266,23 @@ async def get_calls_for_agent(
     return calls
 
 
-def build_dialpad_link(call_id: str) -> str:
-    """Construct the Dialpad web link for a call (used by scoring pipeline)."""
-    return f"https://dialpad.com/callhistory/callreview/{call_id}"
+def build_dialpad_link(call_id: str, entry_point_call_id: str = "") -> str:
+    """Construct the Dialpad web link for a call (used by scoring pipeline).
+
+    Dialpad's recording-page URL is keyed by ``entry_point_call_id`` — the
+    id Dialpad assigns to the call's *entry point* (queue, ring group, etc.)
+    — NOT the per-leg ``call_id`` returned by ``/api/v2/call/{id}``. For
+    inbound calls that go through a queue the two differ; for direct calls
+    they may match. The recording page only exists at the entry-point URL,
+    so analysts clicking through to "the call in Dialpad" need that one.
+
+    ``entry_point_call_id`` is preferred when supplied (callers should pass
+    it from ``get_call_details``'s response); falls back to ``call_id`` so
+    code paths that don't have the entry-point id still produce a working
+    link for direct calls and for callers that haven't been updated.
+    """
+    target = (entry_point_call_id or "").strip() or call_id
+    return f"https://dialpad.com/callhistory/callreview/{target}"
 
 
 async def get_recording_share_link(
@@ -328,6 +342,12 @@ async def get_call_details(call_id: str) -> dict:
         "total_duration": 0,
         "target_name": "",
         "target_type": "",
+        # The master call_id is what the API is keyed by; entry_point_call_id
+        # is the id Dialpad uses in the recording-page URL agents actually see.
+        # For inbound→queue→agent flows they differ; for direct calls they may
+        # match. Always returned so build_dialpad_link can route the user to
+        # the page that exists in their Dialpad UI.
+        "entry_point_call_id": "",
     }
 
     if not os.getenv("DIALPAD_API_KEY"):
@@ -371,6 +391,7 @@ async def get_call_details(call_id: str) -> dict:
         "total_duration": data.get("total_duration", 0),
         "target_name": target.get("name", "") or "",
         "target_type": target.get("type", "") or "",
+        "entry_point_call_id": str(data.get("entry_point_call_id", "") or ""),
     }
 
 

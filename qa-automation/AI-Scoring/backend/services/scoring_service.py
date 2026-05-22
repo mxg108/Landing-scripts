@@ -93,7 +93,7 @@ async def score_call(
         call_id=call_id,
         agent_name=agent_name,
         manager_email=manager_email,
-        dialpad_link=build_dialpad_link(call_id),
+        dialpad_link=build_dialpad_link(call_id, call_details.get("entry_point_call_id", "")),
         duration_ms=duration_ms,
         flagged_long_call=flagged_long,
         sop_used=sop_data["sop_title"] or None,
