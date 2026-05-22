@@ -22,7 +22,11 @@ from backend.middleware.auth import (
     team_id_from_path,
 )
 from backend.models.scorecard import ApprovalRequest
-from backend.services.history_service import agent_name_for_email, email_in_team_mails
+from backend.services.history_service import (
+    agent_email_for_name,
+    agent_name_for_email,
+    email_in_team_mails,
+)
 from backend.services.scoring_service import score_call
 from backend.services.sheets_service import (
     append_score_audit_row,
@@ -153,13 +157,17 @@ async def score_single_call(
             detail="Must supply agent_email or agent_name",
         )
 
-    # Resolve agent_name from email if missing. For team keys we also
-    # resolve email→name when both are present so the audit row carries
-    # the canonical display name.
+    # Identity resolution. Both directions are best-effort via Mails:
+    #   - email supplied → resolve name (so audit logs the canonical
+    #     display name from Mails col D, not whatever the form sent).
+    #   - name supplied (legacy upload flow) → resolve email (needed by
+    #     the roster check below — without it, a team key always 403s).
     if agent_email:
         resolved_name = await agent_name_for_email(agent_email, team_id)
         if resolved_name and not agent_name:
             agent_name = resolved_name
+    elif agent_name:
+        agent_email = await agent_email_for_name(agent_name, team_id)
 
     if not agent_name:
         # Unrostered + privileged caller may legitimately have only an

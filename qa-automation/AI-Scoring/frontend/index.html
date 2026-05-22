@@ -226,249 +226,23 @@
     .status-pending  { background: #e5e7eb; color: #374151; }
     .status-scoring  { background: #dbeafe; color: #1e40af; }
     .status-complete { background: var(--badge-high); color: var(--success); }
+    .status-approved { background: var(--badge-high); color: var(--success); }
     .status-error    { background: var(--badge-low); color: var(--error); }
 
-    .scorecard-panel {
-      margin-top: 0.5rem;
-      margin-bottom: 3rem;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      overflow: hidden;
-      border-top: 4px solid var(--navy);
-      border-bottom: 4px solid var(--navy);
-    }
-
-    .scorecard-header {
-      padding: 1rem 1.25rem;
-      background: var(--navy);
-      color: #ffffff;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 0.82rem;
-    }
-
-    .scorecard-header .header-meta {
-      font-size: 0.7rem;
-      color: rgba(255,255,255,0.6);
-      margin-top: 2px;
-      display: flex;
-      gap: 0.75rem;
-      align-items: center;
-    }
-
-    .scorecard-avg {
-      font-family: 'Fraunces', serif;
-      font-size: 1.3rem;
-      font-weight: 300;
-      color: #ffffff;
-    }
-
-    .long-call-flag {
+    /* Job-list "Open editor" link — shown once a job completes; navigates
+       to the /scorecard/{team}/{job_id} editor page (the single renderer). */
+    .open-editor-link {
+      font-family: 'DM Mono', monospace;
       font-size: 0.72rem;
-      padding: 0.2rem 0.6rem;
-      background: #fef3c7;
-      color: #b45309;
-      border-radius: 20px;
-    }
-
-    .section-row {
-      display: grid;
-      grid-template-columns: 1fr 60px 80px;
-      gap: 0.5rem;
-      align-items: start;
-      padding: 0.85rem 1rem;
-      border-bottom: 1px solid var(--border);
-      font-size: 0.78rem;
-    }
-
-    .section-row:last-child { border-bottom: none; }
-
-    .section-name { font-weight: 500; }
-    .section-reasoning { color: var(--muted); font-size: 0.72rem; margin-top: 0.2rem; }
-    .section-flags { color: var(--warning); font-size: 0.68rem; margin-top: 0.15rem; }
-
-    .score-val { text-align: center; font-weight: 500; }
-    .manual-only { color: var(--muted); font-style: italic; text-align: center; font-size: 0.72rem; }
-
-    .confidence-badge {
-      font-size: 0.65rem;
-      padding: 0.15rem 0.4rem;
-      border-radius: 3px;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      text-align: center;
-    }
-
-    .conf-high   { background: var(--badge-high);   color: var(--success); }
-    .conf-medium { background: var(--badge-medium);  color: var(--warning); }
-    .conf-low    { background: var(--badge-low);     color: var(--error); }
-
-    .notes-section {
-      padding: 1rem 1.25rem;
-      background: #f9fafe;
-      border-top: 2px solid var(--border);
-      font-size: 0.78rem;
-    }
-
-    .notes-label {
-      font-size: 0.68rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--muted);
-      margin-bottom: 0.35rem;
-    }
-
-    .sheets-link {
-      font-size: 0.75rem;
+      padding: 3px 10px;
+      border: 1px solid var(--success);
       color: var(--success);
+      border-radius: 4px;
       text-decoration: none;
+      white-space: nowrap;
     }
-
-    .sheets-link:hover { text-decoration: underline; }
-
-    /* Transcript & Moments panel */
-    .transcript-panel {
-      border-top: 2px solid var(--navy);
-      margin-top: 0.5rem;
-    }
-
-    .transcript-toggle {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0.65rem 1rem;
-      cursor: pointer;
-      font-size: 0.78rem;
-      font-weight: 500;
-      background: var(--navy);
-      color: #ffffff;
-      user-select: none;
-    }
-
-    .transcript-toggle:hover { background: #1e2340; }
-
-    .transcript-toggle .arrow {
-      transition: transform 0.2s;
-      font-size: 0.7rem;
-      color: rgba(255, 255, 255, 0.7);
-    }
-
-    .transcript-toggle.open .arrow { transform: rotate(90deg); }
-
-    .transcript-body {
-      display: none;
-      max-height: 400px;
-      overflow-y: auto;
-      padding: 0.5rem 1rem;
-      font-size: 0.75rem;
-      line-height: 1.6;
-    }
-
-    .transcript-body.open { display: block; }
-
-    .transcript-line {
-      display: grid;
-      grid-template-columns: 48px 1fr;
-      gap: 0.5rem;
-      padding: 0.3rem 0;
-      border-bottom: 1px solid #edf2fa;
-    }
-
-    .transcript-line:last-child { border-bottom: none; }
-
-    .transcript-ts {
-      color: var(--muted);
-      font-size: 0.7rem;
-      font-variant-numeric: tabular-nums;
-      padding-top: 0.1rem;
-    }
-
-    .transcript-speaker {
-      font-weight: 500;
-      margin-right: 0.3rem;
-    }
-
-    .moments-list {
-      padding: 0.5rem 1rem;
-      border-top: 1px solid var(--border);
-    }
-
-    .moment-item {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      padding: 0.2rem 0.55rem;
-      margin: 0.2rem 0.2rem;
-      background: #d0ddf0;
-      border-radius: 12px;
-      font-size: 0.68rem;
-      color: var(--text);
-    }
-
-    .moment-ts {
-      color: var(--muted);
-      font-variant-numeric: tabular-nums;
-    }
-
-    /* Editable scorecard controls */
-    .score-select, .confidence-select {
-      font-family: 'DM Mono', monospace;
-      padding: 0.2rem 0.3rem;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      background: var(--bg);
-      color: var(--text);
-      text-align: center;
-      width: 100%;
-      cursor: pointer;
-    }
-    .score-select { font-size: 0.78rem; }
-    .confidence-select {
-      font-size: 0.65rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    .score-select:focus, .confidence-select:focus { border-color: var(--accent); outline: none; }
-    .score-select:disabled, .confidence-select:disabled { opacity: 0.6; cursor: default; }
-
-    .reasoning-textarea, .notes-textarea {
-      font-family: 'DM Mono', monospace;
-      width: 100%;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 0.35rem 0.5rem;
-      resize: vertical;
-      background: var(--bg);
-      line-height: 1.4;
-    }
-    .reasoning-textarea { font-size: 0.72rem; color: var(--muted); margin-top: 0.2rem; min-height: 2.5rem; }
-    .notes-textarea { font-size: 0.78rem; min-height: 3rem; background: #fff; line-height: 1.5; padding: 0.5rem; }
-    .reasoning-textarea:focus, .notes-textarea:focus { border-color: var(--accent); outline: none; }
-    .reasoning-textarea:disabled, .notes-textarea:disabled { opacity: 0.6; cursor: default; }
-
-    .approve-bar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 1rem 1.25rem;
-      background: var(--navy);
-    }
-    .btn-approve {
-      font-family: 'DM Mono', monospace;
-      font-size: 0.82rem;
-      padding: 0.7rem 2rem;
-      background: var(--success);
-      color: white;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-weight: 500;
-      transition: background 0.15s;
-    }
-    .btn-approve:hover { background: #245a42; }
-    .btn-approve:disabled { background: var(--border); cursor: not-allowed; }
-    .approve-status { font-size: 0.78rem; color: rgba(255,255,255,0.7); }
+    .open-editor-link:hover { background: var(--success); color: #fff; }
+    .job-error-detail { font-size: 0.72rem; color: var(--error); }
 
     @media (max-width: 600px) {
       .form-grid { grid-template-columns: 1fr; }
@@ -571,44 +345,9 @@
   }
   loadAgentDropdown();
 
-  // --- Team section list (drives manual-section input rendering) ---
-  // Idempotent: callers can `await loadTeamSections()` to be sure
-  // _teamSections is populated before they read it. On failure the cached
-  // promise is cleared so the next caller retries instead of inheriting
-  // a permanently-empty list. A visible banner surfaces the failure —
-  // silent empty _teamSections is what hid two earlier bugs.
-  let _teamSections = [];
-  let _teamSectionsPromise = null;
-
-  function loadTeamSections() {
-    if (_teamSections.length > 0) return Promise.resolve(_teamSections);
-    if (_teamSectionsPromise) return _teamSectionsPromise;
-    _teamSectionsPromise = (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/team/sections`, { headers: authHeaders() });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        _teamSections = await res.json();
-      } catch (e) {
-        console.error('Failed to load team sections:', e);
-        showSectionsLoadError(e);
-        _teamSectionsPromise = null;
-      }
-      return _teamSections;
-    })();
-    return _teamSectionsPromise;
-  }
-
-  function showSectionsLoadError(e) {
-    if (document.getElementById('sections-load-error')) return;
-    const banner = document.createElement('div');
-    banner.id = 'sections-load-error';
-    banner.style.cssText = 'background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;padding:0.6rem 1rem;margin:0.5rem 0;border-radius:4px;font-size:0.85rem;';
-    banner.textContent = `Team section config failed to load (${e.message}). Scorecard rendering will be incomplete — reload the page or check the API key.`;
-    const main = document.querySelector('main') || document.body;
-    main.insertBefore(banner, main.firstChild);
-  }
-
-  loadTeamSections();
+  // Team-section list is no longer needed on this page — the scorecard
+  // editor at /scorecard/{team}/{job_id} owns rendering. This page is
+  // now upload-only; complete jobs hand off to /scorecard for editing.
   const dropZone = document.getElementById('drop-zone');
   const fileInput = document.getElementById('file-input');
   const fileList = document.getElementById('file-list');
@@ -675,6 +414,11 @@
   }
 
   // --- Submission ---
+  // Single-file upload → navigate same-tab to /scorecard/{team}/{job_id}.
+  // Batch upload (>1 file) → render a status list with "Open editor" links
+  //   per row, polling each job until terminal.
+  // The scorecard editor itself lives only at /scorecard/{team}/{job_id};
+  // this page no longer renders panels inline.
   document.getElementById('score-form').addEventListener('submit', async e => {
     e.preventDefault();
     submitBtn.disabled = true;
@@ -683,7 +427,7 @@
     const agentName = document.getElementById('agent-name').value.trim();
     const managerEmail = document.getElementById('manager-email').value.trim();
 
-    const jobIds = [];
+    const jobs = [];
 
     for (const item of selectedFiles) {
       const formData = new FormData();
@@ -696,374 +440,101 @@
       if (res.status === 401) {
         localStorage.removeItem('qa_api_key');
         alert('Invalid API key. Please reload and try again.');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Score Calls';
+        return;
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        alert(`Submit failed for ${item.file.name}: ${err.detail || res.status}`);
+        submitBtn.disabled = false;
         submitBtn.textContent = 'Score Calls';
         return;
       }
       const data = await res.json();
-      jobIds.push({ jobId: data.job_id, filename: item.file.name, callId: item.callId });
+      jobs.push({ jobId: data.job_id, filename: item.file.name, callId: item.callId });
     }
 
+    submitBtn.textContent = 'Score Calls';
+
+    // Single upload: take the user straight to the scorecard editor. The
+    // editor polls /score/{job_id} on its own, so navigating before status
+    // hits 'complete' is fine — scorecard.html shows a loading state until
+    // the AI returns.
+    if (jobs.length === 1) {
+      window.location.href = `/scorecard/${TEAM_ID}/${encodeURIComponent(jobs[0].jobId)}`;
+      return;
+    }
+
+    // Batch: stay here, render a status list with per-row Open-editor links.
     statusArea.style.display = 'block';
     statusArea.scrollIntoView({ behavior: 'smooth' });
-    submitBtn.textContent = 'Score Calls';
-    pollJobs(jobIds);
+    pollJobs(jobs);
   });
 
-  // --- Polling ---
-  // Store callId per job so buildScorecardPanel can access it
-  const _jobMeta = {};
-  const _scorecardData = {};
-
+  // --- Batch polling (>1 file uploaded) ---
+  // Each row shows status + an "Open editor" link to /scorecard once the
+  // job reaches 'complete'/'approved'. No inline scorecard rendering on
+  // this page — the editor at /scorecard/{team}/{job_id} owns that.
   function pollJobs(jobs) {
     jobListEl.innerHTML = '';
-    jobs.forEach(({ jobId, filename, callId }) => {
-      _jobMeta[jobId] = { filename, callId };
+    jobs.forEach(({ jobId, filename }) => {
       const row = document.createElement('div');
       row.id = `job-${jobId}`;
       row.className = 'job-row';
       row.innerHTML = `
         <span>${filename}</span>
-        <span class="status-badge status-pending">Pending</span>
+        <span class="status-badge status-pending">pending</span>
       `;
       jobListEl.appendChild(row);
     });
 
     const interval = setInterval(async () => {
       let allDone = true;
-      for (const { jobId, filename, callId } of jobs) {
+      for (const { jobId, filename } of jobs) {
         const res = await fetch(`${API_BASE}/score/${jobId}`, { headers: authHeaders() });
         const data = await res.json();
-        updateJobRow(jobId, filename, callId, data);
+        updateJobRow(jobId, filename, data);
         if (!['complete', 'approved', 'error'].includes(data.status)) allDone = false;
       }
       if (allDone) clearInterval(interval);
     }, 3000);
   }
 
-  async function updateJobRow(jobId, filename, callId, data) {
+  function updateJobRow(jobId, filename, data) {
     const row = document.getElementById(`job-${jobId}`);
     if (!row) return;
 
-    if ((data.status === 'complete' || data.status === 'approved') && data.scorecard) {
-      const existing = document.getElementById(`scorecard-${jobId}`);
-      if (!existing) {
-        // _teamSections drives section-row rendering + manual-input splice.
-        // Await here so a slow or initially-failed fetch doesn't produce
-        // an empty scorecard panel.
-        await loadTeamSections();
-        const panel = buildScorecardPanel(jobId, data.scorecard, filename, callId, data.sheets_row);
-        row.className = 'eval-spacer';
-        row.innerHTML = '';
-        row.insertAdjacentElement('afterend', panel);
-      }
-    } else if (data.status === 'error') {
+    const status = data.status || 'pending';
+    if (status === 'complete' || status === 'approved') {
+      // target=_blank so opening one editor doesn't tear down the
+      // batch-status list — the user typically wants to score every job
+      // in the batch and would lose the list on same-tab navigation.
+      const editorHref = `/scorecard/${TEAM_ID}/${encodeURIComponent(jobId)}`;
+      row.innerHTML = `
+        <span>${filename}</span>
+        <span class="status-badge status-${status}">${status}</span>
+        <a class="open-editor-link" href="${editorHref}" target="_blank" rel="noopener">Open editor</a>
+      `;
+    } else if (status === 'error') {
       row.innerHTML = `
         <span>${filename}</span>
         <span class="status-badge status-error">error</span>
-        <span style="font-size:0.72rem; color:var(--error);">${data.error || 'Unknown error'}</span>
+        <span class="job-error-detail">${data.error || 'Unknown error'}</span>
       `;
     } else {
-      // Pending or scoring — show minimal placeholder
       row.innerHTML = `
         <span>${filename}</span>
-        <span class="status-badge status-${data.status}">${data.status}</span>
+        <span class="status-badge status-${status}">${status}</span>
       `;
     }
   }
 
-  function buildScorecardPanel(jobId, sc, filename, callId, sheetsRow) {
-    _scorecardData[jobId] = sc;
+  // The scorecard editor (buildScorecardPanel, checkManualScores,
+  // approveScorecard) was deleted from this file — /scorecard/{team}/{job_id}
+  // is the single renderer. Single-file uploads navigate there; batch
+  // uploads show the per-row "Open editor" link in updateJobRow above.
 
-    const numericScores = sc.sections
-      .filter(s => s.score_type === 'numeric' && s.score !== null)
-      .map(s => s.score);
-    const avg = numericScores.length
-      ? (numericScores.reduce((a, b) => a + b, 0) / numericScores.length).toFixed(2)
-      : 'N/A';
-
-    const flagged = sc.flagged_long_call;
-    const panel = document.createElement('div');
-    panel.id = `scorecard-${jobId}`;
-    panel.className = 'scorecard-panel';
-
-    const sheetsNote = sheetsRow > 0 ? `<span>Sheets row ${sheetsRow}</span>` : '';
-
-    const header = `
-      <div class="scorecard-header">
-        <div>
-          <div>${filename}</div>
-          <div class="header-meta">
-            <span>Call ${callId || ''}</span>
-            <span class="status-badge status-complete">complete</span>
-            ${sheetsNote}
-          </div>
-        </div>
-        <div style="display:flex; gap:0.5rem; align-items:center;">
-          ${flagged ? '<span class="long-call-flag">Long call — manager review</span>' : ''}
-          <span class="scorecard-avg">${avg}<span style="font-family:'DM Mono'; font-size:0.75rem; color:rgba(255,255,255,0.7);">/5</span></span>
-        </div>
-      </div>
-    `;
-
-    const aiById = Object.fromEntries(sc.sections.map(s => [s.id, s]));
-
-    // Walk team sections in canonical order, render AI cards for AI-scored
-    // sections and manual-input cards for manual ones. `auto_value` sections
-    // are skipped (writer hardcodes the value — no analyst input).
-    const sectionRows = _teamSections
-      .filter(ts => !ts.auto_value)
-      .map(ts => {
-        if (ts.score_type === 'manual' || ts.score_type === 'manual_yn') {
-          const options = ts.score_type === 'manual_yn'
-            ? `<option value="" selected>—</option>
-               <option value="Y">Y</option>
-               <option value="N">N</option>
-               <option value="NA">NA</option>`
-            : `<option value="" selected>—</option>
-               <option value="1">1/5</option>
-               <option value="2">2/5</option>
-               <option value="3">3/5</option>
-               <option value="4">4/5</option>
-               <option value="5">5/5</option>`;
-          return `
-            <div class="section-row" style="border-left:3px solid var(--warning);">
-              <div>
-                <div class="section-name" style="color:var(--warning);">${ts.name} — Score Required</div>
-                <textarea class="section-reasoning" id="manual-reasoning-${ts.id}-${jobId}"
-                  placeholder="Enter reasoning for ${ts.name} score (persisted for progression analysis)"
-                  rows="2" style="width:100%; margin-top:0.4rem; font-family:'DM Mono',monospace; font-size:0.82rem; border:1px solid #d1d5db; border-radius:4px; padding:0.4rem; resize:vertical;"></textarea>
-              </div>
-              <div>
-                <select class="score-select" id="manual-score-${ts.id}-${jobId}" onchange="checkManualScores('${jobId}')">
-                  ${options}
-                </select>
-              </div>
-              <div><span class="confidence-badge" style="background:#e5e7eb; color:#6b7280;">MANUAL</span></div>
-            </div>
-          `;
-        }
-
-        const s = aiById[ts.id];
-        if (!s) {
-          console.warn(`No AI data for section "${ts.id}"`);
-          return '';
-        }
-        const flags = s.flags && s.flags.length
-          ? `<div class="section-flags">${s.flags.join(', ')}</div>` : '';
-        const audioTag = s.audio_dependent ? ' <span style="color:var(--muted); font-size:0.68rem;">[audio]</span>' : '';
-
-        let scoreControl;
-        if (s.score_type === 'yn') {
-          scoreControl = `<select class="score-select" data-section-id="${s.id}" data-field="yn_value">
-            <option value="Y" ${s.yn_value==='Y'?'selected':''}>Y</option>
-            <option value="N" ${s.yn_value==='N'?'selected':''}>N</option>
-            <option value="NA" ${s.yn_value==='NA'?'selected':''}>NA</option>
-          </select>`;
-        } else {
-          scoreControl = `<select class="score-select" data-section-id="${s.id}" data-field="score">
-            ${[1,2,3,4,5].map(v => `<option value="${v}" ${s.score===v?'selected':''}>${v}/5</option>`).join('')}
-          </select>`;
-        }
-
-        const confControl = `<select class="confidence-select" data-section-id="${s.id}" data-field="confidence">
-          <option value="high" ${s.confidence==='high'?'selected':''}>HIGH</option>
-          <option value="medium" ${s.confidence==='medium'?'selected':''}>MEDIUM</option>
-          <option value="low" ${s.confidence==='low'?'selected':''}>LOW</option>
-        </select>`;
-
-        return `
-          <div class="section-row">
-            <div>
-              <div class="section-name">${s.name}${audioTag}</div>
-              <textarea class="reasoning-textarea" data-section-id="${s.id}" data-field="reasoning" rows="2">${s.reasoning}</textarea>
-              ${flags}
-            </div>
-            <div>${scoreControl}</div>
-            <div>${confControl}</div>
-          </div>
-        `;
-      });
-
-    const notes = `
-      <div class="notes-section">
-        ${sc.call_summary ? `<div class="notes-label">Call Summary</div><div style="margin-bottom:0.75rem;">${sc.call_summary}</div>` : ''}
-        <div class="notes-label">Key Strengths</div>
-        <textarea class="notes-textarea" id="strengths-${jobId}" rows="3">${sc.key_strengths}</textarea>
-        <div style="margin-top:0.75rem;">
-          <div class="notes-label">Opportunities for Improvement</div>
-          <textarea class="notes-textarea" id="opportunities-${jobId}" rows="3">${sc.opportunities}</textarea>
-        </div>
-      </div>
-    `;
-
-    const manualSecs = _teamSections.filter(s => s.score_type === 'manual');
-    const initialDisabled = manualSecs.length > 0;
-    const initialStatus = initialDisabled
-      ? `Score ${manualSecs.map(s => s.name).join(' + ')} to enable Approve & Send.`
-      : 'Review scores and click to send evaluation email.';
-    const approveBar = `
-      <div class="approve-bar" id="approve-bar-${jobId}">
-        <span class="approve-status" id="approve-status-${jobId}">${initialStatus}</span>
-        <button class="btn-approve" id="approve-btn-${jobId}" onclick="approveScorecard('${jobId}')" ${initialDisabled ? 'disabled' : ''}>Approve & Send</button>
-      </div>
-    `;
-
-    // Transcript + Moments panel
-    const transcriptId = `transcript-${jobId}`;
-    let transcriptPanel = '';
-
-    if (sc.transcript_display && sc.transcript_display.length > 0) {
-      const transcriptLines = sc.transcript_display.map(line => `
-        <div class="transcript-line">
-          <div class="transcript-ts">${line.timestamp || ''}</div>
-          <div><span class="transcript-speaker">${line.speaker}:</span> ${line.text}</div>
-        </div>
-      `).join('');
-
-      const momentsHtml = sc.moments_display && sc.moments_display.length > 0
-        ? `<div class="moments-list">
-            <div class="notes-label" style="margin-bottom:0.4rem;">Signal Moments</div>
-            ${sc.moments_display.map(m => `
-              <span class="moment-item"><span class="moment-ts">${m.timestamp || ''}</span> ${m.type}</span>
-            `).join('')}
-          </div>`
-        : '';
-
-      transcriptPanel = `
-        <div class="transcript-panel">
-          <div class="transcript-toggle" onclick="
-            this.classList.toggle('open');
-            document.getElementById('${transcriptId}').classList.toggle('open');
-          ">
-            <span>Transcript (${sc.transcript_display.length} lines)</span>
-            <span class="arrow">&#9654;</span>
-          </div>
-          <div class="transcript-body" id="${transcriptId}">
-            ${transcriptLines}
-          </div>
-          ${momentsHtml}
-        </div>
-      `;
-    }
-
-    panel.innerHTML = header + sectionRows.join('') + approveBar + notes + transcriptPanel;
-    return panel;
-  }
-
-  function checkManualScores(jobId) {
-    const btn = document.getElementById(`approve-btn-${jobId}`);
-    const statusEl = document.getElementById(`approve-status-${jobId}`);
-    if (!btn || !statusEl) return;
-
-    const missing = _teamSections
-      .filter(s => s.score_type === 'manual' || s.score_type === 'manual_yn')
-      .filter(s => {
-        const sel = document.getElementById(`manual-score-${s.id}-${jobId}`);
-        return !sel || !sel.value;
-      });
-    if (missing.length === 0) {
-      btn.disabled = false;
-      statusEl.textContent = 'Review scores and click to send evaluation email.';
-    } else {
-      btn.disabled = true;
-      statusEl.textContent = `Score ${missing.map(s => s.name).join(' + ')} to enable Approve & Send.`;
-    }
-  }
-
-  async function approveScorecard(jobId) {
-    const btn = document.getElementById(`approve-btn-${jobId}`);
-    const statusEl = document.getElementById(`approve-status-${jobId}`);
-    const panel = document.getElementById(`scorecard-${jobId}`);
-
-    btn.disabled = true;
-    btn.textContent = 'Sending...';
-    statusEl.textContent = 'Updating sheets and sending email...';
-
-    const sc = _scorecardData[jobId];
-
-    const sections = sc.sections.map(s => {
-      const scoreEl = panel.querySelector(`[data-section-id="${s.id}"][data-field="score"]`);
-      const ynEl = panel.querySelector(`[data-section-id="${s.id}"][data-field="yn_value"]`);
-      const confEl = panel.querySelector(`[data-section-id="${s.id}"][data-field="confidence"]`);
-      const reasonEl = panel.querySelector(`[data-section-id="${s.id}"][data-field="reasoning"]`);
-
-      return {
-        id: s.id,
-        name: s.name,
-        score: scoreEl ? parseInt(scoreEl.value) : null,
-        score_type: s.score_type,
-        yn_value: ynEl ? ynEl.value : null,
-        confidence: confEl ? confEl.value : s.confidence,
-        reasoning: reasonEl ? reasonEl.value : s.reasoning,
-        audio_dependent: s.audio_dependent,
-        flags: s.flags || [],
-      };
-    });
-
-    // Manual sections — analyst-entered values from the dashboard inputs.
-    // `manual` stores a 1-5 score; `manual_yn` stores Y/N/NA in yn_value.
-    _teamSections
-      .filter(s => s.score_type === 'manual' || s.score_type === 'manual_yn')
-      .forEach(ms => {
-        const scoreEl = document.getElementById(`manual-score-${ms.id}-${jobId}`);
-        const reasonEl = document.getElementById(`manual-reasoning-${ms.id}-${jobId}`);
-        const rawValue = scoreEl && scoreEl.value ? scoreEl.value : '';
-        const isYn = ms.score_type === 'manual_yn';
-        const reasoning = (reasonEl && reasonEl.value || '').trim();
-        sections.push({
-          id: ms.id,
-          name: ms.name,
-          score: !isYn && rawValue ? parseInt(rawValue) : null,
-          score_type: ms.score_type,
-          yn_value: isYn && rawValue ? rawValue : null,
-          confidence: 'manual',
-          reasoning: reasoning || 'Scored manually by manager.',
-          audio_dependent: false,
-          flags: [],
-        });
-      });
-
-    const payload = {
-      sections,
-      key_strengths: document.getElementById(`strengths-${jobId}`).value,
-      opportunities: document.getElementById(`opportunities-${jobId}`).value,
-    };
-
-    try {
-      const res = await fetch(`${API_BASE}/score/${jobId}/approve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify(payload),
-      });
-
-      if (res.status === 401) {
-        localStorage.removeItem('qa_api_key');
-        alert('Invalid API key. Please reload and try again.');
-        btn.disabled = false;
-        btn.textContent = 'Approve & Send';
-        return;
-      }
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || 'Unknown error');
-      }
-
-      const data = await res.json();
-
-      btn.textContent = 'Sent';
-      btn.style.background = '#065f46';
-      statusEl.textContent = `Approved — destination row ${data.destination_row}. Email dispatched.`;
-
-      panel.querySelectorAll('select, textarea').forEach(el => el.disabled = true);
-
-    } catch (err) {
-      statusEl.textContent = `Error: ${err.message}. You can retry.`;
-      statusEl.style.color = '#fca5a5';
-      btn.disabled = false;
-      btn.textContent = 'Retry Approve & Send';
-    }
-  }
 </script>
 
 </body>

@@ -87,8 +87,14 @@ def client(monkeypatch, team_key_identity, priv_key_identity):
             return "Luis Rubio"
         return None
 
+    async def fake_agent_email_for_name(name, team_id):
+        if name in ("Luis Rubio", "luis"):
+            return "luis@landing.com"
+        return None
+
     monkeypatch.setattr(scoring_module, "email_in_team_mails", fake_email_in_team_mails)
     monkeypatch.setattr(scoring_module, "agent_name_for_email", fake_agent_name_for_email)
+    monkeypatch.setattr(scoring_module, "agent_email_for_name", fake_agent_email_for_name)
 
     # Stub Dialpad metadata helpers so the success path doesn't hit the API.
     async def fake_get_transcript(call_id):
@@ -386,6 +392,57 @@ def test_approve_writes_audit_row(client, monkeypatch):
     assert row["call_id"] == "call-approve"
     assert row["target_team"] == "member_support"
     assert row["result_row"] == 555
+
+
+def test_score_endpoint_legacy_name_only_resolves_email_for_roster_check(client, monkeypatch):
+    """Legacy upload flow sends agent_name only (no agent_email). The
+    backend should resolve email from name via Mails so the team-key
+    roster check has something to compare against — otherwise the
+    /score page would always 403."""
+    async def fake_download(call_id):
+        return b"BYTES"
+
+    monkeypatch.setattr(scoring_module, "download_recording", fake_download)
+
+    resp = client.post(
+        "/api/member_support/score",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        data={
+            "call_id": "call-legacy",
+            "agent_name": "Luis Rubio",  # name only, no email
+            "manager_email": "ana@landing.com",
+        },
+        files={"audio_file": ("c.mp3", b"BYTES", "audio/mpeg")},
+    )
+    assert resp.status_code == 200, resp.text
+    # Audit row should carry the resolved email, not blank.
+    scored = [r for r in client.audit_rows if r["action"] == "scored"]
+    assert len(scored) == 1
+    assert scored[0]["agent_email"] == "luis@landing.com"
+    assert scored[0]["agent_name"] == "Luis Rubio"
+
+
+def test_score_endpoint_legacy_name_only_unrostered_team_key_rejected(client, monkeypatch):
+    """If Mails can't resolve the name → no email → team key still 403s,
+    just like the post-PR-28 behavior intends."""
+    async def fake_download(call_id):
+        return b"BYTES"
+
+    monkeypatch.setattr(scoring_module, "download_recording", fake_download)
+
+    resp = client.post(
+        "/api/member_support/score",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        data={
+            "call_id": "call-legacy-miss",
+            "agent_name": "Not In Roster",  # not in stubbed Mails
+            "manager_email": "ana@landing.com",
+        },
+        files={"audio_file": ("c.mp3", b"BYTES", "audio/mpeg")},
+    )
+    assert resp.status_code == 403
+    denied = [r for r in client.audit_rows if r["action"] == "denied"]
+    assert len(denied) == 1
 
 
 def test_score_endpoint_rejects_missing_agent_identity(client):

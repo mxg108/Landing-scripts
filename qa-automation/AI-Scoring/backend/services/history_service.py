@@ -308,6 +308,31 @@ def _email_in_mails_rows(email: str, mails_rows: list[list[str]]) -> bool:
     return False
 
 
+def _agent_email_for_name_in_rows(name: str, mails_rows: list[list[str]]) -> str | None:
+    """Return col B (email) for the agent whose col A or col D matches ``name``.
+
+    Used by the legacy upload flow (agent_name from a dropdown, no email
+    supplied) so the roster check has an email to compare. Case-insensitive
+    on the name; checks both the raw name (col A) and the canonical name
+    (col D) since the dropdown sometimes shows canonical, sometimes raw.
+    """
+    if not name:
+        return None
+    needle = name.strip().lower()
+    if not needle:
+        return None
+    for row in mails_rows[1:]:  # skip header
+        if len(row) < 2:
+            continue
+        raw_name = row[0].strip().lower()
+        canonical = row[3].strip().lower() if len(row) > 3 else ""
+        if raw_name == needle or (canonical and canonical == needle):
+            email = row[1].strip()
+            if email:
+                return email
+    return None
+
+
 def _agent_name_for_email_in_rows(email: str, mails_rows: list[list[str]]) -> str | None:
     """Return the agent_name (col A) for ``email`` (col B), or None.
 
@@ -344,6 +369,14 @@ async def agent_name_for_email(email: str, team_id: str) -> str | None:
     provider = await get_provider(team_id)
     rows = provider._get_mails_sheet()
     return _agent_name_for_email_in_rows(email, rows)
+
+
+async def agent_email_for_name(name: str, team_id: str) -> str | None:
+    """Resolve ``name`` to an agent email via ``team_id``'s Mails tab."""
+    from backend.services.data_provider import get_provider
+    provider = await get_provider(team_id)
+    rows = provider._get_mails_sheet()
+    return _agent_email_for_name_in_rows(name, rows)
 
 
 async def resolve_team_for_agent(email: str) -> str | None:

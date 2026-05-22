@@ -18,6 +18,7 @@ import os
 import pytest
 
 from backend.services.history_service import (
+    _agent_email_for_name_in_rows,
     _agent_name_for_email_in_rows,
     _email_in_mails_rows,
 )
@@ -105,6 +106,48 @@ def test_agent_name_for_email_prefers_canonical_when_present():
 def test_agent_name_for_email_empty_string_returns_none():
     rows = make_mails_sheet(["Star Rep"])
     assert _agent_name_for_email_in_rows("", rows) is None
+
+
+# ---------------------------------------------------------------------------
+# Pure helper: _agent_email_for_name_in_rows (reverse of name→email)
+# ---------------------------------------------------------------------------
+
+def test_agent_email_for_name_hit_by_raw_name():
+    rows = make_mails_sheet(["Star Rep", "Decline Rep"])
+    assert _agent_email_for_name_in_rows("Star Rep", rows) == "star.rep@landing.com"
+
+
+def test_agent_email_for_name_hit_by_canonical_name():
+    """Col D canonical name should match too — analyst dropdowns sometimes
+    show canonical, sometimes raw."""
+    rows = [
+        ["Agent Name", "Email", "Supervisor", "Canonical Name"],
+        ["luis", "luis.rubio@landing.com", "Sup A", "Luis Rubio"],
+    ]
+    assert _agent_email_for_name_in_rows("Luis Rubio", rows) == "luis.rubio@landing.com"
+
+
+def test_agent_email_for_name_miss_returns_none():
+    rows = make_mails_sheet(["Star Rep"])
+    assert _agent_email_for_name_in_rows("Nobody", rows) is None
+
+
+def test_agent_email_for_name_case_insensitive():
+    rows = make_mails_sheet(["Star Rep"])
+    assert _agent_email_for_name_in_rows("STAR REP", rows) == "star.rep@landing.com"
+
+
+def test_agent_email_for_name_empty_string_returns_none():
+    rows = make_mails_sheet(["Star Rep"])
+    assert _agent_email_for_name_in_rows("", rows) is None
+
+
+def test_agent_email_for_name_skips_rows_with_blank_email():
+    rows = [
+        ["Agent Name", "Email", "Supervisor", "Canonical Name"],
+        ["No-Email Rep", "", "", ""],
+    ]
+    assert _agent_email_for_name_in_rows("No-Email Rep", rows) is None
 
 
 # ---------------------------------------------------------------------------
