@@ -28,6 +28,33 @@ def test_system_prompt_renders_company(config: TeamConfig):
     assert config.company in out
 
 
+def test_system_prompt_appends_landing_general_rules(config: TeamConfig):
+    """Every team's system prompt must carry the Landing-wide rule block —
+    name-consistency in particular, since multiple agents may share a first
+    name within a team and use different greeting names by design."""
+    out = build_system_prompt(config)
+    assert "GENERAL LANDING RULES" in out
+    # Spot-check the load-bearing rule rather than the whole block — text
+    # may shift over time but this clause must remain expressible.
+    assert "consistency within the call" in out
+    assert "Dialpad-recorded name is internal" in out
+
+
+def test_full_prompt_audio_note_mentions_spanish_and_sop_handling(config: TeamConfig):
+    p = build_prompt(
+        config,
+        transcript_text="Speaker A: hola",
+        sop_title="",
+        sop_content="",
+    )
+    # Audio is primary; transcript secondary.
+    assert "audio is primary" in p.lower() or "transcript is secondary" in p.lower()
+    # Spanish escape hatch.
+    assert "SPANISH" in p
+    # When no SOP is provided, the model must not mention its absence.
+    assert "DO NOT mention a lack of SOP" in p
+
+
 def test_scoring_rubric_includes_every_section(config: TeamConfig):
     out = build_scoring_rubric(config)
     for sec in config.sections:
