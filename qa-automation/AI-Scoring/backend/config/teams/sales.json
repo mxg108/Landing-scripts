@@ -331,7 +331,7 @@
       "history_id": "pre_send_intro",
       "name": "Pre-Send Intro",
       "section_number": 19,
-      "score_type": "yn",
+      "score_type": "manual_yn",
       "audio_dependent": false,
       "rubric_question": "Did the agent send their name and 'Landing' before sending links, options, or pricing breakdowns?",
       "na_applicable": true,

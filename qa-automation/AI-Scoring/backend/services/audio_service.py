@@ -115,7 +115,10 @@ async def score_audio(
         )
 
         raw = _extract_json(response.text)
-        return Scorecard(**raw)
+        sections_by_id = {s.id: s for s in config.sections}
+        return Scorecard.model_validate(
+            raw, context={"sections_by_id": sections_by_id}
+        )
 
     finally:
         # Clean up temp file and Gemini upload

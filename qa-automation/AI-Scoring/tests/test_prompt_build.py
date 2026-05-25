@@ -56,11 +56,67 @@ def test_output_schema_score_range_uses_section_range(config: TeamConfig):
             assert sec.score_range is not None, (
                 f"numeric section {sec.id} missing score_range"
             )
-            expected = f"<{sec.score_range[0]}-{sec.score_range[1]} integer>"
-            assert expected in out, (
+            lo, hi = sec.score_range
+            # Either the plain integer token or the NA-augmented token must
+            # appear, depending on na_applicable.
+            plain = f"<{lo}-{hi} integer>"
+            na_aug = f"<{lo}-{hi} integer, or null if NA>"
+            assert (plain in out) or (na_aug in out), (
                 f"output schema for '{sec.id}' did not render expected "
-                f"range token '{expected}'"
+                f"range token (plain={plain!r} or na_aug={na_aug!r})"
             )
+
+
+# ---------------------------------------------------------------------------
+# N/A handling — numeric + na_applicable
+# ---------------------------------------------------------------------------
+
+def test_numeric_na_applicable_section_schema_allows_na(sales: TeamConfig):
+    """A numeric+na_applicable section's schema must let the model return NA.
+
+    Sales has no numeric+na_applicable section today (all numeric sections
+    are na_applicable=false). We mutate a copy of the config to exercise the
+    branch and assert the prompt surfaces NA correctly.
+    """
+    numeric_sec = next(
+        s for s in sales.ai_scored_sections if s.score_type == "numeric"
+    )
+    numeric_sec.na_applicable = True
+    try:
+        out = build_output_schema(sales)
+        lo, hi = numeric_sec.score_range  # type: ignore[misc]
+        # Surrounding section id ensures we're inspecting the right block.
+        idx = out.find(f'"id": "{numeric_sec.id}"')
+        assert idx != -1, f"section {numeric_sec.id} missing from output schema"
+        block = out[idx:idx + 600]
+        assert f"<{lo}-{hi} integer, or null if NA>" in block
+        assert '"yn_value": "<null or NA>"' in block
+
+        rubric = build_scoring_rubric(sales)
+        # The NA note should now appear within this section's rubric block.
+        r_idx = rubric.find(numeric_sec.name)
+        assert r_idx != -1
+        r_block = rubric[r_idx:r_idx + 1500]
+        assert "Mark NA if not applicable" in r_block
+    finally:
+        numeric_sec.na_applicable = False
+
+
+def test_numeric_non_na_section_schema_unchanged(sales: TeamConfig):
+    """Regression: a numeric section with na_applicable=false must NOT mention NA."""
+    numeric_sec = next(
+        s for s in sales.ai_scored_sections
+        if s.score_type == "numeric" and not s.na_applicable
+    )
+    out = build_output_schema(sales)
+    idx = out.find(f'"id": "{numeric_sec.id}"')
+    assert idx != -1
+    block = out[idx:idx + 600]
+    assert "or null if NA" not in block, (
+        f"numeric section {numeric_sec.id} with na_applicable=false leaked "
+        f"the NA token into the schema"
+    )
+    assert '"yn_value": null' in block
 
 
 def test_full_prompt_assembles_without_error(config: TeamConfig):

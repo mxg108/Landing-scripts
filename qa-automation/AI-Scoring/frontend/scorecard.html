@@ -415,17 +415,19 @@ function buildScorecardPanel(jobId, sc, filename, callId, sheetsRow) {
     .filter(ts => !ts.auto_value)
     .map(ts => {
       if (ts.score_type === 'manual' || ts.score_type === 'manual_yn') {
+        const manualNaOpt = ts.na_applicable ? `<option value="NA">N/A</option>` : '';
         const options = ts.score_type === 'manual_yn'
           ? `<option value="" selected>—</option>
              <option value="Y">Y</option>
              <option value="N">N</option>
-             <option value="NA">NA</option>`
+             ${manualNaOpt}`
           : `<option value="" selected>—</option>
              <option value="1">1/5</option>
              <option value="2">2/5</option>
              <option value="3">3/5</option>
              <option value="4">4/5</option>
-             <option value="5">5/5</option>`;
+             <option value="5">5/5</option>
+             ${manualNaOpt}`;
         return `
           <div class="section-row" style="border-left:3px solid var(--warning);">
             <div>
@@ -453,16 +455,24 @@ function buildScorecardPanel(jobId, sc, filename, callId, sheetsRow) {
         ? `<div class="section-flags">${s.flags.join(', ')}</div>` : '';
       const audioTag = s.audio_dependent ? ' <span style="color:var(--muted); font-size:0.68rem;">[audio]</span>' : '';
 
+      // Dropdown shape is driven by team config (ts), not by the AI's
+      // echoed score_type — the AI can drift (e.g. return "numeric" on a
+      // yn section). The selected-value attributes still consult s.* so
+      // the current AI value renders correctly.
       let scoreControl;
-      if (s.score_type === 'yn') {
+      const naOpt = ts.na_applicable
+        ? `<option value="NA" ${s.yn_value==='NA'?'selected':''}>N/A</option>`
+        : '';
+      if (ts.score_type === 'yn') {
         scoreControl = `<select class="score-select" data-section-id="${s.id}" data-field="yn_value">
           <option value="Y" ${s.yn_value==='Y'?'selected':''}>Y</option>
           <option value="N" ${s.yn_value==='N'?'selected':''}>N</option>
-          <option value="NA" ${s.yn_value==='NA'?'selected':''}>NA</option>
+          ${naOpt}
         </select>`;
       } else {
         scoreControl = `<select class="score-select" data-section-id="${s.id}" data-field="score">
           ${[1,2,3,4,5].map(v => `<option value="${v}" ${s.score===v?'selected':''}>${v}/5</option>`).join('')}
+          ${naOpt}
         </select>`;
       }
 
@@ -586,12 +596,27 @@ async function approveScorecard(jobId) {
     const confEl = panel.querySelector(`[data-section-id="${s.id}"][data-field="confidence"]`);
     const reasonEl = panel.querySelector(`[data-section-id="${s.id}"][data-field="reasoning"]`);
 
+    // Numeric+na_applicable selects expose an "NA" option inside the
+    // score select. Split it: explicit NA -> score=null, yn_value="NA";
+    // otherwise the numeric value parses as int.
+    let score = null;
+    let yn_value = null;
+    if (ynEl) {
+      yn_value = ynEl.value || null;
+    } else if (scoreEl) {
+      if (scoreEl.value === 'NA') {
+        yn_value = 'NA';
+      } else {
+        score = parseInt(scoreEl.value);
+      }
+    }
+
     return {
       id: s.id,
       name: s.name,
-      score: scoreEl ? parseInt(scoreEl.value) : null,
+      score,
       score_type: s.score_type,
-      yn_value: ynEl ? ynEl.value : null,
+      yn_value,
       confidence: confEl ? confEl.value : s.confidence,
       reasoning: reasonEl ? reasonEl.value : s.reasoning,
       audio_dependent: s.audio_dependent,
@@ -607,12 +632,24 @@ async function approveScorecard(jobId) {
       const rawValue = scoreEl && scoreEl.value ? scoreEl.value : '';
       const isYn = ms.score_type === 'manual_yn';
       const reasoning = (reasonEl && reasonEl.value || '').trim();
+
+      // Explicit NA wins for either shape — score=null, yn_value="NA".
+      let score = null;
+      let yn_value = null;
+      if (rawValue === 'NA') {
+        yn_value = 'NA';
+      } else if (isYn && rawValue) {
+        yn_value = rawValue;
+      } else if (!isYn && rawValue) {
+        score = parseInt(rawValue);
+      }
+
       sections.push({
         id: ms.id,
         name: ms.name,
-        score: !isYn && rawValue ? parseInt(rawValue) : null,
+        score,
         score_type: ms.score_type,
-        yn_value: isYn && rawValue ? rawValue : null,
+        yn_value,
         confidence: 'manual',
         reasoning: reasoning || 'Scored manually by manager.',
         audio_dependent: false,

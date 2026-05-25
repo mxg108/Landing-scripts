@@ -464,6 +464,18 @@ async def approve_scorecard(
     job["status"] = "approving"
     config = get_team_config(team_id)
 
+    # Defense-in-depth: re-validate the analyst's payload against team
+    # config so a client can't send yn_value="NA" on a section declared
+    # na_applicable=false. The frontend already gates the dropdown, but
+    # we don't trust it on the server side.
+    sections_by_id = {s.id: s for s in config.sections}
+    try:
+        approval = ApprovalRequest.model_validate(
+            approval.model_dump(), context={"sections_by_id": sections_by_id}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Approval payload invalid: {e}")
+
     try:
         sections_dicts = [s.model_dump() for s in approval.sections]
         sc = job["scorecard"]

@@ -3,19 +3,81 @@
 from __future__ import annotations
 
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationInfo, model_validator
 
 
 class ScorecardSection(BaseModel):
     id: str
     name: str
-    score: Optional[int] = None        # 1-5 for numeric sections, null for Y/N
+    score: Optional[int] = None        # 1-5 for numeric sections; null for yn or explicit N/A
     score_type: str                     # "numeric" or "yn"
-    yn_value: Optional[str] = None     # "Y", "N", "NA" — only for Y/N sections
+    yn_value: Optional[str] = None
+    # "Y" / "N" — yn / manual_yn sections only.
+    # "NA"     — yn / manual_yn AND numeric / manual sections whose team-config
+    #            entry has `na_applicable: true`. Acts as the explicit N/A flag
+    #            for any score_type; `score` must be None when set to "NA".
     confidence: str                     # "high", "medium", "low"
     reasoning: str
     audio_dependent: bool = False
     flags: List[str] = []
+
+    @model_validator(mode="after")
+    def _validate_score_shape(self, info: ValidationInfo) -> "ScorecardSection":
+        """Cross-field consistency + optional team-config check.
+
+        Always-on (no context): catches impossible shapes regardless of source.
+            * yn_value="NA" must coexist with score=None.
+            * yn_value in {"Y","N"} requires score_type yn/manual_yn and score=None.
+            * a numeric score requires score_type numeric/manual and yn_value=None.
+
+        Context-aware (when caller passes context={"section_def": sec_def}):
+            * rejects yn_value="NA" on a section with na_applicable=False —
+              defense-in-depth against a model hallucinating NA on a section
+              that doesn't accept it.
+        """
+        yn = self.yn_value
+        score = self.score
+        st = self.score_type
+
+        if yn == "NA" and score is not None:
+            raise ValueError(
+                f"section {self.id!r}: yn_value='NA' requires score=None, got {score!r}"
+            )
+        if yn in ("Y", "N"):
+            if st not in ("yn", "manual_yn"):
+                raise ValueError(
+                    f"section {self.id!r}: yn_value={yn!r} is only valid on yn/manual_yn "
+                    f"sections, got score_type={st!r}"
+                )
+            if score is not None:
+                raise ValueError(
+                    f"section {self.id!r}: yn_value={yn!r} requires score=None, got {score!r}"
+                )
+        if score is not None:
+            if st not in ("numeric", "manual"):
+                raise ValueError(
+                    f"section {self.id!r}: numeric score={score!r} is only valid on "
+                    f"numeric/manual sections, got score_type={st!r}"
+                )
+            if yn not in (None, ""):
+                raise ValueError(
+                    f"section {self.id!r}: numeric score and yn_value={yn!r} are "
+                    f"mutually exclusive"
+                )
+
+        ctx = info.context or {}
+        sec_def = ctx.get("section_def")
+        if sec_def is None:
+            by_id = ctx.get("sections_by_id")
+            if isinstance(by_id, dict):
+                sec_def = by_id.get(self.id)
+        if sec_def is not None and yn == "NA" and not getattr(sec_def, "na_applicable", False):
+            raise ValueError(
+                f"section {self.id!r}: yn_value='NA' but team config declares "
+                f"na_applicable=false"
+            )
+
+        return self
 
 
 class Scorecard(BaseModel):
