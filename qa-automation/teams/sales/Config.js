@@ -71,6 +71,7 @@ CONFIG.BINARY_CATEGORIES = [
 CONFIG.MANUAL_CATEGORIES = [
   { key: "pb_creation", label: "PB Created", historyIdx: 1 },
   { key: "mc_call_notes", label: "MC Call Notes", historyIdx: 2 },
+  { key: "pre_send_intro", label: "Pre-Send Intro", historyIdx: 18 },
 ];
 
 // ── Section labels + rubric prompts ──────────────────────────

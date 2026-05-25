@@ -39,8 +39,6 @@ class ScoreCard {
     for (var i = 0; i < categories.length; i++) {
       var cat   = categories[i];
       var score = this.entry.numericScores[cat.key];
-      var color = QAEntry.colorForScore(score);
-      var pct   = (score / 5 * 100).toFixed(0);
       var isLast = i === categories.length - 1;
       var reasoning = (this.entry.aiReasoning && this.entry.aiReasoning[cat.key]) || '';
       var hasReasoning = !!reasoning;
@@ -50,17 +48,34 @@ class ScoreCard {
       // last section in the card.
       var scoreRowBorder = (isLast || hasReasoning) ? '' : 'border-bottom:1px solid #F0F0F0;';
 
-      html += '<tr>'
-            + '<td style="padding:6px 8px 6px 0;font-size:13px;color:' + CONFIG.COLORS.TEXT_GRAY
-            + ';width:45%;' + scoreRowBorder + '">'
-            + this._esc(cat.label) + '</td>'
-            + '<td style="padding:6px 8px;width:40%;' + scoreRowBorder + '">'
-            + this._renderBar(pct, color)
-            + '</td>'
-            + '<td style="padding:6px 0 6px 8px;font-size:14px;font-weight:bold;color:' + color
-            + ';text-align:right;width:15%;' + scoreRowBorder + '">'
-            + this._formatScore(score) + '/5</td>'
-            + '</tr>';
+      // score === null => explicit N/A. Render a neutral row (grey label,
+      // no progress bar, "N/A" in the score cell). Distinct from the
+      // legacy 0/5 red, which still happens for actually-unscored cells.
+      if (score === null) {
+        html += '<tr>'
+              + '<td style="padding:6px 8px 6px 0;font-size:13px;color:' + CONFIG.COLORS.TEXT_GRAY
+              + ';width:45%;' + scoreRowBorder + '">'
+              + this._esc(cat.label) + '</td>'
+              + '<td style="padding:6px 8px;width:40%;font-size:12px;font-style:italic;color:'
+              + CONFIG.COLORS.TEXT_GRAY + ';' + scoreRowBorder + '">Not applicable</td>'
+              + '<td style="padding:6px 0 6px 8px;font-size:14px;font-weight:bold;color:'
+              + CONFIG.COLORS.TEXT_GRAY + ';text-align:right;width:15%;' + scoreRowBorder + '">N/A</td>'
+              + '</tr>';
+      } else {
+        var color = QAEntry.colorForScore(score);
+        var pct   = (score / 5 * 100).toFixed(0);
+        html += '<tr>'
+              + '<td style="padding:6px 8px 6px 0;font-size:13px;color:' + CONFIG.COLORS.TEXT_GRAY
+              + ';width:45%;' + scoreRowBorder + '">'
+              + this._esc(cat.label) + '</td>'
+              + '<td style="padding:6px 8px;width:40%;' + scoreRowBorder + '">'
+              + this._renderBar(pct, color)
+              + '</td>'
+              + '<td style="padding:6px 0 6px 8px;font-size:14px;font-weight:bold;color:' + color
+              + ';text-align:right;width:15%;' + scoreRowBorder + '">'
+              + this._formatScore(score) + '/5</td>'
+              + '</tr>';
+      }
 
       if (hasReasoning) {
         html += '<tr><td colspan="3" style="padding:2px 0 ' + (isLast ? '0' : '12px') + ' 0;">'
@@ -82,12 +97,26 @@ class ScoreCard {
       var passed = this.entry.binaryChecks[bcat.key];
       var bReasoning = (this.entry.aiReasoning && this.entry.aiReasoning[bcat.key]) || '';
 
+      // passed === null => explicit N/A. Render a neutral "— N/A" indicator
+      // rather than the red ✗ No produced by the legacy charAt(0) check on
+      // "Not Applicable" (which started with N).
+      var bColor, bGlyph;
+      if (passed === null) {
+        bColor = CONFIG.COLORS.TEXT_GRAY;
+        bGlyph = '&mdash; N/A';
+      } else if (passed) {
+        bColor = CONFIG.COLORS.GREEN;
+        bGlyph = '&#10003; Yes';
+      } else {
+        bColor = CONFIG.COLORS.RED;
+        bGlyph = '&#10007; No';
+      }
+
       html += '<tr>'
             + '<td style="padding:6px 8px 6px 0;font-size:13px;color:' + CONFIG.COLORS.TEXT_GRAY + ';">'
             + this._esc(bcat.label) + '</td>'
             + '<td style="padding:6px 0;text-align:right;font-size:14px;font-weight:bold;color:'
-            + (passed ? CONFIG.COLORS.GREEN : CONFIG.COLORS.RED) + ';">'
-            + (passed ? '&#10003; Yes' : '&#10007; No') + '</td>'
+            + bColor + ';">' + bGlyph + '</td>'
             + '</tr>';
 
       if (bReasoning) {

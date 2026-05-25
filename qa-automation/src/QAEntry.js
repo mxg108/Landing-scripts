@@ -117,14 +117,52 @@ class QAEntry {
   // Private helpers
   // ────────────────────────────────────────────────────────────────
 
-  /** @private */
+  /** @private
+   * Returns:
+   *   - a number when the cell holds a numeric value
+   *   - null when the cell holds the explicit NA sentinel
+   *     ("Not Applicable", emitted by the Python backend for sections
+   *     whose team config has `na_applicable: true`)
+   *   - 0 when the cell is empty or otherwise unscored, preserving the
+   *     historic fallback for legacy rows that don't carry an explicit NA.
+   *
+   * Null is the load-bearing return — ScoreCard.render branches on it to
+   * paint a neutral "N/A" row instead of a red 0/5. Numeric N/A and
+   * "unscored" used to be indistinguishable here; the sentinel split is
+   * what the email-side fix in PR #34's follow-up depends on.
+   */
   static _parseNumberStatic(val) {
+    if (QAEntry._isNaSentinel(val)) return null;
     var n = parseFloat(val);
     return isNaN(n) ? 0 : n;
   }
 
-  /** @private */
+  /** @private
+   * Returns:
+   *   - true  on "Yes" / "Y"
+   *   - false on "No"  / "N"
+   *   - null  on the NA sentinel — ScoreCard renders this as a neutral
+   *     "— N/A" row rather than a red ✗ No (which is what the old
+   *     `charAt(0) === 'Y'` short-circuit produced for "Not Applicable",
+   *     since "Not Applicable".charAt(0) === 'N').
+   */
   static _parseYesNoStatic(val) {
-    return (val || '').toString().trim().toUpperCase().charAt(0) === 'Y';
+    if (QAEntry._isNaSentinel(val)) return null;
+    var s = (val || '').toString().trim().toUpperCase();
+    if (s.charAt(0) === 'Y') return true;
+    if (s.charAt(0) === 'N') return false;
+    return false;
+  }
+
+  /** @private — detect the "Not Applicable" sentinel from the Python writer. */
+  static _isNaSentinel(val) {
+    return (val || '').toString().trim() === NA_DISPLAY_LABEL;
   }
 }
+
+/**
+ * Display string the Python backend writes for an explicit N/A cell
+ * (see backend/services/sheets_service.py:YN_DISPLAY["NA"]). Match exactly
+ * to avoid drift — every team's Python writer uses this same constant.
+ */
+var NA_DISPLAY_LABEL = 'Not Applicable';
