@@ -16,11 +16,29 @@ if TYPE_CHECKING:
 # Dynamic prompt builders (from TeamConfig)
 # ---------------------------------------------------------------------------
 
+# Rules that apply to every Landing team, appended after each team's
+# system_prompt_template. Kept here (not duplicated per-team JSON) so a
+# single edit propagates to every team's prompt.
+LANDING_GENERAL_INSTRUCTIONS = """
+=== GENERAL LANDING RULES ===
+- Agent name in the greeting: an agent may introduce themselves with any
+  name they choose (some teams have multiple people with the same first
+  name, so reps may differentiate via a preferred or alternate name). Do
+  NOT penalize the agent for the specific name used in the greeting. Do
+  flag if the agent uses one name in the greeting and then switches to a
+  different name later in the same call — consistency within the call is
+  required. The agent's Dialpad-recorded name is internal and is NOT the
+  ground truth for what name they must use with the lead/member.
+""".rstrip()
+
+
 def build_system_prompt(config: TeamConfig) -> str:
-    """Render the system-level instruction from config template."""
-    return config.scoring_prompt.system_prompt_template.format(
+    """Render the system-level instruction from config template, then append
+    the Landing-wide general rules block."""
+    rendered = config.scoring_prompt.system_prompt_template.format(
         company=config.company,
     )
+    return f"{rendered}\n\n{LANDING_GENERAL_INSTRUCTIONS}"
 
 
 def build_scoring_rubric(config: TeamConfig) -> str:
@@ -225,8 +243,11 @@ def build_prompt(
 
     parts.append(build_output_schema(config))
     parts.append(
-        "\n[Audio attached — score the call based on what you hear, "
-        "the transcript, and any SOP provided.]"
+        "\n[Audio attached — score the call based on what you hear; the "
+        "transcript is secondary to the audio source. If the call is in "
+        "SPANISH, ignore the transcript and base your scores solely on the "
+        "audio. DO NOT mention a lack of SOP in your score reasoning if no "
+        "SOP context was provided.]"
     )
 
     return "\n".join(parts)
