@@ -108,7 +108,15 @@ def _sheets_configured(team_id: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _format_ai_score(sec_def: SectionDef, ai_section: dict) -> str:
-    """Convert AI-output section dict to a score-cell string."""
+    """Convert AI-output section dict to a score-cell string.
+
+    Explicit N/A wins regardless of score_type: when ``yn_value == "NA"``,
+    render "Not Applicable" even for numeric sections (only valid when the
+    team config declares ``na_applicable: true`` — the ScorecardSection
+    validator enforces this when context is supplied).
+    """
+    if ai_section.get("yn_value") == "NA":
+        return YN_DISPLAY["NA"]
     if sec_def.score_type == "yn":
         yn = ai_section.get("yn_value") or "NA"
         return YN_DISPLAY.get(yn, "Not Applicable")
@@ -328,8 +336,13 @@ def apply_analyst_edits_to_fr_ai(
         # Manual sections carry an analyst-entered value rather than the
         # AI's. `manual` stores a 1-5 score; `manual_yn` stores a Y/N/NA
         # in yn_value (rendered via the same display map as AI yn).
-        if sec_def.score_type == "manual":
-            score_value = str(section.get("score", ""))
+        # Explicit N/A (yn_value="NA") wins for both shapes — analyst can
+        # mark a manual numeric section N/A when the team config allows.
+        if section.get("yn_value") == "NA":
+            score_value = YN_DISPLAY["NA"]
+        elif sec_def.score_type == "manual":
+            score = section.get("score")
+            score_value = str(score) if score is not None else ""
         elif sec_def.score_type == "manual_yn":
             yn = section.get("yn_value") or "NA"
             score_value = YN_DISPLAY.get(yn, "Not Applicable")

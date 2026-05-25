@@ -59,8 +59,10 @@ def build_scoring_rubric(config: TeamConfig) -> str:
             for key, desc in sec.score_descriptions.items():
                 lines.append(f"{key}: {desc}")
 
-        # NA note for Y/N sections
-        if sec.score_type == "yn" and sec.na_applicable:
+        # NA note — applies to any section flagged na_applicable, including
+        # numeric. For numeric NA, the model emits yn_value="NA" and leaves
+        # score null.
+        if sec.na_applicable and sec.score_type in ("yn", "numeric"):
             lines.append(
                 "Mark NA if not applicable (e.g. internal call or "
                 "no sensitive info discussed)."
@@ -99,9 +101,15 @@ def build_output_schema(config: TeamConfig) -> str:
         is_last = i == len(config.ai_scored_sections) - 1
 
         if sec.score_type == "numeric":
-            score_val = f"<{sec.score_range[0]}-{sec.score_range[1]} integer>"
-            yn_val = "null"
+            assert sec.score_range is not None, f"numeric section {sec.id} missing score_range"
+            lo, hi = sec.score_range
             score_type_str = "numeric"
+            if sec.na_applicable:
+                score_val = f"<{lo}-{hi} integer, or null if NA>"
+                yn_val = "<null or NA>"
+            else:
+                score_val = f"<{lo}-{hi} integer>"
+                yn_val = "null"
         else:
             score_val = "null"
             yn_val = "<Y or N or NA>" if sec.na_applicable else "<Y or N>"

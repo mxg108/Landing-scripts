@@ -20,8 +20,9 @@ import inspect
 import pytest
 
 from backend.config.team_config import TeamConfig
-from backend.models.scorecard import Scorecard
+from backend.models.scorecard import ApprovalRequest, Scorecard, ScorecardSection
 from backend.services import sheets_service
+from pydantic import ValidationError
 
 from tests.conftest import make_gemini_scoring_json
 
@@ -91,3 +92,246 @@ def test_sheets_service_does_not_hardcode_section_slicing():
         "sheets_service re-introduced [:8] section slicing — Stage 2 must "
         "iterate score_destination.section_score_columns"
     )
+
+
+# ---------------------------------------------------------------------------
+# ScorecardSection cross-field validator (always on)
+# ---------------------------------------------------------------------------
+
+def _base_section_kwargs(**overrides):
+    base = dict(
+        id="sec_x",
+        name="Section X",
+        score=None,
+        score_type="numeric",
+        yn_value=None,
+        confidence="high",
+        reasoning="ok",
+    )
+    base.update(overrides)
+    return base
+
+
+def test_section_validator_accepts_numeric_score():
+    ScorecardSection(**_base_section_kwargs(score=4))
+
+
+def test_section_validator_accepts_yn_value_with_yn_type():
+    ScorecardSection(**_base_section_kwargs(score_type="yn", yn_value="Y"))
+
+
+def test_section_validator_accepts_explicit_na_with_numeric_type():
+    # numeric section, analyst/AI marked it N/A
+    ScorecardSection(**_base_section_kwargs(score_type="numeric", yn_value="NA"))
+
+
+def test_section_validator_rejects_na_with_numeric_score():
+    with pytest.raises(ValidationError, match="requires score=None"):
+        ScorecardSection(**_base_section_kwargs(yn_value="NA", score=3))
+
+
+def test_section_validator_rejects_yn_value_on_numeric_section():
+    with pytest.raises(ValidationError, match="only valid on yn"):
+        ScorecardSection(**_base_section_kwargs(score_type="numeric", yn_value="Y"))
+
+
+def test_section_validator_rejects_numeric_score_on_yn_section():
+    with pytest.raises(ValidationError, match="only valid on numeric"):
+        ScorecardSection(**_base_section_kwargs(score_type="yn", score=4))
+
+
+def test_section_validator_rejects_score_and_yn_together():
+    # Y/N section can't have a numeric score; numeric type with yn_value=Y also rejected.
+    with pytest.raises(ValidationError):
+        ScorecardSection(**_base_section_kwargs(score=4, yn_value="Y"))
+
+
+# ---------------------------------------------------------------------------
+# Context-aware validator — team config gates yn_value="NA"
+# ---------------------------------------------------------------------------
+
+def test_section_validator_rejects_na_when_team_config_disallows(sales: TeamConfig):
+    """Defense-in-depth: future model providers may hallucinate NA on a section
+    declared na_applicable=false. The context-aware validator rejects it."""
+    sec_def = next(
+        s for s in sales.ai_scored_sections
+        if s.score_type == "numeric" and not s.na_applicable
+    )
+    data = _base_section_kwargs(id=sec_def.id, score_type="numeric", yn_value="NA")
+    with pytest.raises(ValidationError, match="na_applicable=false"):
+        ScorecardSection.model_validate(data, context={"section_def": sec_def})
+
+
+def test_section_validator_allows_na_when_team_config_permits(sales: TeamConfig):
+    sec_def = next(
+        s for s in sales.ai_scored_sections if s.na_applicable
+    )
+    score_type = sec_def.score_type
+    data = _base_section_kwargs(id=sec_def.id, score_type=score_type, yn_value="NA")
+    # Should not raise.
+    ScorecardSection.model_validate(data, context={"section_def": sec_def})
+
+
+def test_section_validator_no_context_relaxed():
+    """Without context, the team-config check is skipped — round-tripping stored
+    data (where the team config isn't available) must still work."""
+    ScorecardSection.model_validate(
+        _base_section_kwargs(score_type="numeric", yn_value="NA")
+    )
+
+
+# ---------------------------------------------------------------------------
+# _format_ai_score — NA wins regardless of score_type (Phase 2)
+# ---------------------------------------------------------------------------
+
+def _section_def(sales: TeamConfig, score_type: str, na_applicable: bool):
+    """Find a section in sales matching score_type + na_applicable."""
+    for s in sales.sections:
+        if s.score_type == score_type and s.na_applicable is na_applicable:
+            return s
+    raise AssertionError(
+        f"no section with score_type={score_type!r} and na_applicable={na_applicable}"
+    )
+
+
+def test_format_ai_score_numeric_with_na_renders_not_applicable(sales: TeamConfig):
+    """Explicit yn_value='NA' on a numeric section must render 'Not Applicable'.
+
+    This is the reported bug: numeric+na_applicable could not be marked N/A.
+    The formatter now short-circuits on yn_value=='NA' before score_type."""
+    sec_def = next(
+        s for s in sales.ai_scored_sections if s.score_type == "numeric"
+    )
+    ai_section = {
+        "id": sec_def.id,
+        "score": None,
+        "score_type": "numeric",
+        "yn_value": "NA",
+        "confidence": "high",
+        "reasoning": "not applicable for this call",
+    }
+    assert sheets_service._format_ai_score(sec_def, ai_section) == "Not Applicable"
+
+
+def test_format_ai_score_numeric_with_score_unchanged(sales: TeamConfig):
+    """Regression: a normal numeric score still renders as '4' (string)."""
+    sec_def = next(
+        s for s in sales.ai_scored_sections if s.score_type == "numeric"
+    )
+    ai_section = {
+        "id": sec_def.id,
+        "score": 4,
+        "score_type": "numeric",
+        "yn_value": None,
+        "confidence": "high",
+        "reasoning": "solid",
+    }
+    assert sheets_service._format_ai_score(sec_def, ai_section) == "4"
+
+
+def test_format_ai_score_unscored_numeric_renders_na_sentinel(sales: TeamConfig):
+    """Regression: when AI didn't score (both None), curt 'N/A' (not 'Not
+    Applicable') — preserves distinction from explicit analyst N/A."""
+    sec_def = next(
+        s for s in sales.ai_scored_sections if s.score_type == "numeric"
+    )
+    ai_section = {
+        "id": sec_def.id,
+        "score": None,
+        "score_type": "numeric",
+        "yn_value": None,
+        "confidence": "low",
+        "reasoning": "could not score",
+    }
+    assert sheets_service._format_ai_score(sec_def, ai_section) == "N/A"
+
+
+def test_format_ai_score_yn_section_unchanged(sales: TeamConfig):
+    """Regression: yn sections still map Y/N/NA through YN_DISPLAY."""
+    sec_def = next(s for s in sales.ai_scored_sections if s.score_type == "yn")
+    for yn, expected in [("Y", "Yes"), ("N", "No"), ("NA", "Not Applicable")]:
+        ai_section = {
+            "id": sec_def.id,
+            "score": None,
+            "score_type": "yn",
+            "yn_value": yn,
+            "confidence": "high",
+            "reasoning": "ok",
+        }
+        assert sheets_service._format_ai_score(sec_def, ai_section) == expected
+
+
+def test_scorecard_validates_with_sections_by_id_context(sales: TeamConfig):
+    """Scorecard-level model_validate must propagate sections_by_id context to
+    each ScorecardSection child, so the team-config check fires at the parse
+    site used by the scoring pipeline."""
+    bad_section_id = next(
+        s.id for s in sales.ai_scored_sections
+        if s.score_type == "numeric" and not s.na_applicable
+    )
+    raw = {
+        "sections": [
+            {
+                "id": bad_section_id,
+                "name": "x",
+                "score": None,
+                "score_type": "numeric",
+                "yn_value": "NA",
+                "confidence": "high",
+                "reasoning": "model hallucinated NA",
+            }
+        ],
+        "key_strengths": "k",
+        "opportunities": "o",
+    }
+    sections_by_id = {s.id: s for s in sales.sections}
+    with pytest.raises(ValidationError, match="na_applicable=false"):
+        Scorecard.model_validate(raw, context={"sections_by_id": sections_by_id})
+
+
+def test_approval_request_with_context_rejects_bad_na(sales: TeamConfig):
+    """ApprovalRequest mirrors Scorecard's section validation; the route
+    re-validates with context to enforce team-config compliance. Today no
+    production team has a yn+na_applicable=false section, but a future team
+    might — flip a yn section's na_applicable to exercise the path."""
+    bad = next(s for s in sales.ai_scored_sections if s.score_type == "yn")
+    bad.na_applicable = False
+    try:
+        raw = {
+            "sections": [
+                {
+                    "id": bad.id,
+                    "name": bad.name,
+                    "score": None,
+                    "score_type": "yn",
+                    "yn_value": "NA",
+                    "confidence": "high",
+                    "reasoning": "tampered payload",
+                }
+            ],
+            "key_strengths": "",
+            "opportunities": "",
+        }
+        sections_by_id = {s.id: s for s in sales.sections}
+        with pytest.raises(ValidationError, match="na_applicable=false"):
+            ApprovalRequest.model_validate(raw, context={"sections_by_id": sections_by_id})
+    finally:
+        bad.na_applicable = True
+
+
+def test_scorecard_section_model_dump_round_trips_through_formatter(sales: TeamConfig):
+    """The full path used by Stage 1: ScorecardSection -> .model_dump() ->
+    _format_ai_score. An explicit numeric N/A must survive the round trip."""
+    sec_def = next(
+        s for s in sales.ai_scored_sections if s.score_type == "numeric"
+    )
+    section = ScorecardSection(
+        id=sec_def.id,
+        name=sec_def.name,
+        score=None,
+        score_type="numeric",
+        yn_value="NA",
+        confidence="high",
+        reasoning="not applicable",
+    )
+    assert sheets_service._format_ai_score(sec_def, section.model_dump()) == "Not Applicable"

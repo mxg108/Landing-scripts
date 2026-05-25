@@ -9,6 +9,8 @@ against regression.
 
 from __future__ import annotations
 
+import pytest
+
 from backend.config.team_config import TeamConfig
 from backend.services.team_stats import (
     compute_agent_roster,
@@ -114,6 +116,58 @@ def test_binary_stats_empty_when_no_yn_sections(sales_lite: TeamConfig):
     df = load_and_clean(history, mails, sales_lite)
     binary = compute_binary_stats(df, sales_lite.yn_section_labels)
     assert binary == []
+
+
+# ---------------------------------------------------------------------------
+# Known tech debt — long-form analytics cannot distinguish explicit N/A
+# from "unscored" on numeric sections.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.xfail(
+    reason=(
+        "TECH DEBT (NumericNAOption.md, open Q3, 2026-05-25) — "
+        "compute_long_form coalesces explicit numeric N/A ('Not Applicable' "
+        "in the sheet cell) to np.nan in load_and_clean, the same value used "
+        "for missing/unscored. Downstream cannot count an N/A rate per "
+        "section. Revisit during the SQL / deeper-analytics migration: "
+        "either widen the long-form schema with an `na_flag` column or pivot "
+        "to a typed Union score column."
+    ),
+    strict=False,
+)
+def test_compute_long_form_distinguishes_explicit_na_from_missing(sales: TeamConfig):
+    from datetime import datetime
+    import numpy as np
+
+    history = [
+        ["Agent Name"] + [""] * 100,  # header
+        # Row 1: explicit N/A on first numeric section
+        make_history_row(
+            sales, agent="Star Rep", when=datetime(2026, 4, 1, 9, 0, 0),
+            overall=90,
+            section_scores={sales.numeric_history_ids[0]: "Not Applicable"},  # type: ignore[dict-item]
+            yn_scores={y: "Y" for y in sales.yn_history_ids},
+        ),
+        # Row 2: blank/missing on the same section
+        make_history_row(
+            sales, agent="Star Rep", when=datetime(2026, 4, 2, 9, 0, 0),
+            overall=90,
+            section_scores={sales.numeric_history_ids[0]: ""},  # type: ignore[dict-item]
+            yn_scores={y: "Y" for y in sales.yn_history_ids},
+        ),
+    ]
+    mails = make_mails_sheet(["Star Rep"])
+    df = load_and_clean(history, mails, sales)
+    long_df = compute_long_form(df, sales)
+
+    target_rows = long_df[long_df["section_id"] == sales.numeric_history_ids[0]]
+    target_rows = target_rows[target_rows["agent"] == "Star Rep"]
+    # Today both rows collapse to NaN. When the gap is closed, one row should
+    # be marked NA and the other should remain missing.
+    na_rows = target_rows[target_rows["score"].astype(str).str.upper() == "NA"]
+    missing_rows = target_rows[target_rows["score"].isna()]
+    assert len(na_rows) == 1, "explicit N/A row was not distinguishable in long form"
+    assert len(missing_rows) == 1, "missing row was not preserved as NaN"
 
 
 # ---------------------------------------------------------------------------
