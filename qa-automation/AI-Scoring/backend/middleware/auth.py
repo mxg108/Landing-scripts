@@ -20,9 +20,9 @@ from __future__ import annotations
 import os
 import secrets
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Depends, Header, HTTPException, Query, Request
 
 
 _PRIVILEGED_SUFFIXES = {"privileged"}
@@ -66,14 +66,28 @@ if not _KEY_MAP:
     )
 
 
-async def require_api_key(authorization: str = Header(None)) -> KeyIdentity:
-    """FastAPI dependency that validates the Bearer token and returns its identity."""
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
+async def require_api_key(
+    authorization: Annotated[Optional[str], Header()] = None,
+    api_key: Annotated[Optional[str], Query()] = None,
+) -> KeyIdentity:
+    """FastAPI dependency that validates a Bearer token or ?api_key= query param.
 
-    token = authorization.removeprefix("Bearer ").strip()
-    if token == authorization:
-        raise HTTPException(status_code=401, detail="Authorization header must use Bearer scheme")
+    Header is preferred when both are present. The query-param fallback exists
+    for `EventSource` (Phase B SSE), which cannot set custom request headers.
+    """
+    token: Optional[str] = None
+    if authorization:
+        if not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=401,
+                detail="Authorization header must use Bearer scheme",
+            )
+        token = authorization.removeprefix("Bearer ").strip()
+    elif api_key:
+        token = api_key.strip()
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing API key")
 
     for known_key, identity in _KEY_MAP.items():
         if secrets.compare_digest(token, known_key):
@@ -82,14 +96,18 @@ async def require_api_key(authorization: str = Header(None)) -> KeyIdentity:
     raise HTTPException(status_code=401, detail="Invalid API key")
 
 
-async def require_team_access(team_id: str, authorization: str = Header(None)) -> KeyIdentity:
+async def require_team_access(
+    team_id: str,
+    authorization: Annotated[Optional[str], Header()] = None,
+    api_key: Annotated[Optional[str], Query()] = None,
+) -> KeyIdentity:
     """Validate the key and enforce team scoping unless the key is privileged.
 
     Privileged keys bypass the team check on every team-prefixed route.
     Returns the resolved KeyIdentity so downstream handlers can branch on
     role (e.g. /score uses it to decide whether to enforce roster membership).
     """
-    identity = await require_api_key(authorization)
+    identity = await require_api_key(authorization=authorization, api_key=api_key)
     if identity.role == "privileged":
         return identity
     if identity.team_id != team_id:

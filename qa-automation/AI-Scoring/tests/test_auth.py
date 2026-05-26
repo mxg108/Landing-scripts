@@ -82,6 +82,58 @@ def test_require_api_key_rejects_unknown_token(monkeypatch):
     assert exc.value.status_code == 401
 
 
+# ---------------------------------------------------------------------------
+# ?api_key= query-param fallback (Phase 0 — for SSE EventSource which
+# cannot set Authorization headers).
+# ---------------------------------------------------------------------------
+
+def test_require_api_key_accepts_query_param(monkeypatch):
+    monkeypatch.setattr(auth, "_KEY_MAP", {
+        "team-tok": KeyIdentity(role="team", team_id="member_support"),
+    })
+    identity = asyncio.run(auth.require_api_key(authorization=None, api_key="team-tok"))
+    assert identity == KeyIdentity(role="team", team_id="member_support")
+
+
+def test_require_api_key_query_param_rejects_unknown_token(monkeypatch):
+    monkeypatch.setattr(auth, "_KEY_MAP", {
+        "tok": KeyIdentity(role="team", team_id="member_support"),
+    })
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(auth.require_api_key(authorization=None, api_key="wrong"))
+    assert exc.value.status_code == 401
+
+
+def test_require_api_key_header_preferred_over_query_when_both_present(monkeypatch):
+    """Header wins so a client that already authenticates via Authorization
+    can't be downgraded by a tampered URL. The query-param path is purely a
+    fallback for EventSource."""
+    monkeypatch.setattr(auth, "_KEY_MAP", {
+        "header-tok": KeyIdentity(role="team", team_id="sales"),
+        "query-tok": KeyIdentity(role="team", team_id="member_support"),
+    })
+    identity = asyncio.run(auth.require_api_key(
+        authorization="Bearer header-tok", api_key="query-tok",
+    ))
+    assert identity.team_id == "sales"
+
+
+def test_require_api_key_rejects_when_neither_provided():
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(auth.require_api_key(authorization=None, api_key=None))
+    assert exc.value.status_code == 401
+
+
+def test_require_team_access_accepts_query_param(monkeypatch):
+    monkeypatch.setattr(auth, "_KEY_MAP", {
+        "ms-tok": KeyIdentity(role="team", team_id="member_support"),
+    })
+    identity = asyncio.run(auth.require_team_access(
+        team_id="member_support", authorization=None, api_key="ms-tok",
+    ))
+    assert identity.team_id == "member_support"
+
+
 def test_require_team_access_team_key_matching_team_passes(monkeypatch):
     monkeypatch.setattr(auth, "_KEY_MAP", {
         "ms-tok": KeyIdentity(role="team", team_id="member_support"),
