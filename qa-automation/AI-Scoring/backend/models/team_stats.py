@@ -55,6 +55,25 @@ class MonthlyPoint(BaseModel):
     count: int
 
 
+class MonthlySummary(BaseModel):
+    """One month's headline stats. Drives the last/current-month chiclets.
+
+    mean / std are Optional so the UI can distinguish "no evals this month
+    yet" (null) from "everyone scored 0" (0.0). std stays null when
+    count < 2 since sample std isn't defined.
+    """
+    year_month: str            # "YYYY-MM"
+    count: int
+    mean: Optional[float] = None
+    std: Optional[float] = None
+
+
+class MonthlyBlock(BaseModel):
+    """Last- and current-month summaries for the dashboard chiclets."""
+    last: MonthlySummary
+    current: MonthlySummary
+
+
 class SPCData(BaseModel):
     months: list[MonthlyPoint]
     ucl: float
@@ -122,6 +141,7 @@ class TeamStatsResponse(BaseModel):
     coverage_regime: str  # "manager_sample" | "full_coverage"
 
     kpis: dict
+    monthly: MonthlyBlock
     roster: list[AgentRosterEntry]
     outliers: list[OutlierRecord]
     spc: SPCData
@@ -131,6 +151,25 @@ class TeamStatsResponse(BaseModel):
     ewma: list[EWMAEntry]
     distribution: list[DistributionBin]
     filters_applied: dict  # days, active_only, supervisor
+
+
+class TeamEvalRow(BaseModel):
+    """One row in the month-drill-down evals list."""
+    agent: str
+    timestamp: datetime
+    overall_score: float
+    dialpad_link: str = ""
+    eval_id: str = ""
+    supervisor: Optional[str] = None
+
+
+class TeamEvalsResponse(BaseModel):
+    """Envelope for /api/{team_id}/team/evals?year_month=YYYY-MM."""
+    schema_version: str = "1.1"
+    team_id: str
+    year_month: str
+    rows: list[TeamEvalRow]
+    filters_applied: dict  # active_only, supervisor (no days — month is the window)
 
 
 class LongFormRow(BaseModel):

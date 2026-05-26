@@ -69,6 +69,32 @@
     .kpi-box .value { font-family: 'Fraunces', serif; font-size: 2rem; font-weight: 700; margin: 4px 0; }
     .kpi-box .sub { font-size: 0.75rem; color: var(--muted); }
 
+    /* Month chiclet row — two side-by-side clickable cards above the KPI row */
+    .chiclet-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .chiclet {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+      padding: 16px 20px; cursor: pointer; text-decoration: none; color: inherit;
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+      transition: border-color 0.15s, transform 0.15s;
+    }
+    .chiclet:hover { border-color: var(--accent); transform: translateY(-1px); }
+    .chiclet .chiclet-left { display: flex; flex-direction: column; gap: 2px; }
+    .chiclet .chiclet-label {
+      font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .chiclet .chiclet-count {
+      font-family: 'Fraunces', serif; font-size: 1.6rem; font-weight: 700; line-height: 1.1;
+    }
+    .chiclet .chiclet-month { font-size: 0.7rem; color: var(--muted); }
+    .chiclet .chiclet-right { text-align: right; font-size: 0.8rem; color: var(--muted); }
+    .chiclet .chiclet-meanstd {
+      font-family: 'Fraunces', serif; font-size: 0.95rem; color: var(--text); font-weight: 600;
+    }
+    .chiclet .chiclet-arrow { color: var(--accent); font-size: 1.1rem; }
+    @media (max-width: 640px) {
+      .chiclet-row { grid-template-columns: 1fr; }
+    }
+
     /* Charts grid */
     .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 
@@ -148,6 +174,7 @@
 <div class="container">
   <!-- Overview Tab -->
   <div class="tab-panel active" id="panel-overview">
+    <div class="chiclet-row" id="chicletRow"></div>
     <div class="kpi-row" id="kpiRow"></div>
     <div class="charts-grid">
       <div class="card"><h3>SPC Control Chart</h3><canvas id="spcCanvas"></canvas></div>
@@ -374,6 +401,8 @@ function attachSort(tableId, data, renderFn) {
 
 // --- Overview ---
 function renderOverview() {
+  renderChiclets();
+
   const k = teamData.kpis || {};
   document.getElementById('kpiRow').innerHTML = [
     { label: 'Total Evals', value: k.total_evals ?? '--' },
@@ -388,6 +417,43 @@ function renderOverview() {
   renderSpcChart();
   renderDistChart();
   renderEwmaChart();
+}
+
+function renderChiclets() {
+  const monthly = teamData.monthly || {};
+  const target = document.getElementById('chicletRow');
+  if (!target) return;
+
+  function _chiclet(label, m) {
+    if (!m) return '';
+    // Drill-down preserves the page's active/supervisor filters; the month
+    // string is the time window so the days filter is not propagated.
+    const params = new URLSearchParams({
+      month: m.year_month,
+      active_only: activeOnly,
+    });
+    if (selectedSupervisor) params.set('supervisor', selectedSupervisor);
+    const href = `/dashboard/${TEAM_ID}/evals?${params.toString()}`;
+
+    const meanLabel = m.mean != null ? fmt(m.mean) : '—';
+    const stdLabel = m.std != null ? `± ${fmt(m.std)}` : '';
+    const meanColor = m.mean != null ? scoreColor(m.mean) : 'var(--muted)';
+
+    return `<a class="chiclet" href="${href}">
+      <div class="chiclet-left">
+        <div class="chiclet-label">${label}</div>
+        <div class="chiclet-count">${m.count} eval${m.count === 1 ? '' : 's'}</div>
+        <div class="chiclet-month">${m.year_month}</div>
+      </div>
+      <div class="chiclet-right">
+        <div class="chiclet-meanstd" style="color:${meanColor}">${meanLabel} ${stdLabel}</div>
+        <div style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;">mean ± std</div>
+        <div class="chiclet-arrow">&rsaquo;</div>
+      </div>
+    </a>`;
+  }
+
+  target.innerHTML = _chiclet('Last Month', monthly.last) + _chiclet('Current Month', monthly.current);
 }
 
 function renderSpcChart() {
