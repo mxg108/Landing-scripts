@@ -16,6 +16,7 @@ from backend.routes.dashboard import router as dashboard_router
 from backend.routes.team import router as team_router
 from backend.routes.datapoints import router as datapoints_router
 from backend.routes.lookup import router as lookup_router
+from backend.routes.events import router as events_router
 from backend.middleware.auth import AUTH_DEPENDENCY, TEAM_AUTH_DEPENDENCY
 from backend.middleware.audit import AuditLogMiddleware
 
@@ -40,10 +41,11 @@ app.add_middleware(
 app.add_middleware(AuditLogMiddleware)
 
 # Team-aware routes (primary). API key's team_id must match the URL team_id.
-for r in (scoring_router, dashboard_router, team_router, datapoints_router, lookup_router):
+for r in (scoring_router, dashboard_router, team_router, datapoints_router, lookup_router, events_router):
     app.include_router(r, prefix="/api/{team_id}", dependencies=TEAM_AUTH_DEPENDENCY)
 
 # Legacy single-team shim (30-day transition). team_id defaults to 'member_support'.
+# Events router intentionally excluded — SSE is new and team-scoped only.
 for r in (scoring_router, dashboard_router, team_router, datapoints_router, lookup_router):
     app.include_router(r, prefix="/api", dependencies=AUTH_DEPENDENCY)
 

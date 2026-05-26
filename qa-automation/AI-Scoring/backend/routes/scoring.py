@@ -8,7 +8,7 @@ Registered twice in main.py:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, UploadFile, File, Form
@@ -27,6 +27,7 @@ from backend.services.history_service import (
     agent_name_for_email,
     email_in_team_mails,
 )
+from backend.services.event_bus import get_event_bus
 from backend.services.scoring_service import score_call
 from backend.services.sheets_service import (
     append_score_audit_row,
@@ -536,6 +537,29 @@ async def approve_scorecard(
             result_row=history_row,
             notes="",
         )
+
+        # Publish "eval_approved" to subscribed dashboards. Fires AFTER
+        # the audit row is written (no event for a half-finalized eval)
+        # and BEFORE Apps Script dispatch (the toast races the email,
+        # which is fine — the dashboard reflects approved state; the
+        # email is the deliverable). Truncates free-text fields to 280
+        # chars to bound per-client SSE payload bytes (LiveDashboard.md
+        # resolved Q2). Full text remains available via /datapoint.
+        def _truncate(s: str, n: int = 280) -> str:
+            s = s or ""
+            return s if len(s) <= n else s[: n - 1] + "…"
+
+        await get_event_bus().publish(team_id, "eval_approved", {
+            "call_id": job.get("call_id", ""),
+            "history_row": history_row,
+            "agent": job.get("agent_name") or sc.get("agent_name") or "",
+            "overall_score": overall_score,
+            "summary": _truncate(sc.get("call_summary", "")),
+            "strengths": _truncate(approval.key_strengths),
+            "opportunities": _truncate(approval.opportunities),
+            "dialpad_link": sc.get("dialpad_link", ""),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
 
         # Stage 5 — dispatch QA email via Apps Script (reads AH row).
         print(f"[approve] Triggering Apps Script doPost (history_row={history_row})...")
