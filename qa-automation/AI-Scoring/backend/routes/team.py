@@ -12,6 +12,10 @@ from backend.models.team_stats import (
     LongFormResponse,
     LongFormRow,
     MailsEntry,
+    MonthlyBlock,
+    MonthlySummary,
+    TeamEvalRow,
+    TeamEvalsResponse,
     TeamStatsResponse,
 )
 from backend.services.data_provider import get_provider
@@ -22,6 +26,7 @@ from backend.services.team_stats import (
     compute_ewma,
     compute_long_form,
     compute_monthly_spc,
+    compute_monthly_summary,
     compute_outliers,
     compute_section_analysis,
     compute_supervisor_stats,
@@ -63,6 +68,7 @@ async def team_stats(
             generated_at=datetime.now(timezone.utc),
             coverage_regime=_COVERAGE_REGIME,
             kpis={"total_evals": 0, "avg_score": 0, "std_score": 0, "analyst_count": 0},
+            monthly=compute_monthly_summary(df),
             roster=[],
             outliers=[],
             spc={"months": [], "ucl": 0, "lcl": 0, "center": 0},
@@ -77,11 +83,6 @@ async def team_stats(
             filters_applied=filters,
         )
 
-    # Apply time filter (days=0 means all time)
-    if days > 0:
-        cutoff = datetime.now() - timedelta(days=days)
-        df = df[df["timestamp"] >= cutoff]
-
     # Apply active filter
     if active_only:
         df = df[df["is_active"]]
@@ -89,6 +90,17 @@ async def team_stats(
     # Apply supervisor filter
     if supervisor:
         df = df[df["supervisor"].str.lower() == supervisor.strip().lower()]
+
+    # Monthly chiclets honor active/supervisor but NOT the days filter —
+    # they express their own (last/current calendar month) windows.
+    # Compute before applying days so the current-month chiclet still
+    # populates when the user is viewing days=30 on the last day of a
+    # month and the cutoff drops half the month.
+    monthly = compute_monthly_summary(df)
+
+    if days > 0:
+        cutoff = datetime.now() - timedelta(days=days)
+        df = df[df["timestamp"] >= cutoff]
 
     kpis = {
         "total_evals": len(df),
@@ -103,6 +115,7 @@ async def team_stats(
         generated_at=datetime.now(timezone.utc),
         coverage_regime=_COVERAGE_REGIME,
         kpis=kpis,
+        monthly=monthly,
         roster=compute_agent_roster(df, config),
         outliers=compute_outliers(df, config.stats),
         spc=compute_monthly_spc(df, config.stats),
@@ -111,6 +124,74 @@ async def team_stats(
         supervisor_stats=compute_supervisor_stats(df),
         ewma=compute_ewma(df, config.stats),
         distribution=compute_distribution(df),
+        filters_applied=filters,
+    )
+
+
+@router.get("/evals", response_model=TeamEvalsResponse)
+async def team_month_evals(
+    request: Request,
+    year_month: str = Query(..., pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
+    active_only: bool = Query(default=True),
+    supervisor: str = Query(default=""),
+):
+    """Return every eval in `year_month` (YYYY-MM), respecting active/supervisor.
+
+    Powers the month-chiclet drill-down. The `days` filter is intentionally
+    not accepted here: the month string IS the time window.
+    """
+    team_id = team_id_from_path(request)
+    config = get_team_config(team_id)
+    provider = await get_provider(team_id)
+
+    raw_history = provider._ws.get_all_values()
+    raw_mails = provider._get_mails_sheet()
+
+    df = load_and_clean(raw_history, raw_mails, config)
+    filters = {"active_only": active_only, "supervisor": supervisor}
+
+    if df.empty:
+        return TeamEvalsResponse(
+            team_id=team_id,
+            year_month=year_month,
+            rows=[],
+            filters_applied=filters,
+        )
+
+    if active_only:
+        df = df[df["is_active"]]
+    if supervisor:
+        df = df[df["supervisor"].str.lower() == supervisor.strip().lower()]
+
+    months = df["timestamp"].dt.to_period("M").astype(str)
+    df = df[months == year_month]
+
+    # Sort newest first — analysts skim the top to find recent calls.
+    df = df.sort_values("timestamp", ascending=False)
+
+    rows = [
+        TeamEvalRow(
+            agent=str(r["agent"]),
+            timestamp=r["timestamp"],
+            overall_score=float(r["overall_score"]),
+            # Wide-form df doesn't carry dialpad_link directly — reconstruct
+            # the canonical URL from eval_id (the [LONG CALL] suffix isn't
+            # preserved through load_and_clean, which is fine for the
+            # drill-down list).
+            dialpad_link=(
+                f"https://dialpad.com/callhistory/callreview/{r['eval_id']}"
+                if r.get("eval_id") else ""
+            ),
+            eval_id=str(r.get("eval_id", "")),
+            supervisor=str(r.get("supervisor", "")) or None,
+        )
+        for r in df.to_dict(orient="records")
+    ]
+
+    return TeamEvalsResponse(
+        team_id=team_id,
+        year_month=year_month,
+        rows=rows,
         filters_applied=filters,
     )
 

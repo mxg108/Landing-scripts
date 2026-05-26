@@ -85,6 +85,11 @@ async def serve_team_dashboard(team_id: str):
     return FileResponse(_frontend_dir / "team_dashboard.html", headers=_HTML_NO_CACHE)
 
 
+@app.get("/dashboard/{team_id}/evals", include_in_schema=False)
+async def serve_team_evals_page(team_id: str):
+    return FileResponse(_frontend_dir / "team_evals.html", headers=_HTML_NO_CACHE)
+
+
 @app.get("/lookup/{team_id}", include_in_schema=False)
 async def serve_lookup_page(team_id: str):
     return FileResponse(_frontend_dir / "lookup.html", headers=_HTML_NO_CACHE)

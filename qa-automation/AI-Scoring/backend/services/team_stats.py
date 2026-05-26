@@ -357,6 +357,65 @@ def compute_ewma(df: pd.DataFrame, stats_config: StatsConfig) -> list[dict]:
 # compute_monthly_spc
 # ---------------------------------------------------------------------------
 
+def compute_monthly_summary(df: pd.DataFrame) -> dict:
+    """Per-month headline stats for the last and current calendar month.
+
+    Returns a dict shaped like `MonthlyBlock`:
+        {
+          "last":    {"year_month": "YYYY-MM", "count": int,
+                      "mean": float|None, "std": float|None},
+          "current": {"year_month": "YYYY-MM", "count": int,
+                      "mean": float|None, "std": float|None},
+        }
+
+    "Current" is the calendar month containing `datetime.now()`. "Last" is
+    the immediately preceding calendar month. Both year_month strings are
+    always populated even if count == 0 so the UI can label the empty
+    chiclet ("0 evals in 2026-04").
+
+    mean/std are None — not 0 — when undefined (no evals, or count < 2 for
+    std). The frontend renders "—" for these so an empty month isn't
+    confused with a month where everyone scored 0.
+
+    Assumes `df` is already filter-applied (active_only / supervisor); the
+    chiclets inherit the page filters by construction. The `days` filter
+    is bypassed here on purpose: chiclets express their own month windows.
+    """
+    from datetime import datetime as _dt
+
+    now = _dt.now()
+    current_p = pd.Period(now, freq="M")
+    last_p = current_p - 1
+    current_ym = str(current_p)
+    last_ym = str(last_p)
+
+    def _empty(ym: str) -> dict:
+        return {"year_month": ym, "count": 0, "mean": None, "std": None}
+
+    if df.empty:
+        return {"last": _empty(last_ym), "current": _empty(current_ym)}
+
+    # Compute month buckets directly from timestamps — independent of the
+    # /stats `days` window so the chiclets stay anchored on calendar
+    # months regardless of which time range the dashboard is showing.
+    months = df["timestamp"].dt.to_period("M").astype(str)
+
+    def _bucket(ym: str) -> dict:
+        mask = months == ym
+        n = int(mask.sum())
+        if n == 0:
+            return _empty(ym)
+        scores = df.loc[mask, "overall_score"]
+        return {
+            "year_month": ym,
+            "count": n,
+            "mean": round(float(scores.mean()), 1),
+            "std": round(float(scores.std(ddof=1)), 1) if n > 1 else None,
+        }
+
+    return {"last": _bucket(last_ym), "current": _bucket(current_ym)}
+
+
 def compute_monthly_spc(df: pd.DataFrame, stats_config: StatsConfig) -> dict:
     """Monthly team average with Shewhart-style ±k·sigma control limits."""
     if df.empty:

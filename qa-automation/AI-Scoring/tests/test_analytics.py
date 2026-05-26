@@ -19,6 +19,7 @@ from backend.services.team_stats import (
     compute_ewma,
     compute_long_form,
     compute_monthly_spc,
+    compute_monthly_summary,
     compute_outliers,
     compute_section_analysis,
     compute_supervisor_stats,
@@ -116,6 +117,123 @@ def test_binary_stats_empty_when_no_yn_sections(sales_lite: TeamConfig):
     df = load_and_clean(history, mails, sales_lite)
     binary = compute_binary_stats(df, sales_lite.yn_section_labels)
     assert binary == []
+
+
+# ---------------------------------------------------------------------------
+# compute_monthly_summary — month chiclets (Phase A)
+# ---------------------------------------------------------------------------
+
+def _summary_df(rows: list[dict]) -> "pd.DataFrame":
+    """Build a minimal df matching the load_and_clean schema for the chiclet
+    computation. compute_monthly_summary only reads timestamp + overall_score,
+    so the other columns can be omitted."""
+    import pandas as pd
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    return df
+
+
+def test_monthly_summary_empty_df_returns_zero_count_blocks():
+    out = compute_monthly_summary(_summary_df([]))
+    assert out["last"]["count"] == 0
+    assert out["last"]["mean"] is None
+    assert out["last"]["std"] is None
+    assert out["current"]["count"] == 0
+    assert out["current"]["mean"] is None
+    assert out["current"]["std"] is None
+    # year_month strings always populated so the empty chiclet still has a label
+    assert out["last"]["year_month"]
+    assert out["current"]["year_month"]
+
+
+def test_monthly_summary_buckets_current_and_last_correctly():
+    from datetime import datetime as _dt
+    import pandas as pd
+    now = _dt.now()
+    current_p = pd.Period(now, freq="M")
+    last_p = current_p - 1
+    current_ym = str(current_p)
+    last_ym = str(last_p)
+
+    df = _summary_df([
+        # 3 evals in current month
+        {"timestamp": f"{current_ym}-05 10:00:00", "overall_score": 80.0},
+        {"timestamp": f"{current_ym}-12 10:00:00", "overall_score": 90.0},
+        {"timestamp": f"{current_ym}-20 10:00:00", "overall_score": 70.0},
+        # 2 evals in last month
+        {"timestamp": f"{last_ym}-08 10:00:00", "overall_score": 85.0},
+        {"timestamp": f"{last_ym}-15 10:00:00", "overall_score": 75.0},
+        # 1 eval two months back — must be ignored
+        {"timestamp": f"{str(last_p - 1)}-10 10:00:00", "overall_score": 50.0},
+    ])
+    out = compute_monthly_summary(df)
+    assert out["current"]["year_month"] == current_ym
+    assert out["current"]["count"] == 3
+    assert out["current"]["mean"] == 80.0
+    assert out["current"]["std"] is not None and out["current"]["std"] > 0
+
+    assert out["last"]["year_month"] == last_ym
+    assert out["last"]["count"] == 2
+    assert out["last"]["mean"] == 80.0
+    # n=2 → sample std defined; n<2 path tested separately
+    assert out["last"]["std"] is not None
+
+
+def test_monthly_summary_count_one_month_has_null_std():
+    """Sample std requires n >= 2 — a one-eval month returns mean but null std."""
+    from datetime import datetime as _dt
+    import pandas as pd
+    now = _dt.now()
+    current_ym = str(pd.Period(now, freq="M"))
+
+    df = _summary_df([
+        {"timestamp": f"{current_ym}-10 10:00:00", "overall_score": 88.0},
+    ])
+    out = compute_monthly_summary(df)
+    assert out["current"]["count"] == 1
+    assert out["current"]["mean"] == 88.0
+    assert out["current"]["std"] is None
+
+
+def test_monthly_summary_month_boundary_buckets_strictly():
+    """An eval at the last second of last month bucket-belongs to last; first
+    second of current month belongs to current. Guards against off-by-one in
+    Period('M') discretization."""
+    from datetime import datetime as _dt
+    import pandas as pd
+    now = _dt.now()
+    current_p = pd.Period(now, freq="M")
+    last_p = current_p - 1
+    # Last second of last month
+    last_end = last_p.end_time
+    # First second of current month
+    current_start = current_p.start_time
+
+    df = _summary_df([
+        {"timestamp": last_end, "overall_score": 60.0},
+        {"timestamp": current_start, "overall_score": 95.0},
+    ])
+    out = compute_monthly_summary(df)
+    assert out["last"]["count"] == 1
+    assert out["last"]["mean"] == 60.0
+    assert out["current"]["count"] == 1
+    assert out["current"]["mean"] == 95.0
+
+
+def test_monthly_summary_does_not_mutate_input_df():
+    """Defensive: chiclet computation must not add the helper 'year_month'
+    column to the caller's df (other compute_* functions read this df after)."""
+    from datetime import datetime as _dt
+    import pandas as pd
+    current_ym = str(pd.Period(_dt.now(), freq="M"))
+    df = _summary_df([
+        {"timestamp": f"{current_ym}-05 10:00:00", "overall_score": 80.0},
+    ])
+    cols_before = set(df.columns)
+    compute_monthly_summary(df)
+    assert set(df.columns) == cols_before
 
 
 # ---------------------------------------------------------------------------
