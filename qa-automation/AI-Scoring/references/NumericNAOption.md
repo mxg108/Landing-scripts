@@ -77,7 +77,11 @@ config:
   separate analytics feature.
 - Pre-existing yn-NA coercion bug in `load_and_clean:170` — `"Not Applicable"
   .upper()[:1] == "N"`, so historical N/A on yn columns has been miscoded as
-  N. Out of scope; tracked separately.
+  N. ~~Out of scope; tracked separately.~~ **Resolved 2026-05-27** in a
+  follow-up PR: `_parse_yn_cell` helper replaces the `[:1]` slice and
+  preserves "Not Applicable" / "NA" / "N/A" as the "NA" sentinel.
+  Historical rows are re-parsed correctly on the next read — no data
+  migration needed.
 - Backfill of historical numeric rows. Existing sheet cells stay as-is.
 
 ---

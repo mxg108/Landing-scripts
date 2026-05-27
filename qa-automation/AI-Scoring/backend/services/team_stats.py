@@ -167,7 +167,7 @@ def load_and_clean(
             if yn_idx is None or len(row) <= yn_idx:
                 yn_scores[yn_name] = ""
                 continue
-            yn_scores[yn_name] = str(row[yn_idx]).strip().upper()[:1]
+            yn_scores[yn_name] = _parse_yn_cell(row[yn_idx])
 
         manager = (
             str(row[history_layout.COL_EVALUATOR_EMAIL]).strip().lower()
@@ -602,11 +602,54 @@ def compute_supervisor_stats(df: pd.DataFrame) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Y/N cell parsing
+# ---------------------------------------------------------------------------
+
+def _parse_yn_cell(val: object) -> str:
+    """Map a raw Y/N sheet cell to a normalized sentinel: 'Y' | 'N' | 'NA' | ''.
+
+    The legacy implementation was `str(val).strip().upper()[:1]`, which
+    silently coerced "Not Applicable" (the YN_DISPLAY['NA'] string written
+    by sheets_service) to "N" — historical N/A rows were miscoded as
+    failures and dragged binary-stats percentages down. This explicit
+    parser preserves NA so `_compute_binary_pct` excludes it from the
+    denominator (it already filters by 'Y'|'N' — anything else falls out
+    of both numerator and total).
+
+    Recognized inputs (case-insensitive):
+        ''                               → ''
+        'Y' / 'Yes' / 'YES'              → 'Y'
+        'N' / 'No'  / 'NO'               → 'N'
+        'NA' / 'N/A' / 'Not Applicable'  → 'NA'
+        anything else                    → '' (defensive — keeps an
+                                              unrecognized cell out of
+                                              the binary denominator).
+    """
+    s = str(val).strip()
+    if not s:
+        return ""
+    upper = s.upper()
+    if upper in ("NA", "N/A") or upper == "NOT APPLICABLE":
+        return "NA"
+    first = upper[:1]
+    if first == "Y":
+        return "Y"
+    if first == "N":
+        return "N"
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # _compute_binary_pct (helper)
 # ---------------------------------------------------------------------------
 
 def _compute_binary_pct(series: pd.Series) -> float:
-    """Compute percentage of 'Y' out of valid Y/N responses."""
+    """Compute percentage of 'Y' out of valid Y/N responses.
+
+    NA rows (yn_value=='NA') fall out of both numerator and denominator —
+    they're excluded from binary-stats calculations entirely. Only Y and
+    N count toward the denominator.
+    """
     yes = int((series == "Y").sum())
     total = int(((series == "Y") | (series == "N")).sum())
     return round(100.0 * yes / total, 1) if total > 0 else 0.0
