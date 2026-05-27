@@ -132,6 +132,38 @@
     /* Loading */
     .loading { text-align: center; padding: 60px; color: var(--muted); font-size: 0.9rem; }
 
+    /* EWMA drill-down (clickable bar → expand evals list below the chart) */
+    .ewma-drill-header {
+      display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+      padding: 10px 12px; background: var(--bg); border-radius: 8px 8px 0 0;
+      border: 1px solid var(--border); border-bottom: none;
+    }
+    .ewma-drill-agent { font-family: 'Fraunces', serif; font-size: 1.05rem; font-weight: 700; }
+    .ewma-drill-sub { font-size: 0.75rem; color: var(--muted); }
+    .ewma-drill-close {
+      margin-left: auto; background: transparent; border: 1px solid var(--border);
+      color: var(--muted); border-radius: 6px; padding: 4px 10px; font-size: 0.75rem;
+      cursor: pointer; font-family: 'DM Mono', monospace;
+    }
+    .ewma-drill-close:hover { color: var(--text); border-color: var(--muted); }
+    .ewma-drill-table {
+      width: 100%; border-collapse: collapse; font-size: 0.78rem;
+      border: 1px solid var(--border); border-radius: 0 0 8px 8px; overflow: hidden;
+    }
+    .ewma-drill-table th, .ewma-drill-table td {
+      padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border);
+    }
+    .ewma-drill-table th {
+      font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--muted); background: var(--surface); position: static;
+    }
+    .ewma-drill-table tr:last-child td { border-bottom: none; }
+    .ewma-drill-table .score-link { font-weight: 700; }
+    .ewma-drill-empty {
+      padding: 20px; text-align: center; color: var(--muted); font-size: 0.8rem;
+      border: 1px solid var(--border); border-radius: 0 0 8px 8px;
+    }
+
     /* Toast (SSE eval_approved notifications) */
     .toast-container {
       position: fixed; bottom: 24px; right: 24px; z-index: 1000;
@@ -209,7 +241,11 @@
       <div class="card"><h3>SPC Control Chart</h3><canvas id="spcCanvas"></canvas></div>
       <div class="card"><h3>Score Distribution</h3><canvas id="distCanvas" style="cursor:pointer;"></canvas><div id="distDrillDown" style="display:none;"></div></div>
     </div>
-    <div class="card"><h3>EWMA by Agent</h3><canvas id="ewmaCanvas"></canvas></div>
+    <div class="card">
+      <h3>EWMA by Agent</h3>
+      <canvas id="ewmaCanvas" style="cursor:pointer;"></canvas>
+      <div id="ewmaDrillDown" style="display:none; margin-top:16px;"></div>
+    </div>
   </div>
 
   <!-- Agent Roster Tab -->
@@ -653,16 +689,152 @@ async function loadDistDrillDown(bin) {
   }
 }
 
+// Tracks which agent's EWMA drill-down is currently expanded so a second
+// click on the same bar collapses (and a click on a different bar swaps).
+let _ewmaExpandedAgent = null;
+
 function renderEwmaChart() {
   ewmaChart = destroyChart(ewmaChart);
   const data = teamData.ewma;
-  if (!data?.length) return;
+  if (!data?.length) {
+    // Collapse drill-down when the underlying chart goes empty (e.g. after
+    // a filter change that produces no agents).
+    collapseEwmaDrill();
+    return;
+  }
   const colors = data.map(d => d.current_ewma >= 90 ? '#28A745' : d.current_ewma >= 80 ? '#1A61D9' : d.current_ewma >= 70 ? '#E8A317' : '#D9534F');
   ewmaChart = new Chart(document.getElementById('ewmaCanvas'), {
     type: 'bar',
     data: { labels: data.map(d => d.agent), datasets: [{ label: 'EWMA', data: data.map(d => d.current_ewma), backgroundColor: colors, borderColor: colors, borderWidth: 1 }] },
-    options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false } }, scales: { x: { min: 0, max: 100 } } }
+    options: {
+      indexAxis: 'y', responsive: true,
+      plugins: { legend: { display: false } },
+      scales: { x: { min: 0, max: 100 } },
+      onClick: (event, activeElements) => {
+        if (!activeElements.length) return;
+        const idx = activeElements[0].index;
+        const entry = data[idx];
+        if (!entry) return;
+        // Same bar again → collapse. Different bar → swap.
+        if (_ewmaExpandedAgent === entry.agent) {
+          collapseEwmaDrill();
+        } else {
+          openEwmaDrill(entry);
+        }
+      },
+    },
   });
+
+  // Restore a previously-open drill-down if the user just refetched
+  // /team/stats while it was visible (e.g. via the SSE debounce).
+  if (_ewmaExpandedAgent && data.some(d => d.agent === _ewmaExpandedAgent)) {
+    const entry = data.find(d => d.agent === _ewmaExpandedAgent);
+    openEwmaDrill(entry);
+  } else if (_ewmaExpandedAgent) {
+    // Agent dropped out of the result set under the new filters.
+    collapseEwmaDrill();
+  }
+}
+
+function collapseEwmaDrill() {
+  _ewmaExpandedAgent = null;
+  const el = document.getElementById('ewmaDrillDown');
+  if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+}
+
+async function openEwmaDrill(ewmaEntry) {
+  _ewmaExpandedAgent = ewmaEntry.agent;
+  const el = document.getElementById('ewmaDrillDown');
+  if (!el) return;
+  el.style.display = 'block';
+
+  // The "evals comprising this EWMA" are every evaluation for this agent
+  // in the dashboard's current time window. EWMA is recency-weighted but
+  // mathematically includes the entire window, so listing all of them is
+  // accurate. /agents/{name}/history already returns EvaluationRecord
+  // with timestamp + caller_name + eval_id + overall_score.
+  const trendArrow = ewmaEntry.trend === 'improving' ? '▲'
+                    : ewmaEntry.trend === 'declining' ? '▼' : '●';
+  // Agent name links to the per-agent dashboard so the EWMA drill-down
+  // becomes a launchpad: bar → expand evals → click name to see the
+  // full progression view for that agent.
+  const agentHref = `/dashboard/${TEAM_ID}/agent/${encodeURIComponent(ewmaEntry.agent)}`;
+  el.innerHTML = `
+    <div class="ewma-drill-header">
+      <a class="ewma-drill-agent" href="${agentHref}" style="color:var(--text);">${escapeHtml(ewmaEntry.agent)}</a>
+      <div class="ewma-drill-sub">
+        EWMA ${fmt(ewmaEntry.current_ewma)} ·
+        <span class="trend-${ewmaEntry.trend === 'improving' ? 'up' : ewmaEntry.trend === 'declining' ? 'down' : 'flat'}">${trendArrow} ${ewmaEntry.trend}</span> ·
+        ${ewmaEntry.eval_count} eval${ewmaEntry.eval_count === 1 ? '' : 's'}
+      </div>
+      <button class="ewma-drill-close" onclick="collapseEwmaDrill()">Close ×</button>
+    </div>
+    <div class="ewma-drill-empty" id="ewmaDrillBody">Loading…</div>
+  `;
+
+  // Time window respects the dashboard's current days filter (1mo/3mo/6mo/All).
+  // days=0 (All) maps to a generous 730-day max — same cap the backend accepts.
+  const days = selectedDays && selectedDays > 0 ? selectedDays : 365;
+  try {
+    const r = await fetch(
+      `${API_BASE}/agents/${encodeURIComponent(ewmaEntry.agent)}/history?days=${days}`,
+      { headers: authHeaders() }
+    );
+    if (r.status === 404) {
+      // No history for this agent in the window — render the empty state.
+      // (Shouldn't happen often since the agent appears in EWMA only if
+      // there were evals in the window, but filters could narrow.)
+      document.getElementById('ewmaDrillBody').textContent =
+        'No evaluations found for this agent in the current time window.';
+      return;
+    }
+    if (!r.ok) throw new Error(r.statusText);
+    const records = await r.json();
+    // Newest first so the list opens on the most recent eval.
+    records.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    renderEwmaDrillBody(records);
+  } catch (err) {
+    console.error('Failed to fetch agent history:', err);
+    document.getElementById('ewmaDrillBody').textContent =
+      'Failed to load evaluations. Check console.';
+  }
+}
+
+function renderEwmaDrillBody(records) {
+  const body = document.getElementById('ewmaDrillBody');
+  if (!body) return;
+  if (!records.length) {
+    body.className = 'ewma-drill-empty';
+    body.textContent = 'No evaluations found for this agent in the current time window.';
+    return;
+  }
+  body.outerHTML = `
+    <table class="ewma-drill-table" id="ewmaDrillBody">
+      <thead>
+        <tr>
+          <th style="width:90px;">Score</th>
+          <th>Date</th>
+          <th>Caller</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${records.map(r => {
+          const dt = new Date(r.timestamp);
+          const dateStr = isNaN(dt) ? (r.timestamp || '—')
+            : dt.toLocaleString(undefined, { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+          const color = scoreColor(r.overall_score);
+          const scoreCell = r.eval_id
+            ? `<a class="score-link" href="/datapoint/${TEAM_ID}/${encodeURIComponent(r.eval_id)}" style="color:${color};">${fmt(r.overall_score)}</a>`
+            : `<span class="score-link" style="color:${color};">${fmt(r.overall_score)}</span>`;
+          return `<tr>
+            <td>${scoreCell}</td>
+            <td>${escapeHtml(dateStr)}</td>
+            <td>${escapeHtml(r.caller_name || '—')}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
 }
 
 // --- Roster ---
@@ -895,8 +1067,13 @@ function showToast(data) {
 
   const toast = document.createElement('div');
   toast.className = 'toast';
-  const linkHref = data.call_id
-    ? `/datapoint/${TEAM_ID}/${encodeURIComponent(data.call_id)}`
+  // Prefer eval_id (entry_point_call_id parsed from dialpad_link) — that's
+  // how every other path on the dashboard keys /datapoint URLs (see
+  // services/team_stats.py:_parse_row + the /team/evals drill-down). Falls
+  // back to master call_id when an older event lacks eval_id.
+  const datapointKey = data.eval_id || data.call_id;
+  const linkHref = datapointKey
+    ? `/datapoint/${TEAM_ID}/${encodeURIComponent(datapointKey)}`
     : null;
 
   const scoreColored = data.overall_score != null
