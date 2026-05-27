@@ -570,6 +570,7 @@ async def approve_scorecard(
             "eval_id": eval_id,
             "history_row": history_row,
             "agent": job.get("agent_name") or sc.get("agent_name") or "",
+            "evaluator_email": evaluator_email,
             "overall_score": overall_score,
             "summary": _truncate(sc.get("call_summary", "")),
             "strengths": _truncate(approval.key_strengths),
