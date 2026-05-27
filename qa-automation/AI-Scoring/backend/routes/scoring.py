@@ -549,15 +549,32 @@ async def approve_scorecard(
             s = s or ""
             return s if len(s) <= n else s[: n - 1] + "…"
 
+        # `eval_id` is the datapoint-route key (entry_point_call_id for
+        # inbound queue calls, master call_id for direct calls). It comes
+        # from the trailing path segment of `dialpad_link`, which
+        # scoring_service.py already builds via build_dialpad_link with
+        # the entry_point_call_id captured by get_call_details. Mirrors
+        # the parse in services/team_stats.py:_parse_row so SSE drill-down
+        # URLs match the Analyst_History eval_id used by /datapoint.
+        def _eval_id_from_link(link: str) -> str:
+            if not link:
+                return ""
+            clean = link.split("[")[0].strip().split("?")[0].strip()
+            return clean.rstrip("/").split("/")[-1]
+
+        dialpad_link = sc.get("dialpad_link", "")
+        eval_id = _eval_id_from_link(dialpad_link) or job.get("call_id", "")
+
         await get_event_bus().publish(team_id, "eval_approved", {
             "call_id": job.get("call_id", ""),
+            "eval_id": eval_id,
             "history_row": history_row,
             "agent": job.get("agent_name") or sc.get("agent_name") or "",
             "overall_score": overall_score,
             "summary": _truncate(sc.get("call_summary", "")),
             "strengths": _truncate(approval.key_strengths),
             "opportunities": _truncate(approval.opportunities),
-            "dialpad_link": sc.get("dialpad_link", ""),
+            "dialpad_link": dialpad_link,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
 

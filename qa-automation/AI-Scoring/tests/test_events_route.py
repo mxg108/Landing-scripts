@@ -120,3 +120,19 @@ def test_approve_publish_truncates_long_text():
     src = inspect.getsource(scoring_module)
     assert "_truncate" in src, "_truncate helper is missing from scoring.py"
     assert "280" in src, "_truncate's 280-char default has been changed"
+
+
+def test_approve_publish_includes_eval_id_field():
+    """The published eval_approved payload must include `eval_id` derived
+    from dialpad_link so the toast click navigates to the same datapoint
+    URL the rest of the dashboard uses (entry_point_call_id, not master
+    call_id). Source-presence guard against regression of the fix."""
+    src = inspect.getsource(scoring_module)
+    assert "_eval_id_from_link" in src, (
+        "_eval_id_from_link helper is missing — approve publish would "
+        "fall back to master call_id and the toast would link to the "
+        "wrong datapoint URL"
+    )
+    assert '"eval_id": eval_id' in src, (
+        "eval_id is no longer published in the eval_approved payload"
+    )
