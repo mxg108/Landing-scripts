@@ -69,35 +69,73 @@
     .kpi-box .value { font-family: 'Fraunces', serif; font-size: 2rem; font-weight: 700; margin: 4px 0; }
     .kpi-box .sub { font-size: 0.75rem; color: var(--muted); }
 
-    /* Month chiclet row — three clickable cards above the KPI row.
-       Last Month + Current Month link to /dashboard/<team>/evals?month=…
+    /* Three top-of-overview chiclets — last month, current month, and
+       Recent Evals. Shared three-row layout:
+         header line:  LABEL: count   (with click-arrow tucked top-right)
+         hero number:  big primary metric + thin secondary
+         footer line:  context (month, time-ago)
+       Last/Current navigate to /dashboard/<team>/evals?month=…
        Recent Evals toggles an expandable panel below the row. */
     .chiclet-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
     .chiclet {
+      position: relative;
       background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
       padding: 16px 20px; cursor: pointer; text-decoration: none; color: inherit;
-      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+      display: flex; flex-direction: column; gap: 10px;
       transition: border-color 0.15s, transform 0.15s;
       font-family: inherit; font-size: inherit;
+      text-align: left;  /* button default-centers text on some browsers */
     }
     .chiclet:hover { border-color: var(--accent); transform: translateY(-1px); }
     .chiclet.chiclet-active { border-color: var(--accent); }
-    .chiclet .chiclet-left { display: flex; flex-direction: column; gap: 2px; }
-    .chiclet .chiclet-label {
-      font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em;
+
+    /* Header line: "LAST MONTH: 121 evals" + arrow */
+    .chiclet-header {
+      display: flex; justify-content: space-between; align-items: baseline;
+      font-size: 0.7rem; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.05em;
     }
-    .chiclet .chiclet-count {
-      font-family: 'Fraunces', serif; font-size: 1.6rem; font-weight: 700; line-height: 1.1;
+    .chiclet-header .chiclet-count-inline {
+      color: var(--text); font-weight: 600;
+      /* slightly less muted than the label so the count reads */
     }
-    .chiclet .chiclet-month { font-size: 0.7rem; color: var(--muted); }
-    .chiclet .chiclet-right { text-align: right; font-size: 0.8rem; color: var(--muted); }
-    .chiclet .chiclet-meanstd {
-      font-family: 'Fraunces', serif; font-size: 0.95rem; color: var(--text); font-weight: 600;
+    .chiclet-arrow { color: var(--accent); font-size: 1rem; line-height: 1; }
+
+    /* Hero row: big mean / score, thin secondary inline */
+    .chiclet-hero {
+      display: flex; align-items: baseline; gap: 8px;
+      font-family: 'Fraunces', serif;
     }
-    .chiclet .chiclet-arrow { color: var(--accent); font-size: 1.1rem; }
-    /* Recent-evals chiclet body — same shape but no mean/std column. */
-    .chiclet .chiclet-latest { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
-    .chiclet .chiclet-latest .chiclet-latest-score { font-weight: 700; }
+    .chiclet-hero .chiclet-primary {
+      font-size: 2.4rem; font-weight: 700; line-height: 1.05;
+    }
+    .chiclet-hero .chiclet-secondary {
+      font-size: 1rem; font-weight: 400; color: var(--muted);
+      letter-spacing: 0.01em;
+    }
+    .chiclet-hero .chiclet-agent {
+      font-size: 0.95rem; font-weight: 500; color: var(--text);
+      font-family: 'DM Mono', monospace;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      min-width: 0; flex: 1;
+    }
+
+    /* Footer line: month or time-ago, plus an optional uppercase mini-label */
+    .chiclet-footer {
+      display: flex; justify-content: space-between; align-items: baseline;
+      font-size: 0.72rem; color: var(--muted);
+    }
+    .chiclet-footer .chiclet-mini-label {
+      text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.65rem;
+    }
+    .chiclet-footer .chiclet-when {
+      font-size: 0.78rem; color: var(--text);
+    }
+    /* Empty-state placeholder (Recent Evals before first eval) */
+    .chiclet-hero .chiclet-empty {
+      font-family: 'DM Mono', monospace; font-size: 1.1rem;
+      color: var(--muted); font-weight: 400;
+    }
 
     /* Expanded panel beneath the chiclet row (Recent Evals drill-down) */
     .recent-evals-panel {
@@ -553,15 +591,17 @@ function renderChiclets() {
     const meanColor = m.mean != null ? scoreColor(m.mean) : 'var(--muted)';
 
     return `<a class="chiclet" href="${href}">
-      <div class="chiclet-left">
-        <div class="chiclet-label">${label}</div>
-        <div class="chiclet-count">${m.count} eval${m.count === 1 ? '' : 's'}</div>
-        <div class="chiclet-month">${m.year_month}</div>
+      <div class="chiclet-header">
+        <span>${label}: <span class="chiclet-count-inline">${m.count} eval${m.count === 1 ? '' : 's'}</span></span>
+        <span class="chiclet-arrow">&rsaquo;</span>
       </div>
-      <div class="chiclet-right">
-        <div class="chiclet-meanstd" style="color:${meanColor}">${meanLabel} ${stdLabel}</div>
-        <div style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;">mean ± std</div>
-        <div class="chiclet-arrow">&rsaquo;</div>
+      <div class="chiclet-hero">
+        <span class="chiclet-primary" style="color:${meanColor}">${meanLabel}</span>
+        ${stdLabel ? `<span class="chiclet-secondary">${stdLabel}</span>` : ''}
+      </div>
+      <div class="chiclet-footer">
+        <span class="chiclet-when">${_monthDisplay(m.year_month)}</span>
+        <span class="chiclet-mini-label">mean ± std</span>
       </div>
     </a>`;
   }
@@ -587,34 +627,44 @@ function renderChiclets() {
 // ---------------------------------------------------------------------------
 const RECENT_EVALS_MAX = 50;
 const RECENT_EVALS_VISIBLE = 10;
-let _recentEvalsBuffer = [];           // newest first
+let _recentEvalsBuffer = [];           // newest first; all-time log (caps at 50)
 let _recentEvalsInitialized = false;
 let _recentEvalsExpanded = false;
+let _midnightTimer = null;             // re-renders the chiclet at next local midnight
 
 function _recentEvalsChiclet() {
-  const latest = _recentEvalsBuffer[0];
-  const countLabel = _recentEvalsBuffer.length >= RECENT_EVALS_MAX
-    ? `${RECENT_EVALS_MAX}+ recent`
-    : `${_recentEvalsBuffer.length} recent`;
+  // The displayed "count" reflects TODAY only (user's local midnight boundary).
+  // The full buffer still drives the expanded panel — so "5 today" in the
+  // header but clicking through shows the last 10 across all time.
+  const todayCount = _recentEvalsBuffer.filter(r => _isToday(r.timestamp)).length;
+  const countLabel = `${todayCount} today`;
 
-  let latestLine = '<div class="chiclet-latest">—</div>';
-  if (latest) {
-    const scoreColored = latest.overall_score != null
-      ? `<span class="chiclet-latest-score" style="color:${scoreColor(latest.overall_score)}">${fmt(latest.overall_score)}</span>`
-      : '';
-    latestLine = `<div class="chiclet-latest">${escapeHtml(latest.agent || '—')} · ${scoreColored} · ${_timeAgo(latest.timestamp)}</div>`;
+  const latest = _recentEvalsBuffer[0];
+  let heroHtml;
+  let footerWhen;
+  if (latest && latest.overall_score != null) {
+    const color = scoreColor(latest.overall_score);
+    heroHtml = `
+      <span class="chiclet-primary" style="color:${color}">${fmt(latest.overall_score)}</span>
+      <span class="chiclet-agent">${escapeHtml(latest.agent || '—')}</span>
+    `;
+    footerWhen = _timeAgo(latest.timestamp);
+  } else {
+    heroHtml = '<span class="chiclet-empty">awaiting first eval…</span>';
+    footerWhen = '—';
   }
 
   return `<button type="button"
                   class="chiclet ${_recentEvalsExpanded ? 'chiclet-active' : ''}"
                   onclick="toggleRecentEvals()">
-    <div class="chiclet-left">
-      <div class="chiclet-label">Recent Evals</div>
-      <div class="chiclet-count">${countLabel}</div>
-      ${latestLine}
+    <div class="chiclet-header">
+      <span>RECENT EVALS: <span class="chiclet-count-inline">${countLabel}</span></span>
+      <span class="chiclet-arrow">${_recentEvalsExpanded ? '&#9662;' : '&rsaquo;'}</span>
     </div>
-    <div class="chiclet-right">
-      <div class="chiclet-arrow">${_recentEvalsExpanded ? '&#9662;' : '&rsaquo;'}</div>
+    <div class="chiclet-hero">${heroHtml}</div>
+    <div class="chiclet-footer">
+      <span class="chiclet-when">${footerWhen}</span>
+      <span class="chiclet-mini-label">latest</span>
     </div>
   </button>`;
 }
@@ -724,6 +774,50 @@ function prependRecentEval(data) {
   }
   renderChiclets();
   if (_recentEvalsExpanded) renderRecentEvalsPanel();
+}
+
+function _monthDisplay(yyyy_mm) {
+  // "2026-04" → "Apr, 2026". Falls back to the raw string for unparseable
+  // inputs (defensive — should never happen for a /team/stats response).
+  if (!yyyy_mm || !/^\d{4}-\d{2}$/.test(yyyy_mm)) return yyyy_mm || '';
+  const [yStr, mStr] = yyyy_mm.split('-');
+  const monthIdx = parseInt(mStr, 10) - 1;
+  if (monthIdx < 0 || monthIdx > 11) return yyyy_mm;
+  // Construct a UTC date so the month name doesn't drift on a tz boundary.
+  const d = new Date(Date.UTC(parseInt(yStr, 10), monthIdx, 1));
+  const name = d.toLocaleDateString(undefined, { month: 'short', timeZone: 'UTC' });
+  return `${name}, ${yStr}`;
+}
+
+function _isToday(iso) {
+  // Local-time "today" boundary so the chiclet matches the viewer's
+  // experience of the day. Midnight rollover is handled by
+  // _scheduleMidnightRerender (no polling).
+  if (!iso) return false;
+  const t = new Date(iso);
+  if (isNaN(t)) return false;
+  const now = new Date();
+  return t.getFullYear() === now.getFullYear()
+      && t.getMonth() === now.getMonth()
+      && t.getDate() === now.getDate();
+}
+
+function _scheduleMidnightRerender() {
+  // setTimeout exactly to the next local midnight; on fire, re-render the
+  // chiclets (so "today" counts reset) and re-schedule. Avoids polling.
+  // Cap the delay at 24h to defend against system-clock drift edge cases
+  // where the next-midnight calculation lands further out than expected.
+  if (_midnightTimer) clearTimeout(_midnightTimer);
+  const now = new Date();
+  const tomorrowMidnight = new Date(
+    now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 50
+  );
+  const delay = Math.min(24 * 3600 * 1000, tomorrowMidnight.getTime() - now.getTime());
+  _midnightTimer = setTimeout(() => {
+    _midnightTimer = null;
+    if (teamData) renderChiclets();
+    _scheduleMidnightRerender();
+  }, Math.max(1000, delay));  // floor at 1s for clock-skew edge cases
 }
 
 function _displayNameFromEmail(email) {
@@ -1341,6 +1435,7 @@ function dismissToast(toast) {
 fetchMails();
 fetchTeamStats();
 openEventStream();
+_scheduleMidnightRerender();
 </script>
 </body>
 </html>
