@@ -13,6 +13,7 @@ import pytest
 
 from backend.config.team_config import TeamConfig
 from backend.services.team_stats import (
+    _parse_yn_cell,
     compute_agent_roster,
     compute_binary_stats,
     compute_distribution,
@@ -234,6 +235,92 @@ def test_monthly_summary_does_not_mutate_input_df():
     cols_before = set(df.columns)
     compute_monthly_summary(df)
     assert set(df.columns) == cols_before
+
+
+# ---------------------------------------------------------------------------
+# _parse_yn_cell — preserves "Not Applicable" instead of coercing to "N"
+# (NumericNAOption.md scope note resolved here).
+# ---------------------------------------------------------------------------
+
+def test_parse_yn_cell_handles_each_recognized_form():
+    assert _parse_yn_cell("Y") == "Y"
+    assert _parse_yn_cell("Yes") == "Y"
+    assert _parse_yn_cell("YES") == "Y"
+    assert _parse_yn_cell("N") == "N"
+    assert _parse_yn_cell("No") == "N"
+    assert _parse_yn_cell("NO") == "N"
+
+
+def test_parse_yn_cell_preserves_not_applicable_sentinel():
+    """The bug: 'Not Applicable'.upper()[:1] == 'N' — historical NA rows
+    were miscoded as failures and pulled binary-stats percentages down.
+    Each canonical NA spelling must round-trip to the 'NA' sentinel."""
+    assert _parse_yn_cell("Not Applicable") == "NA"
+    assert _parse_yn_cell("not applicable") == "NA"
+    assert _parse_yn_cell("NA") == "NA"
+    assert _parse_yn_cell("N/A") == "NA"
+    assert _parse_yn_cell("  Not Applicable  ") == "NA"
+
+
+def test_parse_yn_cell_empty_and_unknown_to_empty():
+    """Anything we don't recognize falls out of the binary denominator —
+    safer than misclassifying as Y or N."""
+    assert _parse_yn_cell("") == ""
+    assert _parse_yn_cell("   ") == ""
+    assert _parse_yn_cell("???") == ""
+    # 'Maybe' starts with 'M' — not Y or N. Defaults to empty, which
+    # `_compute_binary_pct` excludes from both numerator and denominator.
+    assert _parse_yn_cell("Maybe") == ""
+
+
+def test_load_and_clean_preserves_yn_na_through_binary_stats(sales: TeamConfig):
+    """End-to-end: a sheet row holding 'Not Applicable' for a yn section
+    must NOT count as a failure in the binary-stats percentage.
+
+    Before this fix: 'Not Applicable' was coerced to 'N' inside
+    load_and_clean, dragging the team's Y% down on every NA row.
+    """
+    from datetime import datetime
+    import pandas as pd
+
+    yn_ids = sales.yn_history_ids
+    assert yn_ids, "sales fixture must declare at least one yn section"
+    target_yn = yn_ids[0]
+
+    # Two rows for Star Rep: one passed (Y), one explicit Not Applicable.
+    # The Y% on target_yn must read 100.0% (1 of 1 valid), NOT 50.0%.
+    rows = [["Agent Name"] + [""] * 200]  # header
+    rows.append(make_history_row(
+        sales, agent="Star Rep", when=datetime(2026, 4, 1, 9, 0),
+        overall=90, section_scores={hid: 5 for hid in sales.numeric_history_ids},
+        yn_scores={y: ("Y" if y == target_yn else "Y") for y in yn_ids},
+    ))
+    rows.append(make_history_row(
+        sales, agent="Star Rep", when=datetime(2026, 4, 2, 9, 0),
+        overall=90, section_scores={hid: 5 for hid in sales.numeric_history_ids},
+        # Write the production sentinel (what sheets_service emits via
+        # YN_DISPLAY['NA']) on target_yn; Y on the rest so they're valid.
+        yn_scores={y: ("Not Applicable" if y == target_yn else "Y") for y in yn_ids},
+    ))
+
+    mails = make_mails_sheet(["Star Rep"])
+    df = load_and_clean(rows, mails, sales)
+
+    # The "NA" sentinel made it through load_and_clean unmolested.
+    star = df[df["agent"] == "Star Rep"]
+    target_vals = sorted(star[target_yn].tolist())
+    assert target_vals == ["NA", "Y"], (
+        f"expected ['NA', 'Y'] after load_and_clean — got {target_vals}. "
+        f"'Not Applicable' was probably re-coerced to 'N' (the original bug)."
+    )
+
+    # Y% reads 100.0 (the NA row drops out of the denominator entirely).
+    binary = compute_binary_stats(df, sales.yn_section_labels)
+    target_stats = next(b for b in binary if b["section_id"] == target_yn)
+    assert target_stats["team_pct"] == 100.0, (
+        f"Y% should be 100.0 (1 Y of 1 valid), got {target_stats['team_pct']}. "
+        f"NA row probably got counted as a failure."
+    )
 
 
 # ---------------------------------------------------------------------------
