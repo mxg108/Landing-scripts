@@ -161,6 +161,7 @@ class TeamEvalRow(BaseModel):
     dialpad_link: str = ""
     eval_id: str = ""
     supervisor: Optional[str] = None
+    evaluator_email: Optional[str] = None
 
 
 class TeamEvalsResponse(BaseModel):

@@ -169,10 +169,35 @@ async def team_month_evals(
     # Sort newest first — analysts skim the top to find recent calls.
     df = df.sort_values("timestamp", ascending=False)
 
+    def _to_utc(ts):
+        """Ensure outgoing ISO timestamps carry an explicit UTC marker.
+
+        Sheet timestamps are written by sheets_service with
+        `datetime.now(timezone.utc).strftime(...)` — i.e. UTC clock
+        values stored as naive strings (no TZ marker in the cell).
+        parse_timestamp reads them back as tz-naive datetimes. Without
+        an explicit tzinfo, pydantic serializes them as e.g.
+        `"2026-05-26T14:30:00"`, which JS parses as the BROWSER's local
+        time — pushing them hours into the future for non-UTC browsers
+        and tripping the time-ago helper's "just now" fallback.
+        Stamping them as UTC restores correct relative-time math
+        regardless of where the dashboard is viewed.
+        """
+        if ts is None:
+            return ts
+        # Pandas Timestamp and datetime both have .tzinfo / .tz; treat
+        # naive as UTC. Already-aware values pass through unchanged.
+        try:
+            if ts.tzinfo is None:
+                return ts.replace(tzinfo=timezone.utc)
+        except AttributeError:
+            pass
+        return ts
+
     rows = [
         TeamEvalRow(
             agent=str(r["agent"]),
-            timestamp=r["timestamp"],
+            timestamp=_to_utc(r["timestamp"]),
             overall_score=float(r["overall_score"]),
             # Wide-form df doesn't carry dialpad_link directly — reconstruct
             # the canonical URL from eval_id (the [LONG CALL] suffix isn't
@@ -184,6 +209,7 @@ async def team_month_evals(
             ),
             eval_id=str(r.get("eval_id", "")),
             supervisor=str(r.get("supervisor", "")) or None,
+            evaluator_email=str(r.get("manager_email", "")) or None,
         )
         for r in df.to_dict(orient="records")
     ]

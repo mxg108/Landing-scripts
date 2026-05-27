@@ -69,15 +69,19 @@
     .kpi-box .value { font-family: 'Fraunces', serif; font-size: 2rem; font-weight: 700; margin: 4px 0; }
     .kpi-box .sub { font-size: 0.75rem; color: var(--muted); }
 
-    /* Month chiclet row — two side-by-side clickable cards above the KPI row */
-    .chiclet-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    /* Month chiclet row — three clickable cards above the KPI row.
+       Last Month + Current Month link to /dashboard/<team>/evals?month=…
+       Recent Evals toggles an expandable panel below the row. */
+    .chiclet-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
     .chiclet {
       background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
       padding: 16px 20px; cursor: pointer; text-decoration: none; color: inherit;
       display: flex; align-items: center; justify-content: space-between; gap: 16px;
       transition: border-color 0.15s, transform 0.15s;
+      font-family: inherit; font-size: inherit;
     }
     .chiclet:hover { border-color: var(--accent); transform: translateY(-1px); }
+    .chiclet.chiclet-active { border-color: var(--accent); }
     .chiclet .chiclet-left { display: flex; flex-direction: column; gap: 2px; }
     .chiclet .chiclet-label {
       font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em;
@@ -91,8 +95,43 @@
       font-family: 'Fraunces', serif; font-size: 0.95rem; color: var(--text); font-weight: 600;
     }
     .chiclet .chiclet-arrow { color: var(--accent); font-size: 1.1rem; }
+    /* Recent-evals chiclet body — same shape but no mean/std column. */
+    .chiclet .chiclet-latest { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
+    .chiclet .chiclet-latest .chiclet-latest-score { font-weight: 700; }
+
+    /* Expanded panel beneath the chiclet row (Recent Evals drill-down) */
+    .recent-evals-panel {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+      padding: 14px 16px; margin-top: -4px;  /* visually attach to the row above */
+    }
+    .recent-evals-panel-header {
+      display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px;
+    }
+    .recent-evals-panel-header .label {
+      font-family: 'Fraunces', serif; font-size: 0.95rem; font-weight: 700;
+    }
+    .recent-evals-panel-header .sub { font-size: 0.72rem; color: var(--muted); }
+    .recent-evals-list { max-height: 320px; overflow-y: auto; }
+    .recent-evals-item {
+      display: grid; grid-template-columns: 70px 1fr 130px; align-items: center;
+      gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border);
+      font-size: 0.8rem;
+    }
+    .recent-evals-item:last-child { border-bottom: none; }
+    .recent-evals-item .re-score { font-family: 'Fraunces', serif; font-weight: 700; text-align: left; }
+    .recent-evals-item .re-agent { font-weight: 600; }
+    .recent-evals-item .re-evaluator {
+      font-size: 0.7rem; color: var(--muted); margin-top: 2px;
+    }
+    .recent-evals-item .re-time { color: var(--muted); font-size: 0.72rem; text-align: right; }
+    .recent-evals-empty { padding: 12px 0; color: var(--muted); font-size: 0.8rem; text-align: center; }
+
+    @media (max-width: 900px) {
+      .chiclet-row { grid-template-columns: 1fr 1fr; }
+    }
     @media (max-width: 640px) {
       .chiclet-row { grid-template-columns: 1fr; }
+      .recent-evals-item { grid-template-columns: 60px 1fr 90px; }
     }
 
     /* Charts grid */
@@ -236,6 +275,7 @@
   <!-- Overview Tab -->
   <div class="tab-panel active" id="panel-overview">
     <div class="chiclet-row" id="chicletRow"></div>
+    <div class="recent-evals-panel" id="recentEvalsPanel" style="display:none;"></div>
     <div class="kpi-row" id="kpiRow"></div>
     <div class="charts-grid">
       <div class="card"><h3>SPC Control Chart</h3><canvas id="spcCanvas"></canvas></div>
@@ -354,6 +394,11 @@ async function fetchTeamStats() {
     if (!r.ok) throw new Error(r.statusText);
     teamData = await r.json();
     renderTab(currentTab);
+    // Initial-populate the Recent Evals ring buffer on first successful
+    // /team/stats response — the response carries monthly.current.year_month
+    // which we need to call /team/evals. Subsequent stats refetches skip
+    // this (the SSE feed is now the source of truth).
+    initRecentEvalsBuffer();
   } catch (e) {
     console.error('Failed to fetch team stats:', e);
   }
@@ -521,7 +566,192 @@ function renderChiclets() {
     </a>`;
   }
 
-  target.innerHTML = _chiclet('Last Month', monthly.last) + _chiclet('Current Month', monthly.current);
+  target.innerHTML =
+    _chiclet('Last Month', monthly.last) +
+    _chiclet('Current Month', monthly.current) +
+    _recentEvalsChiclet();
+}
+
+// ---------------------------------------------------------------------------
+// Recent Evals chiclet (Phase F of LiveDashboard.md)
+//
+// Third chiclet on the row. Collapsed: count + most-recent agent/score.
+// Expanded: scrollable list of up to RECENT_EVALS_VISIBLE rows beneath the
+// chiclet row (same visual register as the EWMA drill-down).
+//
+// Source of truth is a client-side ring buffer (max 50 entries). On dashboard
+// load the buffer is initial-populated via /team/evals?year_month=<current>
+// (already shipped in Phase A). After that, every SSE eval_approved event
+// prepends. The buffer survives /team/stats refetches; only a hard page
+// reload empties it (acceptable — the Sheet is one fetch away).
+// ---------------------------------------------------------------------------
+const RECENT_EVALS_MAX = 50;
+const RECENT_EVALS_VISIBLE = 10;
+let _recentEvalsBuffer = [];           // newest first
+let _recentEvalsInitialized = false;
+let _recentEvalsExpanded = false;
+
+function _recentEvalsChiclet() {
+  const latest = _recentEvalsBuffer[0];
+  const countLabel = _recentEvalsBuffer.length >= RECENT_EVALS_MAX
+    ? `${RECENT_EVALS_MAX}+ recent`
+    : `${_recentEvalsBuffer.length} recent`;
+
+  let latestLine = '<div class="chiclet-latest">—</div>';
+  if (latest) {
+    const scoreColored = latest.overall_score != null
+      ? `<span class="chiclet-latest-score" style="color:${scoreColor(latest.overall_score)}">${fmt(latest.overall_score)}</span>`
+      : '';
+    latestLine = `<div class="chiclet-latest">${escapeHtml(latest.agent || '—')} · ${scoreColored} · ${_timeAgo(latest.timestamp)}</div>`;
+  }
+
+  return `<button type="button"
+                  class="chiclet ${_recentEvalsExpanded ? 'chiclet-active' : ''}"
+                  onclick="toggleRecentEvals()">
+    <div class="chiclet-left">
+      <div class="chiclet-label">Recent Evals</div>
+      <div class="chiclet-count">${countLabel}</div>
+      ${latestLine}
+    </div>
+    <div class="chiclet-right">
+      <div class="chiclet-arrow">${_recentEvalsExpanded ? '&#9662;' : '&rsaquo;'}</div>
+    </div>
+  </button>`;
+}
+
+function toggleRecentEvals() {
+  _recentEvalsExpanded = !_recentEvalsExpanded;
+  renderChiclets();
+  renderRecentEvalsPanel();
+}
+
+function renderRecentEvalsPanel() {
+  const panel = document.getElementById('recentEvalsPanel');
+  if (!panel) return;
+  if (!_recentEvalsExpanded) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+  panel.style.display = 'block';
+
+  const visible = _recentEvalsBuffer.slice(0, RECENT_EVALS_VISIBLE);
+  const subText = _recentEvalsBuffer.length === 0
+    ? 'Waiting for new evaluations…'
+    : `showing ${visible.length} of ${_recentEvalsBuffer.length}`;
+
+  const itemsHtml = visible.length === 0
+    ? '<div class="recent-evals-empty">No recent evaluations yet.</div>'
+    : visible.map(r => {
+        const color = scoreColor(r.overall_score);
+        const scoreCell = r.eval_id
+          ? `<a class="re-score" href="/datapoint/${TEAM_ID}/${encodeURIComponent(r.eval_id)}" style="color:${color};">${fmt(r.overall_score)}</a>`
+          : `<span class="re-score" style="color:${color};">${fmt(r.overall_score)}</span>`;
+        const evaluatorLine = r.evaluator_email
+          ? `<div class="re-evaluator">by ${escapeHtml(_displayNameFromEmail(r.evaluator_email))}</div>`
+          : '';
+        return `<div class="recent-evals-item">
+          <div>${scoreCell}</div>
+          <div>
+            <div class="re-agent">${escapeHtml(r.agent || '—')}</div>
+            ${evaluatorLine}
+          </div>
+          <div class="re-time">${_timeAgo(r.timestamp)}</div>
+        </div>`;
+      }).join('');
+
+  panel.innerHTML = `
+    <div class="recent-evals-panel-header">
+      <span class="label">Recent Evaluations</span>
+      <span class="sub">${subText}</span>
+    </div>
+    <div class="recent-evals-list">${itemsHtml}</div>
+  `;
+}
+
+async function initRecentEvalsBuffer() {
+  // Idempotent: only runs once per page load. The SSE handler is the
+  // ongoing feed afterwards.
+  if (_recentEvalsInitialized) return;
+  _recentEvalsInitialized = true;
+
+  const ym = teamData?.monthly?.current?.year_month;
+  if (!ym) return;
+
+  try {
+    // active_only=false: the chiclet is the "log of toasts" — toasts ignore
+    // dashboard filters, so this should too. Otherwise initial-population
+    // and SSE feed would disagree (toast shows an agent who's filtered out
+    // of the chart, then chiclet wouldn't pre-fill them).
+    const r = await fetch(
+      `${API_BASE}/team/evals?year_month=${encodeURIComponent(ym)}&active_only=false`,
+      { headers: authHeaders() },
+    );
+    if (!r.ok) return;
+    const data = await r.json();
+    const rows = (data.rows || [])
+      .slice()
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+      .slice(0, RECENT_EVALS_MAX)
+      .map(r => ({
+        agent: r.agent,
+        overall_score: r.overall_score,
+        timestamp: r.timestamp,
+        eval_id: r.eval_id,
+        evaluator_email: r.evaluator_email,
+      }));
+    _recentEvalsBuffer = rows;
+    renderChiclets();
+    if (_recentEvalsExpanded) renderRecentEvalsPanel();
+  } catch (e) {
+    console.error('Failed to init recent-evals buffer:', e);
+  }
+}
+
+function prependRecentEval(data) {
+  // De-dupe: an approval handler that publishes twice would otherwise duplicate
+  // the entry. Keyed on eval_id when present (call_id fallback for older shape).
+  const key = data.eval_id || data.call_id;
+  if (key) {
+    _recentEvalsBuffer = _recentEvalsBuffer.filter(r => (r.eval_id || r.call_id) !== key);
+  }
+  _recentEvalsBuffer.unshift({
+    agent: data.agent,
+    overall_score: data.overall_score,
+    timestamp: data.timestamp,
+    eval_id: data.eval_id || data.call_id,
+    call_id: data.call_id,
+    evaluator_email: data.evaluator_email,
+  });
+  if (_recentEvalsBuffer.length > RECENT_EVALS_MAX) {
+    _recentEvalsBuffer.length = RECENT_EVALS_MAX;
+  }
+  renderChiclets();
+  if (_recentEvalsExpanded) renderRecentEvalsPanel();
+}
+
+function _displayNameFromEmail(email) {
+  // Mirrors backend/src/QAEntry.managerNameFromEmail: "max.perez@landing.com"
+  // → "Max Perez". The full email is verbose for a row in the chiclet panel.
+  if (!email) return '';
+  const local = email.split('@')[0] || '';
+  if (!local) return email;
+  return local.split(/[._-]/)
+    .filter(Boolean)
+    .map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function _timeAgo(iso) {
+  if (!iso) return '—';
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return '—';
+  const secs = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (secs < 60) return 'just now';
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  const days = Math.round(hours / 24);
+  if (days < 7) return `${days} day${days === 1 ? '' : 's'} ago`;
+  // For older entries, fall back to a short date instead of "12 weeks ago".
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: '2-digit' });
 }
 
 function renderSpcChart() {
@@ -1035,6 +1265,7 @@ function openEventStream() {
     try {
       const data = JSON.parse(e.data);
       showToast(data);
+      prependRecentEval(data);
       scheduleStatsRefetch();
     } catch (err) {
       console.error('Failed to parse eval_approved payload:', err);
