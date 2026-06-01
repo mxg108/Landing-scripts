@@ -10,7 +10,7 @@ columns.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import time as _time
@@ -150,6 +150,19 @@ class SheetsProvider(DataProvider):
         ts = _parse_timestamp(_safe(row, history_layout.COL_TIMESTAMP))
         if ts is None:
             return None
+        # Sheet writer stamps `MM/DD/YYYY HH:MM:SS` in UTC clock terms but
+        # without a TZ marker (matches the pre-existing format). pydantic
+        # serializes a naive datetime as `"2026-05-31T03:44:15"`, which
+        # JS `new Date(iso)` interprets as **local** time — putting the
+        # value hours into the past or future for non-UTC browsers and
+        # showing the wrong date when call-time crosses a TZ boundary
+        # (e.g. May 30 9:44 PM local writes as 5/31 03:44 UTC; frontend
+        # reads it back as 5/31 03:44 *local*). Tagging UTC at the
+        # boundary makes the wire format unambiguous so the browser
+        # converts to local time correctly. Mirrors routes/team.py's
+        # `_to_utc` (the chiclet PR landed the same fix on /team/evals).
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
 
         # Build sections dict keyed by history_id (preserves the existing
         # API contract).
@@ -224,7 +237,12 @@ class SheetsProvider(DataProvider):
         self, agent_name: str, days: int = 30
     ) -> list[EvaluationRecord]:
         """Return evaluations for *agent_name* within the last *days* days."""
-        cutoff = datetime.now() - timedelta(days=days)
+        # tz-aware UTC: `_parse_row` returns tz-aware timestamps (call-time
+        # initiative PR-1 patch — naive datetimes serialized without a TZ
+        # marker were being parsed as local time on the JS side). A naive
+        # cutoff would TypeError on the comparison; downstream the route
+        # would 500 and the frontend would show "no evaluations found."
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         cached = _get_cached_raw(self._history_cache_key)
         if cached is not None:
             all_rows = cached
@@ -271,7 +289,8 @@ class SheetsProvider(DataProvider):
             all_rows = self._ws.get_all_values()
             _set_cached_raw(self._history_cache_key, all_rows)
 
-        cutoff = datetime.now() - timedelta(days=days)
+        # tz-aware UTC — see get_agent_history comment for context.
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         records: list[EvaluationRecord] = []
         for row in all_rows[1:]:  # skip header
             if not row:

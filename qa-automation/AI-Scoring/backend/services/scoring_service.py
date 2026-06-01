@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, Optional
 
 from backend.models.scorecard import ScorecardWithMeta
 from backend.services.audio_service import score_audio
-from backend.services.dialpad_client import get_transcript, get_call_details, build_dialpad_link, CALL_DURATION_FLAG_MS
+from backend.services.dialpad_client import (
+    CALL_DURATION_FLAG_MS,
+    _epoch_ms_to_utc_datetime,
+    build_dialpad_link,
+    get_call_details,
+    get_transcript,
+)
 from backend.services.notion_service import fetch_sop_for_call
 
 if TYPE_CHECKING:
@@ -99,6 +105,9 @@ async def score_call(
         sop_used=sop_data["sop_title"] or None,
         caller_name=call_details.get("caller_name", ""),
         caller_phone=call_details.get("caller_phone", ""),
+        # Call-time initiative (PR-1) — see references/CallTimeOnAnalystHistory.md
+        call_started_at_utc=_epoch_ms_to_utc_datetime(call_details.get("date_connected")),
+        call_ended_at_utc=_epoch_ms_to_utc_datetime(call_details.get("date_ended")),
         transcript_display=transcript_data.get("transcript_display", []),
         moments_display=transcript_data.get("moments_display", []),
     )
