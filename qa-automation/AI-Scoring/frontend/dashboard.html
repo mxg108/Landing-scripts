@@ -239,6 +239,7 @@
   <div class="header">
     <div style="display:flex;align-items:center;gap:16px;">
       <a id="team-view-link" href="/dashboard/member_support" style="color:rgba(255,255,255,0.7);text-decoration:none;font-size:0.8rem;border:1px solid rgba(255,255,255,0.3);padding:4px 12px;border-radius:6px;">Team View</a>
+      <a id="lookup-link" href="/lookup/member_support" style="color:rgba(255,255,255,0.7);text-decoration:none;font-size:0.8rem;border:1px solid rgba(255,255,255,0.3);padding:4px 12px;border-radius:6px;">Lookup</a>
       <h1 id="headerTitle">Agent Dashboard</h1>
     </div>
     <div class="header-controls">
@@ -325,6 +326,8 @@
     document.addEventListener('DOMContentLoaded', () => {
       const teamLink = document.getElementById('team-view-link');
       if (teamLink) teamLink.href = `/dashboard/${TEAM_ID}`;
+      const lookupLink = document.getElementById('lookup-link');
+      if (lookupLink) lookupLink.href = `/lookup/${TEAM_ID}`;
     });
     let selectedDays = 30;
     let trendChartInstance = null;

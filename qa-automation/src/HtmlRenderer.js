@@ -76,8 +76,12 @@ class HtmlRenderer {
          // Meta row
          + '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
          + '<tr>'
+         // "Call · <date>" — the date is the call's connected time
+         // (col C, populated by the call-time initiative on the Python
+         // side). Explicit label so the manager doesn't read it as
+         // "the day this email arrived" or "the day scoring happened."
          + '<td style="font-size:12px;color:' + CONFIG.COLORS.LIGHT_BLUE + ';">'
-         + '&#128197; ' + this.entry.formattedDate + '</td>'
+         + '&#128197; Call &middot; ' + this.entry.formattedDate + '</td>'
          + '<td style="text-align:right;">'
          + '<span style="font-size:12px;color:' + CONFIG.COLORS.WHITE + ';'
          + 'border:1px solid ' + CONFIG.COLORS.LIGHT_BLUE + ';'
