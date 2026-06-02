@@ -25,7 +25,10 @@ For long form, see compute_long_form(): one row per (agent, eval_id, section).
 
 from __future__ import annotations
 
+import os
+from datetime import datetime
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -36,6 +39,56 @@ from backend.services.data_normalization import (
     parse_timestamp,
     strip_accents,
 )
+
+
+# Project-wide TZ used for *bucketing* (year-month assignment on chiclets,
+# SPC, EWMA, and the /team/evals drill-down). Timestamps remain stored
+# and served in UTC; we only convert at the seam where "which month is
+# this in?" is decided.
+#
+# Why: sheet writers store UTC clock values (no TZ marker); the frontend
+# correctly converts to local time for *display*, but the backend's
+# `.dt.to_period("M")` runs on naive-UTC and disagrees with the local
+# display when calls cross a TZ boundary. A call placed 8:33 PM PDT
+# May 31 (= 3:33 AM Jun 1 UTC) would display "May 31" but bucket into
+# June — exactly the regression caught during PR-3 smoke testing.
+#
+# Default matches the user's working TZ; override via env var when ops
+# spans multiple timezones (e.g. set LANDING_BUCKET_TZ=America/New_York).
+BUCKET_TZ_NAME = os.getenv("LANDING_BUCKET_TZ", "America/Los_Angeles")
+_BUCKET_TZ = ZoneInfo(BUCKET_TZ_NAME)
+_UTC = ZoneInfo("UTC")
+
+
+def _months_in_bucket_tz(timestamps: "pd.Series") -> "pd.Series":
+    """Convert a Series of naive-UTC timestamps to "YYYY-MM" strings in
+    the project bucket TZ. Single seam — every monthly-bucketing site
+    (chiclets, SPC, /team/evals filter) calls this so the chiclet
+    count and the drill-down list always agree about which calls
+    landed in which month.
+
+    Pandas warns ("dropping timezone information") when
+    `tz_convert(...).to_period("M")` runs; that drop is intentional —
+    we only need the period string for grouping, not the tz tag.
+    `strftime` would produce the same result and skip the warning, but
+    `.dt.to_period("M")` is the existing idiom across this module.
+    """
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=UserWarning)
+        return (
+            pd.to_datetime(timestamps)
+            .dt.tz_localize(_UTC)
+            .dt.tz_convert(_BUCKET_TZ)
+            .dt.to_period("M")
+            .astype(str)
+        )
+
+
+def _now_in_bucket_tz() -> datetime:
+    """`datetime.now()` in the project bucket TZ. Used to compute the
+    "current" and "last" month labels for compute_monthly_summary."""
+    return datetime.now(_UTC).astimezone(_BUCKET_TZ)
 
 if TYPE_CHECKING:
     from backend.config.team_config import StatsConfig, TeamConfig
@@ -134,27 +187,37 @@ def load_and_clean(
         if not agent_raw:
             continue
 
-        # Call-time initiative (PR-1 of references/CallTimeOnAnalystHistory.md):
-        # the eval timestamp lives in col_eval_approved_at on new-shape rows
-        # (Stage 4 writer fills it). On pre-cutover rows that column is
-        # blank — fall back to col C, which used to hold the eval/approval
-        # time before the schema shift. After PR-2 backfill runs, every
-        # historical row will have col_eval_approved_at populated and the
-        # fallback stops firing.
+        # Call-time initiative (PR-3 of references/CallTimeOnAnalystHistory.md):
+        # df["timestamp"] is now anchored at CALL TIME (col C), not the
+        # eval/approval time. PR-1 repurposed col C to hold the call's
+        # date_connected; PR-2 backfilled it for historical rows. The
+        # original eval-time string (which used to live in col C) now
+        # lives in col_eval_approved_at, preserved as df["eval_approved_at"]
+        # for any consumer that wants to filter by approval time.
+        #
+        # Old-shape (pre-PR-1 or .backfill-skipped) rows have col C = legacy
+        # eval-time and col_eval_approved_at blank. For those, we have no
+        # call-time to anchor; we fall back to col C so the row still
+        # surfaces in analytics under its eval-time bucket. The mix is
+        # bounded: production runs of PR-2 left only a small skip count
+        # (≤2% of rows) old-shape.
         new_col_idx = L.col_eval_approved_at
         new_col_val = row[new_col_idx] if len(row) > new_col_idx else ""
         eval_approved_at = parse_timestamp(new_col_val) if new_col_val else None
 
         col_c_val = row[history_layout.COL_TIMESTAMP]
+        col_c_parsed = parse_timestamp(col_c_val)
 
         if eval_approved_at is not None:
-            # New-shape row: col C = call_started, col_eval_approved_at = eval time.
-            ts = eval_approved_at
-            call_started = parse_timestamp(col_c_val)
+            # New-shape row: col C = call_started (the new analytics anchor),
+            # col_eval_approved_at = original eval/approval time.
+            ts = col_c_parsed
         else:
-            # Old-shape row: col C = eval time, call_started unknown.
-            ts = parse_timestamp(col_c_val)
-            call_started = None
+            # Old-shape row (.backfill-skipped or pre-PR-1): col C is the
+            # legacy eval-time, no call-time available. Fall back so the
+            # row stays in analytics.
+            ts = col_c_parsed
+            eval_approved_at = col_c_parsed
 
         if ts is None or ts.year < 2020:
             continue
@@ -208,13 +271,11 @@ def load_and_clean(
         records.append({
             "agent": agent,
             "timestamp": ts,
-            # New column from PR-1 of the call-time initiative. Populated
-            # for new-shape rows (Stage 4 writer fills col_eval_approved_at,
-            # leaving col C as call_started); None for pre-backfill rows.
-            # df["timestamp"] continues to be the eval-time anchor during
-            # the transition — analytics consumers don't change behavior
-            # here. After PR-3 they'll switch to df["call_started"].
-            "call_started": call_started,
+            # Renamed from "call_started" in PR-3. Approval/eval time —
+            # available for any consumer that wants to filter by when the
+            # eval was scored. Equals timestamp for old-shape rows that
+            # fell back to col C.
+            "eval_approved_at": eval_approved_at,
             "overall_score": overall,
             **section_scores,
             **yn_scores,
@@ -229,8 +290,7 @@ def load_and_clean(
         return df
 
     df["timestamp"] = pd.to_datetime(df["timestamp"])
-    # NaT for rows where call_started is unknown (pre-backfill).
-    df["call_started"] = pd.to_datetime(df["call_started"])
+    df["eval_approved_at"] = pd.to_datetime(df["eval_approved_at"])
     return df
 
 
@@ -411,9 +471,12 @@ def compute_monthly_summary(df: pd.DataFrame) -> dict:
     chiclets inherit the page filters by construction. The `days` filter
     is bypassed here on purpose: chiclets express their own month windows.
     """
-    from datetime import datetime as _dt
-
-    now = _dt.now()
+    # "current" / "last" labels are derived in the project bucket TZ so
+    # the boundaries match what the chiclets actually filter on. Using
+    # naive UTC `datetime.now()` here would let "current month" tick over
+    # to June at PDT 5pm on the 31st — exactly the off-by-one the user
+    # demonstrated during PR-3 smoke testing.
+    now = _now_in_bucket_tz()
     current_p = pd.Period(now, freq="M")
     last_p = current_p - 1
     current_ym = str(current_p)
@@ -428,7 +491,7 @@ def compute_monthly_summary(df: pd.DataFrame) -> dict:
     # Compute month buckets directly from timestamps — independent of the
     # /stats `days` window so the chiclets stay anchored on calendar
     # months regardless of which time range the dashboard is showing.
-    months = df["timestamp"].dt.to_period("M").astype(str)
+    months = _months_in_bucket_tz(df["timestamp"])
 
     def _bucket(ym: str) -> dict:
         mask = months == ym
@@ -452,7 +515,9 @@ def compute_monthly_spc(df: pd.DataFrame, stats_config: StatsConfig) -> dict:
         return {"months": [], "ucl": 0, "lcl": 0, "center": 0}
 
     df = df.copy()
-    df["year_month"] = df["timestamp"].dt.to_period("M").astype(str)
+    # Bucket TZ: same seam as compute_monthly_summary so the SPC point
+    # for a month matches the chiclet count for that month exactly.
+    df["year_month"] = _months_in_bucket_tz(df["timestamp"])
 
     monthly = df.groupby("year_month").agg(
         mean=("overall_score", "mean"),
