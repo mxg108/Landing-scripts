@@ -174,6 +174,8 @@ async def team_month_evals(
     # Sort newest first — analysts skim the top to find recent calls.
     df = df.sort_values("timestamp", ascending=False)
 
+    import pandas as pd
+
     def _to_utc(ts):
         """Ensure outgoing ISO timestamps carry an explicit UTC marker.
 
@@ -187,9 +189,13 @@ async def team_month_evals(
         and tripping the time-ago helper's "just now" fallback.
         Stamping them as UTC restores correct relative-time math
         regardless of where the dashboard is viewed.
+
+        Also handles `pd.NaT` — needed because `df["eval_approved_at"]`
+        can be NaT on rare rows where parse_timestamp fails. None on
+        NaT lets pydantic accept the Optional[datetime] field cleanly.
         """
-        if ts is None:
-            return ts
+        if ts is None or pd.isna(ts):
+            return None
         # Pandas Timestamp and datetime both have .tzinfo / .tz; treat
         # naive as UTC. Already-aware values pass through unchanged.
         try:
@@ -203,6 +209,14 @@ async def team_month_evals(
         TeamEvalRow(
             agent=str(r["agent"]),
             timestamp=_to_utc(r["timestamp"]),
+            # Drives the Recent Evals chiclet's time-ago semantic so
+            # initial-populate (this endpoint) and SSE-fed entries (which
+            # already carry approval-time as `timestamp`) agree about
+            # "how long ago was this eval approved". On old-shape rows
+            # load_and_clean populated eval_approved_at as a fallback to
+            # col C; on new-shape rows it carries the original approval
+            # clock that lived in col_eval_approved_at.
+            eval_approved_at=_to_utc(r.get("eval_approved_at")),
             overall_score=float(r["overall_score"]),
             # Wide-form df doesn't carry dialpad_link directly — reconstruct
             # the canonical URL from eval_id (the [LONG CALL] suffix isn't
