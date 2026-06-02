@@ -302,6 +302,7 @@
 <div class="header">
   <div style="display:flex;align-items:center;gap:16px;">
     <a id="scoring-link" href="/score/member_support" style="font-family:'DM Mono',monospace;font-size:0.82rem;padding:6px 14px;border:1px solid rgba(255,255,255,0.3);border-radius:6px;color:#fff;text-decoration:none;transition:background 0.2s;">Scoring</a>
+    <a id="lookup-link" href="/lookup/member_support" style="font-family:'DM Mono',monospace;font-size:0.82rem;padding:6px 14px;border:1px solid rgba(255,255,255,0.3);border-radius:6px;color:#fff;text-decoration:none;transition:background 0.2s;">Lookup</a>
     <h1>Team Analytics Dashboard</h1>
   </div>
   <div class="header-controls">
@@ -429,6 +430,8 @@ const API_BASE = `${window.location.origin}/api/${TEAM_ID}`;
 document.addEventListener('DOMContentLoaded', () => {
   const scoringLink = document.getElementById('scoring-link');
   if (scoringLink) scoringLink.href = `/score/${TEAM_ID}`;
+  const lookupLink = document.getElementById('lookup-link');
+  if (lookupLink) lookupLink.href = `/lookup/${TEAM_ID}`;
 });
 let selectedDays = 90;
 let activeOnly = true;

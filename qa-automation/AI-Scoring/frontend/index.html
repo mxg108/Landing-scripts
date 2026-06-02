@@ -258,7 +258,10 @@
       <h1>Landing QA Scoring</h1>
       <p>AI-assisted call evaluation — Phase 1. Human review required before scores reach agents.</p>
     </div>
-    <a id="team-dashboard-link" href="/dashboard/member_support" style="font-family:'DM Mono',monospace;font-size:0.82rem;padding:8px 16px;border:1px solid rgba(255,255,255,0.3);border-radius:6px;color:#fff;text-decoration:none;transition:background 0.2s;">Team Dashboard</a>
+    <div style="display:flex;gap:8px;">
+      <a id="lookup-link" href="/lookup/member_support" style="font-family:'DM Mono',monospace;font-size:0.82rem;padding:8px 16px;border:1px solid rgba(255,255,255,0.3);border-radius:6px;color:#fff;text-decoration:none;transition:background 0.2s;">Lookup</a>
+      <a id="team-dashboard-link" href="/dashboard/member_support" style="font-family:'DM Mono',monospace;font-size:0.82rem;padding:8px 16px;border:1px solid rgba(255,255,255,0.3);border-radius:6px;color:#fff;text-decoration:none;transition:background 0.2s;">Team Dashboard</a>
+    </div>
   </div>
 </header>
 
@@ -311,6 +314,8 @@
   document.addEventListener('DOMContentLoaded', () => {
     const dashLink = document.getElementById('team-dashboard-link');
     if (dashLink) dashLink.href = `/dashboard/${TEAM_ID}`;
+    const lookupLink = document.getElementById('lookup-link');
+    if (lookupLink) lookupLink.href = `/lookup/${TEAM_ID}`;
   });
 
   // localStorage (not sessionStorage) so /lookup, /scorecard, and /score
