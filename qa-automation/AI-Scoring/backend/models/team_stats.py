@@ -157,6 +157,14 @@ class TeamEvalRow(BaseModel):
     """One row in the month-drill-down evals list."""
     agent: str
     timestamp: datetime
+    """Call's connected time (df["timestamp"] after PR-3). Drives the
+    month-drill-down "Call Date" column and the chiclet bucketing."""
+    eval_approved_at: Optional[datetime] = None
+    """Eval/approval clock (df["eval_approved_at"] after PR-3). Powers
+    the Recent Evals chiclet's "how long ago was this eval approved"
+    semantic — the one place where the eval clock takes the front
+    seat. Optional so older clients without the field continue to
+    parse without error."""
     overall_score: float
     dialpad_link: str = ""
     eval_id: str = ""
