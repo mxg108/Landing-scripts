@@ -66,10 +66,15 @@ def test_score_destination_columns_reference_real_sections(config: TeamConfig):
 
 
 def test_history_layout_width_matches_formula(config: TeamConfig):
-    """Derived layout width follows the canonical 6 + 3N + 6 formula."""
+    """Derived layout width follows the canonical 6 + 3N + 7 formula.
+
+    Trailing width is 7 since the call-time initiative landed
+    `col_eval_approved_at` as a trailing column (see
+    references/CallTimeOnAnalystHistory.md).
+    """
     L = config.history_layout
     n = len(config.sections)
-    assert L.total_width == 6 + 3 * n + 6
+    assert L.total_width == 6 + 3 * n + 7
     # Range invariants: scores → reasoning → confidence are contiguous, each width N
     assert L.scores_end - L.scores_start == n
     assert L.reasoning_end - L.reasoning_start == n
@@ -79,6 +84,47 @@ def test_history_layout_width_matches_formula(config: TeamConfig):
     # Trailing fixed cells immediately follow confidence range
     assert L.col_key_strengths == L.confidence_end
     assert L.col_source == L.confidence_end + 5
+    # New trailing column for the call-time initiative
+    assert L.col_eval_approved_at == L.confidence_end + 6
+    # eval_approved_at is the LAST trailing column — total_width math
+    # would silently break if a future trailing cell landed without
+    # bumping TRAILING_WIDTH here.
+    assert L.col_eval_approved_at == L.total_width - 1
+
+
+def test_history_layout_eval_approved_at_does_not_collide_with_existing_trailing_cells(
+    config: TeamConfig,
+):
+    """Regression guard: col_eval_approved_at must not overlap any of the
+    six prior trailing cells. Catches an accidental re-numbering."""
+    L = config.history_layout
+    prior_trailing = {
+        L.col_key_strengths,
+        L.col_opportunities,
+        L.col_call_summary,
+        L.col_caller_name,
+        L.col_caller_phone,
+        L.col_source,
+    }
+    assert L.col_eval_approved_at not in prior_trailing
+
+
+def test_history_layout_eval_approved_at_indices_at_n_boundaries():
+    """N=1 (smallest legal), N=10 (member_support shape), N=19 (sales
+    shape). Asserts col_eval_approved_at lands at the documented offset
+    relative to confidence_end for each."""
+    from backend.config.history_layout import HistoryLayout
+
+    for n in (1, 10, 19):
+        L = HistoryLayout(n)
+        # confidence_end = 6 + 3n; col_eval_approved_at = confidence_end + 6
+        expected = 6 + 3 * n + 6
+        assert L.col_eval_approved_at == expected, (
+            f"N={n}: col_eval_approved_at expected at index {expected}, "
+            f"got {L.col_eval_approved_at}"
+        )
+        # And it's the last column.
+        assert L.total_width == L.col_eval_approved_at + 1
 
 
 def test_section_numbers_are_unique(config: TeamConfig):

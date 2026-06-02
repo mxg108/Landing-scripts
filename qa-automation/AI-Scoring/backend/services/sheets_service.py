@@ -107,6 +107,23 @@ def _sheets_configured(team_id: str) -> bool:
 # Format + lookup helpers
 # ---------------------------------------------------------------------------
 
+def _format_call_started(call_started_at_utc) -> str:
+    """Render the call's `date_connected` for COL_TIMESTAMP (col C).
+
+    Returns the canonical sheet timestamp string ("MM/DD/YYYY HH:MM:SS",
+    UTC clock) when supplied, or "" when the call's date_connected
+    wasn't surfaced by Dialpad. Sentinel-blank lets `load_and_clean`'s
+    PR-2 fallback path keep working for rows the backfill will visit
+    later. See references/CallTimeOnAnalystHistory.md.
+    """
+    if call_started_at_utc is None:
+        return ""
+    # call_started_at_utc is a UTC-aware datetime per
+    # _epoch_ms_to_utc_datetime. strftime emits the wall-clock value
+    # (UTC) without a TZ marker, matching the existing convention.
+    return call_started_at_utc.strftime("%m/%d/%Y %H:%M:%S")
+
+
 def _format_ai_score(sec_def: SectionDef, ai_section: dict) -> str:
     """Convert AI-output section dict to a score-cell string.
 
@@ -240,8 +257,15 @@ def write_draft_to_fr_ai(scorecard: ScorecardWithMeta, config: TeamConfig) -> in
 
     row = [""] * L.total_width
     row[history_layout.COL_AGENT_NAME] = scorecard.agent_name or ""
-    row[history_layout.COL_TIMESTAMP] = datetime.now(timezone.utc).strftime("%m/%d/%Y %H:%M:%S")
+    # Call-time initiative (PR-1): col C now holds the call's
+    # `date_connected` from Dialpad (when the call actually happened),
+    # not the draft/approval clock. Blank when get_call_details didn't
+    # surface a date_connected — backfill (PR-2) will fill it later.
+    # See references/CallTimeOnAnalystHistory.md.
+    row[history_layout.COL_TIMESTAMP] = _format_call_started(scorecard.call_started_at_utc)
     row[history_layout.COL_DIALPAD_LINK] = scorecard.dialpad_link or ""
+    # eval_approved_at (new trailing column) is filled at Stage 4 by
+    # finalize_to_analyst_history. Leave blank here.
 
     for i, sec_def in enumerate(config.sections_by_number):
         if sec_def.auto_value is not None:
@@ -398,6 +422,15 @@ def write_to_score_destination(
     their declared value; manual sections fall back to
     ``manual_default_value`` if the analyst left the FR-AI cell blank.
 
+    Call-time initiative (PR-1) — see
+    references/CallTimeOnAnalystHistory.md: the ``timestamp`` cell in
+    ``metadata_cols`` (FR1 col A for MS, col C for Sales) is sourced
+    from ``fr_ai_row[COL_TIMESTAMP]``, which Stage 1 now populates from
+    the call's ``date_connected`` instead of the draft clock. The Apps
+    Script email's "Evaluation Date" line therefore renders as the
+    call date going forward — usually what agents/managers actually
+    want to see. Renaming that label on the GAS side is a follow-up.
+
     Returns the destination tab's appended row number.
     """
     L = config.history_layout
@@ -456,6 +489,12 @@ def write_to_score_destination(
     key_strengths = fr_ai_row[L.col_key_strengths]
     opportunities = fr_ai_row[L.col_opportunities]
     metadata_values = {
+        # "timestamp" semantically = the call's date_connected since the
+        # call-time initiative (PR-1) flipped col C. Pre-cutover rows
+        # passing through Stage 2 (rare; only re-approvals of historical
+        # drafts) still carry the legacy eval-time value in col C —
+        # acceptable transient. Backfill (PR-2) makes the semantic
+        # uniform across all rows.
         "timestamp": fr_ai_row[history_layout.COL_TIMESTAMP],
         "agent_name": fr_ai_row[history_layout.COL_AGENT_NAME],
         "dialpad_link": fr_ai_row[history_layout.COL_DIALPAD_LINK],
@@ -551,9 +590,15 @@ def finalize_to_analyst_history(
     """Stage 4: copy the now-complete FR-AI row to Analyst_History.
 
     Resolves agent_email via the Mails lookup, sets evaluator_email,
-    refreshes the timestamp to "approval time" (UTC). Both tabs share
-    the derived layout — this is essentially a row-copy with a few
-    metadata cells overridden.
+    and stamps the approval time on the new ``col_eval_approved_at``
+    trailing column.
+
+    Call-time initiative (PR-1) — see
+    references/CallTimeOnAnalystHistory.md: this no longer overrides
+    col C. COL_TIMESTAMP was set at Stage 1 (`write_draft_to_fr_ai`)
+    from the call's `date_connected`; it travels untouched into
+    Analyst_History. The approval-time UTC string that used to live
+    in col C now lives in `col_eval_approved_at`.
 
     Returns the Analyst_History row number.
     """
@@ -569,7 +614,10 @@ def finalize_to_analyst_history(
     history_row = list(fr_ai_row)
     history_row[history_layout.COL_AGENT_EMAIL] = agent_email
     history_row[history_layout.COL_EVALUATOR_EMAIL] = evaluator_email
-    history_row[history_layout.COL_TIMESTAMP] = datetime.now(timezone.utc).strftime(
+    # NOTE: COL_TIMESTAMP intentionally NOT touched here — it holds
+    # call_connected from Stage 1. The approval clock writes to the new
+    # trailing column instead.
+    history_row[L.col_eval_approved_at] = datetime.now(timezone.utc).strftime(
         "%m/%d/%Y %H:%M:%S"
     )
 

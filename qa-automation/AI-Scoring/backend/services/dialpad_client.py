@@ -6,7 +6,7 @@ recording download.
 
 import asyncio
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import httpx
 
@@ -221,6 +221,44 @@ def _epoch_to_iso(val) -> str:
         return datetime.fromtimestamp(ts).isoformat()
     except (ValueError, TypeError, OSError):
         return str(val)
+
+
+def _epoch_ms_to_utc_datetime(val) -> Optional[datetime]:
+    """Convert a Dialpad epoch-ms timestamp to a UTC-aware datetime.
+
+    Used by the call-time initiative (PR-1 of
+    references/CallTimeOnAnalystHistory.md): `get_call_details` returns
+    `date_connected` / `date_ended` as numeric epoch-ms strings (or
+    empty when Dialpad didn't supply one). The writer needs a real
+    `datetime` for formatting + plumbing through `ScorecardWithMeta`.
+
+    Returns None on any failure so the writer can detect "we don't know"
+    and leave the cell blank, rather than guessing.
+    """
+    if val is None or val == "":
+        return None
+    try:
+        secs = int(val) / 1000
+        return datetime.fromtimestamp(secs, tz=timezone.utc)
+    except (ValueError, TypeError, OSError):
+        return None
+
+
+def compute_call_duration(
+    call_started_at_utc: Optional[datetime],
+    call_ended_at_utc: Optional[datetime],
+) -> Optional[timedelta]:
+    """Difference between Dialpad's `date_ended` and `date_connected`.
+
+    Plumbed in the call-time initiative (PR-1) but NOT consumed by any
+    production code yet. The future "call duration as an analytics
+    dimension" project will pick this up without having to re-touch
+    scoring_service / ScorecardWithMeta. Returns None when either input
+    is missing.
+    """
+    if call_started_at_utc is None or call_ended_at_utc is None:
+        return None
+    return call_ended_at_utc - call_started_at_utc
 
 
 # ---------------------------------------------------------------------------

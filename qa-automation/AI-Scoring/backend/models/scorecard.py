@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel, ValidationInfo, model_validator
 
@@ -106,5 +107,16 @@ class ScorecardWithMeta(Scorecard):
     sop_used: Optional[str] = None      # SOP title injected, if any
     caller_name: Optional[str] = None   # From Dialpad get_call_details
     caller_phone: Optional[str] = None  # From Dialpad get_call_details
+    # Call-time initiative (PR-1) — see references/CallTimeOnAnalystHistory.md
+    call_started_at_utc: Optional[datetime] = None
+    """Dialpad `date_connected` for this call, normalized to a UTC-aware
+    datetime by `_epoch_ms_to_utc_datetime`. None when get_call_details
+    failed or the field was missing — the writer treats None as
+    'leave the col C cell blank; backfill will fix it.'"""
+    call_ended_at_utc: Optional[datetime] = None
+    """Dialpad `date_ended`, same normalization. Plumbed but NOT written
+    to Analyst_History in this phase — only fed to the
+    `compute_call_duration` stub. Writing it to a dedicated column is a
+    future-project decision."""
     transcript_display: List[dict] = []  # [{timestamp, speaker, text}, ...]
     moments_display: List[dict] = []     # [{timestamp, type}, ...]

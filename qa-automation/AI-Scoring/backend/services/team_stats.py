@@ -134,7 +134,28 @@ def load_and_clean(
         if not agent_raw:
             continue
 
-        ts = parse_timestamp(row[history_layout.COL_TIMESTAMP])
+        # Call-time initiative (PR-1 of references/CallTimeOnAnalystHistory.md):
+        # the eval timestamp lives in col_eval_approved_at on new-shape rows
+        # (Stage 4 writer fills it). On pre-cutover rows that column is
+        # blank — fall back to col C, which used to hold the eval/approval
+        # time before the schema shift. After PR-2 backfill runs, every
+        # historical row will have col_eval_approved_at populated and the
+        # fallback stops firing.
+        new_col_idx = L.col_eval_approved_at
+        new_col_val = row[new_col_idx] if len(row) > new_col_idx else ""
+        eval_approved_at = parse_timestamp(new_col_val) if new_col_val else None
+
+        col_c_val = row[history_layout.COL_TIMESTAMP]
+
+        if eval_approved_at is not None:
+            # New-shape row: col C = call_started, col_eval_approved_at = eval time.
+            ts = eval_approved_at
+            call_started = parse_timestamp(col_c_val)
+        else:
+            # Old-shape row: col C = eval time, call_started unknown.
+            ts = parse_timestamp(col_c_val)
+            call_started = None
+
         if ts is None or ts.year < 2020:
             continue
 
@@ -187,6 +208,13 @@ def load_and_clean(
         records.append({
             "agent": agent,
             "timestamp": ts,
+            # New column from PR-1 of the call-time initiative. Populated
+            # for new-shape rows (Stage 4 writer fills col_eval_approved_at,
+            # leaving col C as call_started); None for pre-backfill rows.
+            # df["timestamp"] continues to be the eval-time anchor during
+            # the transition — analytics consumers don't change behavior
+            # here. After PR-3 they'll switch to df["call_started"].
+            "call_started": call_started,
             "overall_score": overall,
             **section_scores,
             **yn_scores,
@@ -201,6 +229,8 @@ def load_and_clean(
         return df
 
     df["timestamp"] = pd.to_datetime(df["timestamp"])
+    # NaT for rows where call_started is unknown (pre-backfill).
+    df["call_started"] = pd.to_datetime(df["call_started"])
     return df
 
 

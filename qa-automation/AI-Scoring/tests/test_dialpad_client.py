@@ -7,7 +7,13 @@ scripts/.
 
 from __future__ import annotations
 
-from backend.services.dialpad_client import build_dialpad_link
+from datetime import datetime, timedelta, timezone
+
+from backend.services.dialpad_client import (
+    _epoch_ms_to_utc_datetime,
+    build_dialpad_link,
+    compute_call_duration,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -47,3 +53,73 @@ def test_build_dialpad_link_default_entry_point_is_empty():
     link = build_dialpad_link("leg-123")
     assert "leg-123" in link
     assert "callreview" in link
+
+
+# ---------------------------------------------------------------------------
+# _epoch_ms_to_utc_datetime + compute_call_duration — call-time initiative
+# plumbing (PR-1 of references/CallTimeOnAnalystHistory.md).
+# ---------------------------------------------------------------------------
+
+def test_epoch_ms_to_utc_datetime_roundtrips_to_utc_aware():
+    """A known epoch-ms value parses to the expected UTC instant. Result
+    is tz-aware so downstream callers don't trip the naive-vs-aware
+    pitfall the chiclet PR fixed for /team/evals timestamps."""
+    expected = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    epoch_ms = int(expected.timestamp() * 1000)
+    dt = _epoch_ms_to_utc_datetime(epoch_ms)
+    assert dt is not None
+    assert dt.tzinfo is timezone.utc
+    assert dt == expected
+
+
+def test_epoch_ms_to_utc_datetime_accepts_string_epoch():
+    """Dialpad returns date_connected as a string in some payload shapes;
+    int casting must handle that without raising."""
+    expected = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    dt = _epoch_ms_to_utc_datetime(str(int(expected.timestamp() * 1000)))
+    assert dt is not None
+    assert dt == expected
+
+
+def test_epoch_ms_to_utc_datetime_none_for_missing_inputs():
+    """None / empty-string / unparseable → None so the writer sees 'we
+    don't know' and leaves the col C cell blank."""
+    assert _epoch_ms_to_utc_datetime(None) is None
+    assert _epoch_ms_to_utc_datetime("") is None
+    assert _epoch_ms_to_utc_datetime("not-a-number") is None
+
+
+def test_compute_call_duration_happy_path():
+    """date_ended - date_connected → call duration timedelta."""
+    started = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    ended = datetime(2026, 6, 1, 12, 8, 30, tzinfo=timezone.utc)
+    assert compute_call_duration(started, ended) == timedelta(minutes=8, seconds=30)
+
+
+def test_compute_call_duration_returns_none_when_either_missing():
+    """Either side missing → None (no guessing, no zero-duration fallback).
+    Plumbing-only stub; downstream consumers will read None as 'unknown
+    duration' rather than 'zero-length call.'"""
+    started = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    assert compute_call_duration(started, None) is None
+    assert compute_call_duration(None, started) is None
+    assert compute_call_duration(None, None) is None
+
+
+# ---------------------------------------------------------------------------
+# _format_call_started (sheets_service helper) — exercised here because
+# it's a sibling pure function that consumes _epoch_ms_to_utc_datetime's
+# output and writes the sheet-side format string.
+# ---------------------------------------------------------------------------
+
+def test_format_call_started_renders_utc_clock_string():
+    from backend.services.sheets_service import _format_call_started
+    dt = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    assert _format_call_started(dt) == "06/01/2026 12:00:00"
+
+
+def test_format_call_started_none_renders_blank():
+    """None → "" so the col C cell stays empty for backfill (PR-2) to
+    fill later. NOT "None" or some sentinel string."""
+    from backend.services.sheets_service import _format_call_started
+    assert _format_call_started(None) == ""

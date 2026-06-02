@@ -63,6 +63,7 @@
         "evaluator_email": "D",
         "dialpad_link": "E"
       },
+      "metadata_cols_note": "Call-time initiative (PR-1): `timestamp` (col C) now semantically holds the call's date_connected from Dialpad, not the eval/approval clock. Sourced via fr_ai_row[COL_TIMESTAMP] in Stage 2 — the FR-AI tab's col C was repurposed by sheets_service.write_draft_to_fr_ai. The JSON value 'C' didn't change; only the meaning of what lands there did. See references/CallTimeOnAnalystHistory.md.",
       "weights_reference": {
         "tab_name": "Weighing",
         "range": "B2:B20",

@@ -152,13 +152,26 @@ def make_history_row(
     evaluator_email: str = "evaluator@landing.com",
     dialpad_link: str = "",
     source: str = "ai",
+    call_started: datetime | None = None,
 ) -> list[str]:
     """Build one Analyst_History row matching the derived layout.
 
-    Writes prefix (cols 0-5), section scores (cols 6 to 6+N-1) in
-    section_number order, and trailing metadata cells. Reasoning and
-    confidence cells are left blank — production rows fill them post-
-    approval.
+    `when` is always the eval/approval time the caller wants to assert
+    against. The new-shape / old-shape switch is controlled by
+    `call_started`:
+
+      * ``call_started=None`` (default) → **old-shape row**: col C
+        holds `when` (eval time), `col_eval_approved_at` is left blank.
+        Exercises `load_and_clean`'s fallback path. Matches every
+        synthetic row that existed before the call-time initiative.
+
+      * ``call_started=<datetime>`` → **new-shape row**: col C holds
+        the call's connected time, `col_eval_approved_at` holds the
+        eval time (`when`). Matches what `finalize_to_analyst_history`
+        writes after the Phase 1 schema shift.
+
+    Reasoning and confidence cells are left blank — production rows
+    fill them post-approval.
     """
     L = config.history_layout
     row = _empty_row(L.total_width)
@@ -166,7 +179,13 @@ def make_history_row(
     # Prefix
     row[history_layout.COL_AGENT_NAME] = agent
     row[history_layout.COL_AGENT_EMAIL] = f"{agent.lower().replace(' ', '.')}@landing.com"
-    row[history_layout.COL_TIMESTAMP] = when.strftime("%m/%d/%Y %H:%M:%S")
+    if call_started is None:
+        # Old-shape: col C is the eval time.
+        row[history_layout.COL_TIMESTAMP] = when.strftime("%m/%d/%Y %H:%M:%S")
+    else:
+        # New-shape: col C is the call's connected time; eval time
+        # lands in the new trailing column below.
+        row[history_layout.COL_TIMESTAMP] = call_started.strftime("%m/%d/%Y %H:%M:%S")
     row[history_layout.COL_EVALUATOR_EMAIL] = evaluator_email
     row[history_layout.COL_DIALPAD_LINK] = (
         dialpad_link
@@ -200,6 +219,8 @@ def make_history_row(
     row[L.col_caller_name] = "Syn Caller"
     row[L.col_caller_phone] = "+15555550100"
     row[L.col_source] = source
+    if call_started is not None:
+        row[L.col_eval_approved_at] = when.strftime("%m/%d/%Y %H:%M:%S")
 
     return row
 

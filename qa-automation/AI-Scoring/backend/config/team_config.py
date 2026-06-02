@@ -102,6 +102,22 @@ class ScoreDestinationConfig(BaseModel):
     - Sales: dialpad_link, timestamp, agent_name, evaluator_email,
       feedback_combined (single cell, key_strengths + opportunities
       concatenated)
+
+    Call-time initiative (PR-1) — see
+    references/CallTimeOnAnalystHistory.md: the ``timestamp`` field
+    now semantically holds the call's ``date_connected`` from Dialpad,
+    sourced via `fr_ai_row[COL_TIMESTAMP]` in Stage 2. The JSON column
+    letters didn't change — only the meaning. The Apps Script email
+    pipeline's "Evaluation Date" line consequently renders as the call
+    date going forward.
+    """
+
+    metadata_cols_note: Optional[str] = None
+    """Free-form doc string for the per-team JSON to record any
+    team-specific semantic notes about ``metadata_cols``. Never read
+    by Python — purely a hint for reviewers who jump straight to the
+    JSON without opening this file. Mirrors the ``comment`` sibling
+    on :class:`WeightsReferenceConfig`.
     """
 
     weights_reference: Optional[WeightsReferenceConfig] = None

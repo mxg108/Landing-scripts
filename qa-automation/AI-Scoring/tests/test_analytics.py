@@ -324,6 +324,127 @@ def test_load_and_clean_preserves_yn_na_through_binary_stats(sales: TeamConfig):
 
 
 # ---------------------------------------------------------------------------
+# load_and_clean — call-time initiative (PR-1) reader fallback.
+#
+# Phase 1 schema:    eval-time → col_eval_approved_at; call-time → col C
+# Phase 2 reader:    df["timestamp"]   resolves to col_eval_approved_at on
+#                                      new-shape rows, else col C (old).
+#                    df["call_started"] resolves to col C on new-shape rows,
+#                                      NaT on old-shape (pre-backfill).
+#
+# During the transition, df["timestamp"] still anchors every analytics
+# consumer at eval time — chiclets/SPC/EWMA behavior must not shift.
+# ---------------------------------------------------------------------------
+
+def test_load_and_clean_reads_old_shape_row_from_col_c(sales: TeamConfig):
+    """A pre-cutover row has col_eval_approved_at blank — load_and_clean
+    falls back to col C for df['timestamp']. call_started is NaT
+    (we don't know when this call connected; backfill will fill it)."""
+    from datetime import datetime as _dt
+    import pandas as pd
+
+    header = [["Agent Name"] + [""] * 200]
+    when = _dt(2026, 4, 15, 10, 30, 0)
+    # Default call_started=None → old-shape row.
+    rows = header + [make_history_row(sales, agent="Star Rep", when=when, overall=92)]
+    mails = make_mails_sheet(["Star Rep"])
+    df = load_and_clean(rows, mails, sales)
+
+    assert not df.empty
+    star = df[df["agent"] == "Star Rep"].iloc[0]
+    # df["timestamp"] reads col C (eval time) on old-shape rows.
+    assert star["timestamp"] == pd.Timestamp(when)
+    # call_started is NaT — pre-backfill, we don't know.
+    assert pd.isna(star["call_started"])
+
+
+def test_load_and_clean_reads_new_shape_row_with_call_started_split(sales: TeamConfig):
+    """A post-cutover row has col_eval_approved_at populated. df['timestamp']
+    reads the new column (eval time); df['call_started'] reads col C
+    (call connected). Verifies the split is observed correctly."""
+    from datetime import datetime as _dt
+    import pandas as pd
+
+    header = [["Agent Name"] + [""] * 200]
+    eval_time = _dt(2026, 5, 10, 14, 0, 0)
+    call_time = _dt(2026, 5, 9, 9, 15, 0)   # call happened day before scoring
+    rows = header + [make_history_row(
+        sales, agent="Star Rep", when=eval_time, overall=92,
+        call_started=call_time,
+    )]
+    mails = make_mails_sheet(["Star Rep"])
+    df = load_and_clean(rows, mails, sales)
+
+    star = df[df["agent"] == "Star Rep"].iloc[0]
+    # df["timestamp"] reads col_eval_approved_at on new-shape rows.
+    assert star["timestamp"] == pd.Timestamp(eval_time)
+    # call_started reads col C — the day the call actually connected.
+    assert star["call_started"] == pd.Timestamp(call_time)
+
+
+def test_load_and_clean_mixed_shapes_coexist(sales: TeamConfig):
+    """Real-world during the PR-1 → PR-2 transition: some rows are old-shape
+    (pre-cutover), some are new-shape (post-cutover). df['timestamp']
+    must still anchor every row at eval time so chiclets/SPC/EWMA
+    don't see a mixed bucket shift before backfill completes."""
+    from datetime import datetime as _dt
+    import pandas as pd
+
+    header = [["Agent Name"] + [""] * 200]
+    old_when = _dt(2026, 3, 1, 12, 0, 0)
+    new_eval = _dt(2026, 5, 5, 12, 0, 0)
+    new_call = _dt(2026, 5, 3, 10, 0, 0)
+    rows = header + [
+        # Old-shape row.
+        make_history_row(sales, agent="Star Rep", when=old_when, overall=88),
+        # New-shape row.
+        make_history_row(
+            sales, agent="Steady Rep", when=new_eval, overall=82,
+            call_started=new_call,
+        ),
+    ]
+    mails = make_mails_sheet(["Star Rep", "Steady Rep"])
+    df = load_and_clean(rows, mails, sales)
+
+    star = df[df["agent"] == "Star Rep"].iloc[0]
+    steady = df[df["agent"] == "Steady Rep"].iloc[0]
+
+    # Old-shape: timestamp from col C, call_started NaT.
+    assert star["timestamp"] == pd.Timestamp(old_when)
+    assert pd.isna(star["call_started"])
+
+    # New-shape: timestamp from col_eval_approved_at, call_started from col C.
+    assert steady["timestamp"] == pd.Timestamp(new_eval)
+    assert steady["call_started"] == pd.Timestamp(new_call)
+
+
+def test_load_and_clean_analytics_still_bucket_by_eval_time_during_transition(
+    sales: TeamConfig,
+):
+    """Critical for PR-1 staging: the call-time initiative MUST NOT shift
+    chiclets/SPC bucketing until PR-3 lands. A new-shape row with a
+    call-time in April and eval-time in May must surface in May's bucket
+    via compute_monthly_summary — same as it would have pre-initiative."""
+    from datetime import datetime as _dt
+    import pandas as pd
+
+    header = [["Agent Name"] + [""] * 200]
+    eval_in_may = _dt(2026, 5, 5, 12, 0, 0)
+    call_in_apr = _dt(2026, 4, 28, 10, 0, 0)  # 7 days before scoring
+    rows = header + [make_history_row(
+        sales, agent="Star Rep", when=eval_in_may, overall=90,
+        call_started=call_in_apr,
+    )]
+    mails = make_mails_sheet(["Star Rep"])
+    df = load_and_clean(rows, mails, sales)
+
+    # df["timestamp"] anchored at May (eval time), NOT April (call time).
+    assert df.iloc[0]["timestamp"].month == 5
+    # call_started is parsed and available for PR-3 to consume.
+    assert df.iloc[0]["call_started"].month == 4
+
+
+# ---------------------------------------------------------------------------
 # Known tech debt — long-form analytics cannot distinguish explicit N/A
 # from "unscored" on numeric sections.
 # ---------------------------------------------------------------------------

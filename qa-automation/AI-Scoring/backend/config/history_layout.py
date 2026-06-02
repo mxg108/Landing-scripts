@@ -8,11 +8,11 @@ Layout (0-indexed columns)::
 
     0           agent_name
     1           agent_email
-    2           timestamp
+    2           timestamp               (call_connected — see semantic note)
     3           evaluator_email
     4           dialpad_link
     5           overall_score
-    6 .. 6+N-1  section scores       (one per section, in section_number order)
+    6 .. 6+N-1  section scores          (one per section, in section_number order)
     6+N .. 6+2N-1  reasoning per section
     6+2N .. 6+3N-1 confidence per section
     6+3N        key_strengths
@@ -21,10 +21,31 @@ Layout (0-indexed columns)::
     6+3N+3      caller_name
     6+3N+4      caller_phone
     6+3N+5      source
+    6+3N+6      eval_approved_at        (NEW — see semantic note)
 
-Total width: 6 + 3N + 6 columns.
+Total width: 6 + 3N + 7 columns.
 
-For Sales (N=19) → 69 cols (A–BQ). For MS (N=10) → 42 cols (A–AP).
+For Sales (N=19) → 70 cols (A–BR). For MS (N=10) → 43 cols (A–AQ).
+
+----------------------------------------------------------------------
+Timestamp semantic — see references/CallTimeOnAnalystHistory.md
+----------------------------------------------------------------------
+PR-1 of the call-time initiative repurposes ``COL_TIMESTAMP`` (col C)
+to hold the call's ``date_connected`` from Dialpad (the time the call
+actually happened) and introduces a new trailing column,
+``col_eval_approved_at``, to hold the eval/approval-time UTC string
+that historically lived in col C.
+
+During the transition, ``load_and_clean`` reads ``col_eval_approved_at``
+first, falling back to col C when the new column is blank (i.e. on
+pre-cutover rows). Once the backfill (PR-2) populates the new column
+for every historical row, the fallback path stops firing and the two
+columns are coherent across the dataset. PR-3 then flips the analytics
+anchor from "eval time" to "call time" by switching ``df["timestamp"]``
+to the col C value.
+
+Score_Audit remains the canonical record of "when was each row
+scored/approved" — unaffected by this schema shift.
 """
 
 from __future__ import annotations
@@ -33,13 +54,13 @@ from __future__ import annotations
 # Fixed prefix (positions 0-5)
 COL_AGENT_NAME = 0
 COL_AGENT_EMAIL = 1
-COL_TIMESTAMP = 2
+COL_TIMESTAMP = 2           # call_connected (PR-1 of call-time initiative)
 COL_EVALUATOR_EMAIL = 3
 COL_DIALPAD_LINK = 4
 COL_OVERALL_SCORE = 5
 
 PREFIX_WIDTH = 6
-TRAILING_WIDTH = 6
+TRAILING_WIDTH = 7          # bumped 6 → 7 to seat col_eval_approved_at
 
 
 class HistoryLayout:
@@ -117,6 +138,16 @@ class HistoryLayout:
     @property
     def col_source(self) -> int:
         return self.confidence_end + 5
+
+    @property
+    def col_eval_approved_at(self) -> int:
+        """New trailing column. Holds the eval/approval-time UTC string
+        that used to live in ``COL_TIMESTAMP`` before the call-time
+        initiative (see module docstring). The writer fills it at
+        Stage 4 (`finalize_to_analyst_history`). Blank on pre-cutover
+        rows until PR-2's backfill script runs; ``load_and_clean``
+        falls back to col C during that window."""
+        return self.confidence_end + 6
 
     @property
     def total_width(self) -> int:
