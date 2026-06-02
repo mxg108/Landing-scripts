@@ -31,3 +31,8 @@ Thumbs.db
 #  Google Apps Scripts IDs
 .clasp.json
 appsscript.json
+
+# Call-time backfill (PR-2 of CallTimeOnAnalystHistory.md) — local audit
+# trail for the backfill script. Never commit; rerun locally per team.
+.backfill-log
+.backfill-skipped.csv
