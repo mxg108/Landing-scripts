@@ -20,6 +20,7 @@ from backend.models.team_stats import (
 )
 from backend.services.data_provider import get_provider
 from backend.services.team_stats import (
+    _months_in_bucket_tz,
     compute_agent_roster,
     compute_binary_stats,
     compute_distribution,
@@ -163,7 +164,11 @@ async def team_month_evals(
     if supervisor:
         df = df[df["supervisor"].str.lower() == supervisor.strip().lower()]
 
-    months = df["timestamp"].dt.to_period("M").astype(str)
+    # Use the same project-TZ bucketing as compute_monthly_summary so a
+    # call placed late local-time on the last of the month doesn't get
+    # filtered into the wrong month here. Caught during PR-3 smoke
+    # testing: 8:33 PM PDT May 31 was showing in June's drill-down.
+    months = _months_in_bucket_tz(df["timestamp"])
     df = df[months == year_month]
 
     # Sort newest first — analysts skim the top to find recent calls.

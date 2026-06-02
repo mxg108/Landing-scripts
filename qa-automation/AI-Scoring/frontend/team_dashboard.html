@@ -69,6 +69,23 @@
     .kpi-box .value { font-family: 'Fraunces', serif; font-size: 2rem; font-weight: 700; margin: 4px 0; }
     .kpi-box .sub { font-size: 0.75rem; color: var(--muted); }
 
+    /* Call-time initiative (PR-3) — single annotation under the chiclet
+       row + inline note in the SPC card title so management and analysts
+       can spot that monthly buckets are now anchored on call-connected
+       time, not eval-approval time. See references/CallTimeOnAnalystHistory.md. */
+    .bucket-hint {
+      margin: -4px 0 4px 4px; padding: 4px 0;
+      font-size: 0.72rem; color: var(--muted);
+      cursor: help;
+    }
+    .bucket-hint strong { color: var(--text); font-weight: 600; }
+    .bucket-hint-inline {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.65rem; font-weight: 500; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.05em;
+      margin-left: 8px; cursor: help;
+    }
+
     /* Three top-of-overview chiclets — last month, current month, and
        Recent Evals. Shared three-row layout:
          header line:  LABEL: count   (with click-arrow tucked top-right)
@@ -313,10 +330,16 @@
   <!-- Overview Tab -->
   <div class="tab-panel active" id="panel-overview">
     <div class="chiclet-row" id="chicletRow"></div>
+    <div class="bucket-hint" title="Months reflect when calls actually connected (Dialpad date_connected). Score_Audit retains the eval-approval times.">
+      &#9432; Months bucketed by <strong>call date</strong>, not eval-approval date
+    </div>
     <div class="recent-evals-panel" id="recentEvalsPanel" style="display:none;"></div>
     <div class="kpi-row" id="kpiRow"></div>
     <div class="charts-grid">
-      <div class="card"><h3>SPC Control Chart</h3><canvas id="spcCanvas"></canvas></div>
+      <div class="card">
+        <h3>SPC Control Chart <span class="bucket-hint-inline" title="Each month's mean is computed over calls that connected in that month.">&#9432; by call date</span></h3>
+        <canvas id="spcCanvas"></canvas>
+      </div>
       <div class="card"><h3>Score Distribution</h3><canvas id="distCanvas" style="cursor:pointer;"></canvas><div id="distDrillDown" style="display:none;"></div></div>
     </div>
     <div class="card">
@@ -1137,7 +1160,7 @@ function renderEwmaDrillBody(records) {
       <thead>
         <tr>
           <th style="width:90px;">Score</th>
-          <th>Date</th>
+          <th>Call Date</th>
           <th>Caller</th>
         </tr>
       </thead>

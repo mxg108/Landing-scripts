@@ -9,7 +9,10 @@
 > continues to be the authoritative audit log of "who scored what when"
 > — unchanged.
 > **Author session:** 2026-06-01.
-> **Status:** Design — not yet implemented.
+> **Status:** **Implemented.** PR-1 (schema + writer + reader fallback)
+> merged as PR #42; PR-2 (backfill script, sales + MS runs completed)
+> merged as PR #43; PR-3 (analytics anchor flip + UI labels +
+> "bucketed by call date" hints) lands as the current PR.
 
 ---
 

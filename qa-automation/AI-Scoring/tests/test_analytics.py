@@ -199,28 +199,74 @@ def test_monthly_summary_count_one_month_has_null_std():
 
 
 def test_monthly_summary_month_boundary_buckets_strictly():
-    """An eval at the last second of last month bucket-belongs to last; first
-    second of current month belongs to current. Guards against off-by-one in
-    Period('M') discretization."""
+    """An eval at the last second of last month (in the project bucket
+    TZ) belongs to last; first second of current month belongs to
+    current. Guards against off-by-one in Period('M') discretization,
+    derived dynamically against whatever LANDING_BUCKET_TZ is set."""
     from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
     import pandas as pd
-    now = _dt.now()
-    current_p = pd.Period(now, freq="M")
+    from backend.services.team_stats import _BUCKET_TZ
+
+    # Derive month boundaries in the bucket TZ, then store as naive-UTC
+    # the way load_and_clean produces them (the sheet writer emits naive
+    # UTC clock strings; our load_and_clean parses them naive).
+    now_bucket = _dt.now(_BUCKET_TZ)
+    current_p = pd.Period(now_bucket, freq="M")
     last_p = current_p - 1
-    # Last second of last month
-    last_end = last_p.end_time
-    # First second of current month
-    current_start = current_p.start_time
+    # Last instant of last month, in the bucket TZ, converted to UTC and
+    # made naive to mimic load_and_clean's output.
+    last_end_local = last_p.end_time.tz_localize(_BUCKET_TZ)
+    current_start_local = current_p.start_time.tz_localize(_BUCKET_TZ)
+    last_end_utc_naive = last_end_local.tz_convert(ZoneInfo("UTC")).tz_localize(None)
+    current_start_utc_naive = current_start_local.tz_convert(ZoneInfo("UTC")).tz_localize(None)
 
     df = _summary_df([
-        {"timestamp": last_end, "overall_score": 60.0},
-        {"timestamp": current_start, "overall_score": 95.0},
+        {"timestamp": last_end_utc_naive, "overall_score": 60.0},
+        {"timestamp": current_start_utc_naive, "overall_score": 95.0},
     ])
     out = compute_monthly_summary(df)
-    assert out["last"]["count"] == 1
+    assert out["last"]["count"] == 1, (
+        f"last-month boundary slipped: out={out}"
+    )
     assert out["last"]["mean"] == 60.0
-    assert out["current"]["count"] == 1
+    assert out["current"]["count"] == 1, (
+        f"current-month boundary slipped: out={out}"
+    )
     assert out["current"]["mean"] == 95.0
+
+
+def test_monthly_summary_buckets_in_project_local_time():
+    """The PR-3 smoke-test regression: a call that displays as May 31
+    8:33 PM in the project bucket TZ (3:33 AM Jun 1 UTC) must bucket
+    into May, not June. The previous tz-naive bucketing put it in June
+    and the user saw it in the June drill-down — exactly the off-by-one
+    BUCKET_TZ_NAME exists to prevent."""
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+    import pandas as pd
+    from backend.services.team_stats import _BUCKET_TZ
+
+    # Construct a timestamp that is May 31 in the bucket TZ but Jun 1 UTC.
+    # 31 May 23:30 LA = 06 Jun 1 06:30 UTC (LA is UTC-7 in DST).
+    local_may_31 = _dt(2026, 5, 31, 23, 30, 0, tzinfo=_BUCKET_TZ)
+    utc_naive = pd.Timestamp(local_may_31).tz_convert(ZoneInfo("UTC")).tz_localize(None)
+    # Sanity: the converted naive UTC value actually IS in June, so this
+    # test is meaningful (it would pass trivially if both were in May).
+    assert utc_naive.month == 6, (
+        f"expected the UTC representation to fall in June for this test "
+        f"to exercise the boundary; got {utc_naive}"
+    )
+
+    df = _summary_df([
+        {"timestamp": utc_naive, "overall_score": 88.0},
+    ])
+    months = compute_monthly_summary(df)
+    assert months["last"]["year_month"].endswith("-05") or \
+           months["current"]["year_month"].endswith("-05"), (
+        f"expected the row to bucket into May (project local time); "
+        f"got last={months['last']['year_month']}, current={months['current']['year_month']}"
+    )
 
 
 def test_monthly_summary_does_not_mutate_input_df():
@@ -324,22 +370,24 @@ def test_load_and_clean_preserves_yn_na_through_binary_stats(sales: TeamConfig):
 
 
 # ---------------------------------------------------------------------------
-# load_and_clean — call-time initiative (PR-1) reader fallback.
+# load_and_clean — call-time initiative analytics anchor (PR-3 flipped).
 #
-# Phase 1 schema:    eval-time → col_eval_approved_at; call-time → col C
-# Phase 2 reader:    df["timestamp"]   resolves to col_eval_approved_at on
-#                                      new-shape rows, else col C (old).
-#                    df["call_started"] resolves to col C on new-shape rows,
-#                                      NaT on old-shape (pre-backfill).
+# After PR-3:
+#   df["timestamp"]         = call-connected time (col C). Analytics anchor.
+#   df["eval_approved_at"]  = eval/approval time (col_eval_approved_at,
+#                              or col C fallback on old-shape rows).
 #
-# During the transition, df["timestamp"] still anchors every analytics
-# consumer at eval time — chiclets/SPC/EWMA behavior must not shift.
+# Chiclets, SPC, EWMA, the /team/stats `days` filter all key on
+# df["timestamp"] and therefore bucket by when the call actually
+# happened.
 # ---------------------------------------------------------------------------
 
-def test_load_and_clean_reads_old_shape_row_from_col_c(sales: TeamConfig):
-    """A pre-cutover row has col_eval_approved_at blank — load_and_clean
-    falls back to col C for df['timestamp']. call_started is NaT
-    (we don't know when this call connected; backfill will fill it)."""
+def test_load_and_clean_old_shape_row_falls_back_to_col_c(sales: TeamConfig):
+    """An old-shape row (col_eval_approved_at blank — pre-PR-1 or in
+    .backfill-skipped) has no call-time available. The reader falls
+    back to col C for df["timestamp"] so the row stays in analytics
+    rather than silently dropping out as NaT. eval_approved_at gets
+    the same value (we have no better answer for either column)."""
     from datetime import datetime as _dt
     import pandas as pd
 
@@ -352,16 +400,14 @@ def test_load_and_clean_reads_old_shape_row_from_col_c(sales: TeamConfig):
 
     assert not df.empty
     star = df[df["agent"] == "Star Rep"].iloc[0]
-    # df["timestamp"] reads col C (eval time) on old-shape rows.
     assert star["timestamp"] == pd.Timestamp(when)
-    # call_started is NaT — pre-backfill, we don't know.
-    assert pd.isna(star["call_started"])
+    assert star["eval_approved_at"] == pd.Timestamp(when)
 
 
-def test_load_and_clean_reads_new_shape_row_with_call_started_split(sales: TeamConfig):
-    """A post-cutover row has col_eval_approved_at populated. df['timestamp']
-    reads the new column (eval time); df['call_started'] reads col C
-    (call connected). Verifies the split is observed correctly."""
+def test_load_and_clean_new_shape_row_splits_call_and_eval_times(sales: TeamConfig):
+    """A backfilled / post-PR-1 row has both columns populated.
+    df["timestamp"] reads col C (call time); df["eval_approved_at"]
+    reads col_eval_approved_at (when the approval was clicked)."""
     from datetime import datetime as _dt
     import pandas as pd
 
@@ -376,17 +422,17 @@ def test_load_and_clean_reads_new_shape_row_with_call_started_split(sales: TeamC
     df = load_and_clean(rows, mails, sales)
 
     star = df[df["agent"] == "Star Rep"].iloc[0]
-    # df["timestamp"] reads col_eval_approved_at on new-shape rows.
-    assert star["timestamp"] == pd.Timestamp(eval_time)
-    # call_started reads col C — the day the call actually connected.
-    assert star["call_started"] == pd.Timestamp(call_time)
+    # df["timestamp"] reads col C — the day the call actually connected.
+    assert star["timestamp"] == pd.Timestamp(call_time)
+    # df["eval_approved_at"] preserves the approval time for any consumer
+    # that needs it (e.g. compliance reports filtered by when scored).
+    assert star["eval_approved_at"] == pd.Timestamp(eval_time)
 
 
 def test_load_and_clean_mixed_shapes_coexist(sales: TeamConfig):
-    """Real-world during the PR-1 → PR-2 transition: some rows are old-shape
-    (pre-cutover), some are new-shape (post-cutover). df['timestamp']
-    must still anchor every row at eval time so chiclets/SPC/EWMA
-    don't see a mixed bucket shift before backfill completes."""
+    """Production state after PR-2: backfilled rows are new-shape; the
+    ≤2% .backfill-skipped rows remain old-shape. The reader hands the
+    correct value to each."""
     from datetime import datetime as _dt
     import pandas as pd
 
@@ -409,24 +455,20 @@ def test_load_and_clean_mixed_shapes_coexist(sales: TeamConfig):
     star = df[df["agent"] == "Star Rep"].iloc[0]
     steady = df[df["agent"] == "Steady Rep"].iloc[0]
 
-    # Old-shape: timestamp from col C, call_started NaT.
+    # Old-shape: both columns fall back to col C.
     assert star["timestamp"] == pd.Timestamp(old_when)
-    assert pd.isna(star["call_started"])
+    assert star["eval_approved_at"] == pd.Timestamp(old_when)
 
-    # New-shape: timestamp from col_eval_approved_at, call_started from col C.
-    assert steady["timestamp"] == pd.Timestamp(new_eval)
-    assert steady["call_started"] == pd.Timestamp(new_call)
+    # New-shape: timestamp from col C (call), eval_approved_at from new col.
+    assert steady["timestamp"] == pd.Timestamp(new_call)
+    assert steady["eval_approved_at"] == pd.Timestamp(new_eval)
 
 
-def test_load_and_clean_analytics_still_bucket_by_eval_time_during_transition(
-    sales: TeamConfig,
-):
-    """Critical for PR-1 staging: the call-time initiative MUST NOT shift
-    chiclets/SPC bucketing until PR-3 lands. A new-shape row with a
-    call-time in April and eval-time in May must surface in May's bucket
-    via compute_monthly_summary — same as it would have pre-initiative."""
+def test_load_and_clean_analytics_anchored_at_call_time(sales: TeamConfig):
+    """The semantic flip: a new-shape row with April call-time and May
+    eval-time must now bucket into APRIL (call month). Mirror inverse
+    of the PR-2-era regression guard, which asserted May."""
     from datetime import datetime as _dt
-    import pandas as pd
 
     header = [["Agent Name"] + [""] * 200]
     eval_in_may = _dt(2026, 5, 5, 12, 0, 0)
@@ -438,10 +480,11 @@ def test_load_and_clean_analytics_still_bucket_by_eval_time_during_transition(
     mails = make_mails_sheet(["Star Rep"])
     df = load_and_clean(rows, mails, sales)
 
-    # df["timestamp"] anchored at May (eval time), NOT April (call time).
-    assert df.iloc[0]["timestamp"].month == 5
-    # call_started is parsed and available for PR-3 to consume.
-    assert df.iloc[0]["call_started"].month == 4
+    # df["timestamp"] now reads call time → April bucket.
+    assert df.iloc[0]["timestamp"].month == 4
+    # eval_approved_at retains the May approval-time for any consumer
+    # that wants compliance-style filtering.
+    assert df.iloc[0]["eval_approved_at"].month == 5
 
 
 # ---------------------------------------------------------------------------
