@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from backend.config.team_config import get_team_config
 from backend.middleware.auth import team_id_from_path
@@ -43,6 +43,41 @@ router = APIRouter(prefix="/team", tags=["team"])
 # need to filter long_form by regime to keep statistics comparable.
 _COVERAGE_REGIME = "manager_sample"
 
+# Max window length for an explicit date_from/date_to range — matches the
+# 730-day cap on `days` so a manager can't pull 2+ years of evals in one
+# request via the custom-range picker.
+_MAX_RANGE_DAYS = 730
+
+
+def _resolve_window(
+    date_from: str | None,
+    date_to: str | None,
+) -> tuple[datetime, datetime] | None:
+    """Parse the optional custom-range params into a (from, to) datetime tuple.
+
+    Returns None when neither is set — caller falls through to the `days`
+    filter. Raises 422 if dates are malformed, inverted, or span > 730 days.
+    Returns naive datetimes (start-of-day for `from`, end-of-day for `to`)
+    to match the naive `timestamp` column produced by load_and_clean.
+    """
+    if not date_from and not date_to:
+        return None
+    if not (date_from and date_to):
+        raise HTTPException(422, "date_from and date_to must be provided together")
+    try:
+        d_from = date.fromisoformat(date_from)
+        d_to = date.fromisoformat(date_to)
+    except ValueError:
+        raise HTTPException(422, "date_from / date_to must be ISO YYYY-MM-DD")
+    if d_to < d_from:
+        raise HTTPException(422, "date_to must be on or after date_from")
+    if (d_to - d_from).days + 1 > _MAX_RANGE_DAYS:
+        raise HTTPException(422, f"range exceeds {_MAX_RANGE_DAYS}-day cap")
+    return (
+        datetime.combine(d_from, time.min),
+        datetime.combine(d_to, time.max),
+    )
+
 
 @router.get("/stats", response_model=TeamStatsResponse)
 async def team_stats(
@@ -50,6 +85,8 @@ async def team_stats(
     days: int = Query(default=90, ge=0, le=730),
     active_only: bool = Query(default=True),
     supervisor: str = Query(default=""),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
 ):
     """Return all team-level statistical computations in one response."""
     team_id = team_id_from_path(request)
@@ -60,7 +97,14 @@ async def team_stats(
     raw_mails = provider._get_mails_sheet()
 
     df = load_and_clean(raw_history, raw_mails, config)
-    filters = {"days": days, "active_only": active_only, "supervisor": supervisor}
+    window = _resolve_window(date_from, date_to)
+    filters = {
+        "days": days,
+        "active_only": active_only,
+        "supervisor": supervisor,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
 
     if df.empty:
         return TeamStatsResponse(
@@ -99,7 +143,11 @@ async def team_stats(
     # month and the cutoff drops half the month.
     monthly = compute_monthly_summary(df)
 
-    if days > 0:
+    # Explicit date_from/date_to (custom-range chiclet) overrides `days`.
+    # When neither is set, falls back to the days-back cutoff.
+    if window is not None:
+        df = df[(df["timestamp"] >= window[0]) & (df["timestamp"] <= window[1])]
+    elif days > 0:
         cutoff = datetime.now() - timedelta(days=days)
         df = df[df["timestamp"] >= cutoff]
 
@@ -247,6 +295,8 @@ async def team_long_form(
     days: int = Query(default=90, ge=0, le=730),
     active_only: bool = Query(default=True),
     supervisor: str = Query(default=""),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
 ):
     """Return the canonical long-form analytical shape.
 
@@ -264,10 +314,19 @@ async def team_long_form(
     raw_mails = provider._get_mails_sheet()
 
     df = load_and_clean(raw_history, raw_mails, config)
-    filters = {"days": days, "active_only": active_only, "supervisor": supervisor}
+    window = _resolve_window(date_from, date_to)
+    filters = {
+        "days": days,
+        "active_only": active_only,
+        "supervisor": supervisor,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
 
     if not df.empty:
-        if days > 0:
+        if window is not None:
+            df = df[(df["timestamp"] >= window[0]) & (df["timestamp"] <= window[1])]
+        elif days > 0:
             cutoff = datetime.now() - timedelta(days=days)
             df = df[df["timestamp"] >= cutoff]
         if active_only:
