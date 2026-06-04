@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from dotenv import load_dotenv
 import os
@@ -56,6 +57,11 @@ async def health():
 
 # Serve the frontend HTML at the root
 _frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
+
+# Shared CSS/JS for the persistent top-bar (header.css, header.js) lives
+# under frontend/static/. Mounted here so both team_dashboard.html and
+# dashboard.html can <link>/<script> from a single source of truth.
+app.mount("/static", StaticFiles(directory=_frontend_dir / "static"), name="static")
 
 # The HTML pages embed all JS/CSS inline, so a stale HTML response means
 # a stale app. no-cache forces the browser to revalidate on every reload

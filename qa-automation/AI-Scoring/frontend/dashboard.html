@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/header.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
   <style>
     :root {
@@ -33,54 +34,7 @@
 
     h1, h2, h3 { font-family: 'Fraunces', serif; }
 
-    /* Header */
-    .header {
-      background: var(--navy);
-      color: #fff;
-      padding: 16px 24px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex-wrap: wrap;
-      gap: 12px;
-    }
-    .header h1 { font-size: 1.25rem; font-weight: 600; }
-    .header-controls {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-    .header select {
-      font-family: 'DM Mono', monospace;
-      padding: 6px 12px;
-      border-radius: 6px;
-      border: 1px solid var(--border);
-      font-size: 0.85rem;
-      background: var(--surface);
-      color: var(--text);
-    }
-    .time-buttons {
-      display: flex;
-      gap: 4px;
-    }
-    .time-buttons button {
-      font-family: 'DM Mono', monospace;
-      padding: 6px 12px;
-      border: 1px solid rgba(255,255,255,0.3);
-      background: transparent;
-      color: #fff;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 0.8rem;
-      transition: background 0.2s, border-color 0.2s;
-    }
-    .time-buttons button:hover { background: rgba(255,255,255,0.1); }
-    .time-buttons button.active {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-    }
+    /* Header CSS lives in /static/header.css (shared with team_dashboard.html). */
 
     /* Layout */
     .container {
@@ -231,27 +185,11 @@
       .stats-row { grid-template-columns: repeat(2, 1fr); }
       .section-grid { grid-template-columns: 1fr; }
       .chart-wrapper { height: 240px; }
-      .header { flex-direction: column; align-items: flex-start; }
     }
   </style>
 </head>
 <body>
-  <div class="header">
-    <div style="display:flex;align-items:center;gap:16px;">
-      <a id="team-view-link" href="/dashboard/member_support" style="color:rgba(255,255,255,0.7);text-decoration:none;font-size:0.8rem;border:1px solid rgba(255,255,255,0.3);padding:4px 12px;border-radius:6px;">Team View</a>
-      <a id="lookup-link" href="/lookup/member_support" style="color:rgba(255,255,255,0.7);text-decoration:none;font-size:0.8rem;border:1px solid rgba(255,255,255,0.3);padding:4px 12px;border-radius:6px;">Lookup</a>
-      <h1 id="headerTitle">Agent Dashboard</h1>
-    </div>
-    <div class="header-controls">
-      <div class="time-buttons">
-        <button data-days="7">7d</button>
-        <button data-days="14">14d</button>
-        <button data-days="30" class="active">30d</button>
-        <button data-days="60">60d</button>
-        <button data-days="90">90d</button>
-      </div>
-    </div>
-  </div>
+  <div id="appHeader"></div>
 
   <div class="container">
     <div id="placeholder" class="placeholder">Select an agent to view their progression.</div>
@@ -307,6 +245,7 @@
 
   <div id="footer" class="footer"></div>
 
+  <script src="/static/header.js"></script>
   <script>
     // --- Auth ---
     function getApiKey() {
@@ -323,13 +262,15 @@
     }
     const TEAM_ID = (location.pathname.match(/^\/dashboard\/([^\/]+)\/agent\//) || [, 'member_support'])[1];
     const API_BASE = `${window.location.origin}/api/${TEAM_ID}`;
-    document.addEventListener('DOMContentLoaded', () => {
-      const teamLink = document.getElementById('team-view-link');
-      if (teamLink) teamLink.href = `/dashboard/${TEAM_ID}`;
-      const lookupLink = document.getElementById('lookup-link');
-      if (lookupLink) lookupLink.href = `/lookup/${TEAM_ID}`;
-    });
+
+    // Filter state mirrored from QAHeader (header.js). `selectedDays` is
+    // null when a custom range is active — in that case `dateFrom`/`dateTo`
+    // are used. The AI Assessment endpoint is days-only, so we hide that
+    // card while a custom range is active (see loadDashboard).
     let selectedDays = 30;
+    let dateFrom = null;
+    let dateTo = null;
+    let qaHeader = null;
     let trendChartInstance = null;
     let sectionChartInstance = null;
 
@@ -418,14 +359,29 @@
       _resetAIButton();
       document.getElementById('assessmentPlaceholder').classList.remove('hidden');
       document.getElementById('assessmentContent').classList.add('hidden');
+      // Backend progression endpoint is days-only; hide the AI card while
+      // a custom range is active so the button can't generate a window
+      // mismatch ("last 30 days" assessment shown next to a bonus-range
+      // chart). Falls back to whatever the last preset would have shown.
+      const customActive = !!(dateFrom && dateTo);
+      document.getElementById('assessmentCard').classList.toggle('hidden', customActive);
       document.getElementById('footer').textContent = '';
 
+      const params = new URLSearchParams();
+      if (customActive) {
+        params.set('date_from', dateFrom);
+        params.set('date_to', dateTo);
+      } else {
+        params.set('days', selectedDays);
+      }
       const history = await fetchJSON(
-        `${API_BASE}/agents/${encodeURIComponent(agentName)}/history?days=${selectedDays}`
+        `${API_BASE}/agents/${encodeURIComponent(agentName)}/history?${params}`
       );
 
       if (!history) {
-        document.getElementById('placeholder').textContent = `No evaluations found for "${agentName}" in the last ${selectedDays} days.`;
+        const windowLabel = customActive ? `${dateFrom} – ${dateTo}` : `the last ${selectedDays} days`;
+        document.getElementById('placeholder').textContent =
+          `No evaluations found for "${agentName}" in ${windowLabel}.`;
         return;
       }
 
@@ -434,13 +390,16 @@
       renderTrendChart(history);
       renderSectionChart(history);
 
+      const windowLabel = customActive ? `${dateFrom} – ${dateTo}` : `Last ${selectedDays} days`;
       document.getElementById('footer').textContent =
-        `Data source: Google Sheets | ${history.length} evaluations | Last ${selectedDays} days`;
+        `Data source: Google Sheets | ${history.length} evaluations | ${windowLabel}`;
 
-      // Restore cached AI assessment if available
-      const cachedAssessment = _getCachedAssessment();
-      if (cachedAssessment) {
-        _showAssessment(cachedAssessment);
+      // Restore cached AI assessment if available (preset-windows only).
+      if (!customActive) {
+        const cachedAssessment = _getCachedAssessment();
+        if (cachedAssessment) {
+          _showAssessment(cachedAssessment);
+        }
       }
     }
 
@@ -694,21 +653,29 @@
 
     }
 
-    // Event listeners
-    document.querySelectorAll('.time-buttons button').forEach(btn => {
-      btn.addEventListener('click', function () {
-        document.querySelectorAll('.time-buttons button').forEach(b => b.classList.remove('active'));
-        this.classList.add('active');
-        selectedDays = parseInt(this.dataset.days);
+    // QAHeader (header.js) owns the time-window chiclets / custom-range
+    // popover. Active Only / Supervisor are rendered disabled on this page
+    // (they don't apply to a single agent) — see header.js init for the
+    // page='agent' branch.
+    qaHeader = window.QAHeader.init({
+      page: 'agent',
+      team: TEAM_ID,
+      agent: currentAgent,
+      title: currentAgent || 'Agent Dashboard',
+      onChange: ({ days, dateFrom: f, dateTo: t }) => {
+        selectedDays = days;
+        dateFrom = f;
+        dateTo = t;
         if (currentAgent) loadDashboard(currentAgent);
-      });
+      },
     });
 
-    // Init — load team sections first, then dashboard
+    // Init — load team sections first, then dashboard. QAHeader's first
+    // onChange already triggered loadDashboard, but it ran before sections
+    // were ready; we re-run after to make sure section labels are populated.
     (async () => {
       await loadTeamSections();
       if (currentAgent) {
-        document.getElementById('headerTitle').textContent = currentAgent;
         loadDashboard(currentAgent);
       } else {
         document.getElementById('placeholder').textContent = 'No agent specified in URL.';

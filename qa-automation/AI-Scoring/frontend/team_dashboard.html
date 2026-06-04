@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/header.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
   <style>
     :root {
@@ -18,26 +19,7 @@
     body { font-family: 'DM Mono', monospace; background: var(--bg); color: var(--text); min-height: 100vh; }
     h1, h2, h3 { font-family: 'Fraunces', serif; }
 
-    /* Header */
-    .header {
-      background: var(--navy); color: #fff; padding: 16px 24px;
-      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
-    }
-    .header h1 { font-size: 1.25rem; font-weight: 600; }
-    .header-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-    .header select, .header .toggle-btn {
-      font-family: 'DM Mono', monospace; padding: 6px 12px; border-radius: 6px;
-      border: 1px solid rgba(255,255,255,0.3); font-size: 0.85rem; background: transparent; color: #fff; cursor: pointer;
-    }
-    .header select option { background: var(--navy); color: #fff; }
-    .toggle-btn.active { background: var(--accent); border-color: var(--accent); }
-    .time-buttons { display: flex; gap: 4px; }
-    .time-buttons button {
-      font-family: 'DM Mono', monospace; padding: 6px 12px; border: 1px solid rgba(255,255,255,0.3);
-      background: transparent; color: #fff; border-radius: 6px; cursor: pointer; font-size: 0.8rem; transition: background 0.2s;
-    }
-    .time-buttons button:hover { background: rgba(255,255,255,0.1); }
-    .time-buttons button.active { background: var(--accent); border-color: var(--accent); }
+    /* Header CSS lives in /static/header.css (shared with dashboard.html). */
 
     /* Tabs */
     .tab-bar {
@@ -291,7 +273,6 @@
     @media (max-width: 640px) {
       .kpi-row { grid-template-columns: repeat(2, 1fr); }
       .charts-grid { grid-template-columns: 1fr; }
-      .header { padding: 12px 16px; }
       .container { padding: 16px; }
       .tab-btn { padding: 8px 12px; font-size: 0.75rem; }
     }
@@ -299,25 +280,7 @@
 </head>
 <body>
 
-<div class="header">
-  <div style="display:flex;align-items:center;gap:16px;">
-    <a id="scoring-link" href="/score/member_support" style="font-family:'DM Mono',monospace;font-size:0.82rem;padding:6px 14px;border:1px solid rgba(255,255,255,0.3);border-radius:6px;color:#fff;text-decoration:none;transition:background 0.2s;">Scoring</a>
-    <a id="lookup-link" href="/lookup/member_support" style="font-family:'DM Mono',monospace;font-size:0.82rem;padding:6px 14px;border:1px solid rgba(255,255,255,0.3);border-radius:6px;color:#fff;text-decoration:none;transition:background 0.2s;">Lookup</a>
-    <h1>Team Analytics Dashboard</h1>
-  </div>
-  <div class="header-controls">
-    <button class="toggle-btn active" id="activeToggle" onclick="toggleActive()">Active Only</button>
-    <select id="supervisorSelect" onchange="changeSupervisor(this.value)">
-      <option value="">All Supervisors</option>
-    </select>
-    <div class="time-buttons">
-      <button onclick="setDays(0)">All</button>
-      <button onclick="setDays(180)">6mo</button>
-      <button onclick="setDays(90)" class="active">3mo</button>
-      <button onclick="setDays(30)">1mo</button>
-    </div>
-  </div>
-</div>
+<div id="appHeader"></div>
 
 <div class="tab-bar">
   <button class="tab-btn active" onclick="switchTab('overview')">Overview</button>
@@ -410,6 +373,7 @@
   </div>
 </div>
 
+<script src="/static/header.js"></script>
 <script>
 // --- Auth ---
 function getApiKey() {
@@ -427,15 +391,17 @@ function authHeaders() {
 
 const TEAM_ID = (location.pathname.match(/^\/dashboard\/([^\/]+)/) || [, 'member_support'])[1];
 const API_BASE = `${window.location.origin}/api/${TEAM_ID}`;
-document.addEventListener('DOMContentLoaded', () => {
-  const scoringLink = document.getElementById('scoring-link');
-  if (scoringLink) scoringLink.href = `/score/${TEAM_ID}`;
-  const lookupLink = document.getElementById('lookup-link');
-  if (lookupLink) lookupLink.href = `/lookup/${TEAM_ID}`;
-});
-let selectedDays = 90;
+
+// Filter state owned by QAHeader (header.js). Hydrated from the URL on
+// init and emitted via the onChange callback we wire in below. Defaults
+// match QAHeader's DEFAULT_DAYS so the first paint and the first /team/stats
+// fetch agree on which chiclet is active.
+let selectedDays = 30;
+let dateFrom = null;
+let dateTo = null;
 let activeOnly = true;
 let selectedSupervisor = '';
+let qaHeader = null;
 let teamData = null;
 let currentTab = 'overview';
 let sortState = {};
@@ -446,7 +412,14 @@ let sectionAvgChart = null, sectionVarChart = null, supervisorChart = null;
 // --- Fetch ---
 async function fetchTeamStats() {
   collapseDistDrill();  // collapse drill-down on timeframe/filter change
-  const params = new URLSearchParams({ days: selectedDays, active_only: activeOnly });
+  const params = new URLSearchParams({ active_only: activeOnly });
+  // Custom-range chiclet (dateFrom + dateTo) takes precedence over `days`.
+  if (dateFrom && dateTo) {
+    params.set('date_from', dateFrom);
+    params.set('date_to', dateTo);
+  } else {
+    params.set('days', selectedDays);
+  }
   if (selectedSupervisor) params.set('supervisor', selectedSupervisor);
   try {
     const r = await fetch(`${API_BASE}/team/stats?${params}`, { headers: authHeaders() });
@@ -478,32 +451,14 @@ async function fetchMails() {
     }
     if (!r.ok) return;
     const mails = await r.json();
-    const sel = document.getElementById('supervisorSelect');
     const supervisors = [...new Set(mails.map(m => m.supervisor).filter(Boolean))].sort();
-    supervisors.forEach(s => {
-      const o = document.createElement('option');
-      o.value = s; o.textContent = s;
-      sel.appendChild(o);
-    });
+    if (qaHeader) qaHeader.setSupervisors(supervisors);
   } catch (e) { console.error('Failed to fetch mails:', e); }
 }
 
-// --- Controls ---
-function toggleActive() {
-  activeOnly = !activeOnly;
-  document.getElementById('activeToggle').classList.toggle('active', activeOnly);
-  document.getElementById('activeToggle').textContent = activeOnly ? 'Active Only' : 'All Agents';
-  fetchTeamStats();
-}
-
-function changeSupervisor(v) { selectedSupervisor = v; fetchTeamStats(); }
-
-function setDays(d) {
-  selectedDays = d;
-  document.querySelectorAll('.time-buttons button').forEach(b => b.classList.remove('active'));
-  event.target.classList.add('active');
-  fetchTeamStats();
-}
+// QAHeader (header.js) owns the chiclets / Active Only / Supervisor /
+// custom-range popover. It emits a single onChange with the resolved
+// filter state; we mirror it into the page-level locals + refetch.
 
 // --- Tabs ---
 function switchTab(tab) {
@@ -1132,12 +1087,18 @@ async function openEwmaDrill(ewmaEntry) {
     <div class="ewma-drill-empty" id="ewmaDrillBody">Loading…</div>
   `;
 
-  // Time window respects the dashboard's current days filter (1mo/3mo/6mo/All).
-  // days=0 (All) maps to a generous 730-day max — same cap the backend accepts.
-  const days = selectedDays && selectedDays > 0 ? selectedDays : 365;
+  // Time window respects the dashboard's current filter: a preset chiclet
+  // (days), the custom range (date_from/date_to), or "All" (days=0 → 730 cap).
+  const params = new URLSearchParams();
+  if (dateFrom && dateTo) {
+    params.set('date_from', dateFrom);
+    params.set('date_to', dateTo);
+  } else {
+    params.set('days', selectedDays && selectedDays > 0 ? selectedDays : 730);
+  }
   try {
     const r = await fetch(
-      `${API_BASE}/agents/${encodeURIComponent(ewmaEntry.agent)}/history?days=${days}`,
+      `${API_BASE}/agents/${encodeURIComponent(ewmaEntry.agent)}/history?${params}`,
       { headers: authHeaders() }
     );
     if (r.status === 404) {
@@ -1468,8 +1429,24 @@ function dismissToast(toast) {
 }
 
 // --- Init ---
+qaHeader = window.QAHeader.init({
+  page: 'team',
+  team: TEAM_ID,
+  title: 'Team Analytics Dashboard',
+  onChange: ({ days, dateFrom: f, dateTo: t, activeOnly: a, supervisor: s }) => {
+    // Detect whether anything that changes the data window actually changed.
+    // The initial emit fires once with the URL-resolved defaults; skipping
+    // the no-op refetch would require tracking "first call", which is more
+    // moving parts than just letting it fetch once.
+    selectedDays = days;
+    dateFrom = f;
+    dateTo = t;
+    activeOnly = a;
+    selectedSupervisor = s;
+    fetchTeamStats();
+  },
+});
 fetchMails();
-fetchTeamStats();
 openEventStream();
 _scheduleMidnightRerender();
 </script>
