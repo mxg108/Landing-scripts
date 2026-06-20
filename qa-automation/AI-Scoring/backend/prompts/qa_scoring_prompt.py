@@ -29,6 +29,9 @@ LANDING_GENERAL_INSTRUCTIONS = """
   different name later in the same call — consistency within the call is
   required. The agent's Dialpad-recorded name is internal and is NOT the
   ground truth for what name they must use with the lead/member.
+- Source of truth: the audio is authoritative for scoring. If the call is
+  detected as non-English, score from the audio content and treat the
+  transcript as unreliable.
 """.rstrip()
 
 
