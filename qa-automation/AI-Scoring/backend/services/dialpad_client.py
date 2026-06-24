@@ -362,30 +362,68 @@ async def get_recording_share_link(
 async def get_call_details(call_id: str) -> dict:
     """
     Fetch call metadata from Dialpad GET /api/v2/call/{call_id}.
-    Returns structured caller info, call metadata, and routing details.
+
+    Returns the full payload flattened into stable top-level keys, plus
+    `raw` carrying the unmodified API response. All existing keys are
+    preserved for back-compat; new fields are additive so downstream
+    Postgres writers (qa.evaluations, command_center.calls) can persist
+    every metadata field without a second API round-trip.
+
     Non-fatal — returns empty defaults on failure.
     """
     empty = {
+        # --- caller (existing) ---
         "caller_name": "",
         "caller_phone": "",
         "caller_email": "",
+        # --- caller (new: full contact dict) ---
+        "contact_id": "",
+        "contact_type": "",
+        # --- call routing (existing) ---
         "direction": "",
         "external_number": "",
         "internal_number": "",
         "was_recorded": False,
         "is_transferred": False,
         "mos_score": None,
+        # --- timestamps (existing + new) ---
         "date_connected": "",
         "date_ended": "",
+        "date_started": "",
+        "date_rang": "",
+        "event_timestamp": "",
+        # --- durations (existing + new) ---
         "total_duration": 0,
+        "duration": 0,
+        # --- target (existing + new) ---
         "target_name": "",
         "target_type": "",
+        "target_id": "",
+        "target_phone": "",
+        "target_email": "",
+        # --- entry-point + proxy targets (new: often empty dicts) ---
+        "entry_point_target": {},
+        "proxy_target": {},
         # The master call_id is what the API is keyed by; entry_point_call_id
         # is the id Dialpad uses in the recording-page URL agents actually see.
         # For inbound→queue→agent flows they differ; for direct calls they may
         # match. Always returned so build_dialpad_link can route the user to
         # the page that exists in their Dialpad UI.
         "entry_point_call_id": "",
+        # --- call-id family (new) ---
+        "call_id": "",
+        "master_call_id": "",
+        "operator_call_id": "",
+        # --- routing + state (new) ---
+        "group_id": "",
+        "state": "",
+        # --- recording artifacts (new) ---
+        "call_recording_ids": [],
+        "recording_url": [],
+        "recording_details": [],
+        "screen_recording_urls": [],
+        # --- forward-compat: full API payload ---
+        "raw": {},
     }
 
     if not os.getenv("DIALPAD_API_KEY"):
@@ -411,25 +449,57 @@ async def get_call_details(call_id: str) -> dict:
         print(f"[dialpad_client] get_call_details request error for {call_id}: {e}")
         return empty
 
-    contact = data.get("contact", {})
-    target = data.get("target", {})
+    contact = data.get("contact", {}) or {}
+    target = data.get("target", {}) or {}
 
     return {
+        # --- caller (existing) ---
         "caller_name": contact.get("name", "") or "",
         "caller_phone": contact.get("phone", "") or data.get("external_number", "") or "",
         "caller_email": contact.get("email", "") or "",
-        "direction": data.get("direction", ""),
-        "external_number": data.get("external_number", ""),
-        "internal_number": data.get("internal_number", ""),
-        "was_recorded": data.get("was_recorded", False),
-        "is_transferred": data.get("is_transferred", False),
+        # --- caller (new) ---
+        "contact_id": str(contact.get("id", "") or ""),
+        "contact_type": contact.get("type", "") or "",
+        # --- call routing (existing) ---
+        "direction": data.get("direction", "") or "",
+        "external_number": data.get("external_number", "") or "",
+        "internal_number": data.get("internal_number", "") or "",
+        "was_recorded": bool(data.get("was_recorded", False)),
+        "is_transferred": bool(data.get("is_transferred", False)),
         "mos_score": data.get("mos_score"),
-        "date_connected": data.get("date_connected", ""),
-        "date_ended": data.get("date_ended", ""),
-        "total_duration": data.get("total_duration", 0),
+        # --- timestamps (existing + new) ---
+        "date_connected": data.get("date_connected", "") or "",
+        "date_ended": data.get("date_ended", "") or "",
+        "date_started": data.get("date_started", "") or "",
+        "date_rang": data.get("date_rang", "") or "",
+        "event_timestamp": data.get("event_timestamp", "") or "",
+        # --- durations (existing + new) ---
+        "total_duration": data.get("total_duration", 0) or 0,
+        "duration": data.get("duration", 0) or 0,
+        # --- target (existing + new) ---
         "target_name": target.get("name", "") or "",
         "target_type": target.get("type", "") or "",
+        "target_id": str(target.get("id", "") or ""),
+        "target_phone": target.get("phone", "") or "",
+        "target_email": target.get("email", "") or "",
+        # --- routing-target dicts (new) ---
+        "entry_point_target": data.get("entry_point_target", {}) or {},
+        "proxy_target": data.get("proxy_target", {}) or {},
         "entry_point_call_id": str(data.get("entry_point_call_id", "") or ""),
+        # --- call-id family (new) ---
+        "call_id": str(data.get("call_id", "") or ""),
+        "master_call_id": str(data.get("master_call_id", "") or ""),
+        "operator_call_id": str(data.get("operator_call_id", "") or ""),
+        # --- routing + state (new) ---
+        "group_id": data.get("group_id", "") or "",
+        "state": data.get("state", "") or "",
+        # --- recording artifacts (new) ---
+        "call_recording_ids": data.get("call_recording_ids", []) or [],
+        "recording_url": data.get("recording_url", []) or [],
+        "recording_details": data.get("recording_details", []) or [],
+        "screen_recording_urls": data.get("screen_recording_urls", []) or [],
+        # --- forward-compat: full API payload ---
+        "raw": data,
     }
 
 
