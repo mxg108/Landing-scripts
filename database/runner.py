@@ -8,13 +8,17 @@ time, so rollback survives later deletion of the ``_down.sql`` file.
 CLI::
 
     python -m database.runner status
-    python -m database.runner up [--limit N]
-    python -m database.runner down [--limit N]    # default 1
-    python -m database.runner bootstrap
+    python -m database.runner up [--limit N] [--yes]
+    python -m database.runner down [--limit N] [--yes]    # default --limit 1
+    python -m database.runner bootstrap [--yes]
 
 ``DATABASE_URL`` env var carries the connection string. The ``bootstrap``
 command registers migrations that were applied via raw psql before this
 runner existed (currently 001 and 002 — the mass_notifications schema).
+
+Mutating commands (``up`` / ``down`` / ``bootstrap``) prompt for
+confirmation before doing work, showing the redacted target DSN.
+``--yes`` (or ``-y``) skips the prompt for scripted / CI use.
 
 Naming convention
 -----------------
@@ -276,6 +280,40 @@ async def cmd_bootstrap(conn: asyncpg.Connection) -> int:
 # ---------------------------------------------------------------------------
 
 
+_DSN_PASSWORD_RE = re.compile(r"(://[^:/@]+:)[^@]*(@)")
+
+
+def _redact_dsn(dsn: str) -> str:
+    """Replace the password in postgres://user:pass@host/db for display."""
+    return _DSN_PASSWORD_RE.sub(r"\1***\2", dsn)
+
+
+def _confirm(action: str, dsn: str, *, yes: bool) -> bool:
+    """Ask the operator to confirm a state-mutating action.
+
+    Returns True iff the operator typed ``y`` / ``yes`` (case-insensitive) or
+    ``yes=True`` was passed (i.e. ``--yes`` on the CLI). If stdin is not a
+    TTY and ``yes=False``, refuses without prompting so we don't silently
+    proceed under cron / CI.
+    """
+    if yes:
+        return True
+    print(f"About to: {action}", file=sys.stderr)
+    print(f"Target:   {_redact_dsn(dsn)}", file=sys.stderr)
+    if not sys.stdin.isatty():
+        print(
+            "ERROR: stdin is not a TTY; pass --yes (or -y) to confirm.",
+            file=sys.stderr,
+        )
+        return False
+    try:
+        response = input("Continue? [y/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\nAborted.", file=sys.stderr)
+        return False
+    return response in ("y", "yes")
+
+
 def _make_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="database.runner",
@@ -295,6 +333,11 @@ def _make_parser() -> argparse.ArgumentParser:
         default=None,
         help="Apply at most N pending migrations.",
     )
+    up.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="Skip the confirmation prompt.",
+    )
 
     down = sub.add_parser("down", help="Roll back the most-recent migration(s).")
     down.add_argument(
@@ -303,10 +346,20 @@ def _make_parser() -> argparse.ArgumentParser:
         default=1,
         help="Roll back N migrations (default 1).",
     )
+    down.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="Skip the confirmation prompt.",
+    )
 
-    sub.add_parser(
+    boot = sub.add_parser(
         "bootstrap",
         help="Register pre-runner migrations (001, 002) as applied without running them.",
+    )
+    boot.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="Skip the confirmation prompt.",
     )
 
     return p
@@ -317,6 +370,23 @@ async def main_async(args: argparse.Namespace) -> int:
     if not dsn:
         print("ERROR: DATABASE_URL not set in environment.", file=sys.stderr)
         return 1
+
+    # Mutating commands: show what we're about to do and prompt for y/N.
+    if args.command in ("up", "down", "bootstrap"):
+        action = {
+            "up": (
+                f"apply pending migrations (limit={args.limit})"
+                if args.limit is not None else "apply ALL pending migrations"
+            ),
+            "down": f"roll back the {args.limit} most-recent migration(s)",
+            "bootstrap": (
+                "register pre-runner migrations as applied "
+                f"({', '.join(f'{v:03d}' for v in PREEXISTING_VERSIONS)})"
+            ),
+        }[args.command]
+        if not _confirm(action, dsn, yes=getattr(args, "yes", False)):
+            print("Aborted.", file=sys.stderr)
+            return 1
 
     conn = await asyncpg.connect(dsn)
     try:
