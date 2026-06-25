@@ -15,6 +15,13 @@ CLI::
 ``DATABASE_URL`` env var carries the connection string. The ``bootstrap``
 command registers migrations that were applied via raw psql before this
 runner existed (currently 001 and 002 — the mass_notifications schema).
+
+Naming convention
+-----------------
+The ``_down`` suffix is reserved by the down-file convention. A migration
+file named e.g. ``104_callback_down.sql`` is ambiguous — the parser will
+treat it as the down companion of a non-existent ``104_callback.sql`` and
+the migration won't be applied. Pick names that don't end in ``_down``.
 """
 
 from __future__ import annotations

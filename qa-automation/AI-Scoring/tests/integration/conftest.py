@@ -38,8 +38,19 @@ import pytest
 import pytest_asyncio
 from testcontainers.postgres import PostgresContainer
 
-# Make ``database.runner`` importable without an install step.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+# Make ``database.runner`` importable without an install step. Resolve the
+# repo root by walking up to find ``database/migrations/`` — robust against
+# anyone restructuring the test tree (parents[N] miscounts otherwise).
+def _find_repo_root() -> Path:
+    p = Path(__file__).resolve()
+    while p.parent != p:
+        if (p / "database" / "migrations").is_dir():
+            return p
+        p = p.parent
+    raise RuntimeError("Could not locate repo root (no database/migrations/ ancestor)")
+
+
+_REPO_ROOT = _find_repo_root()
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -57,7 +68,7 @@ _WAVE_1_MIGRATIONS = (
     "008_indexes.sql",
 )
 
-_MIGRATIONS_DIR = _REPO_ROOT / "database" / "migrations"
+MIGRATIONS_DIR = _REPO_ROOT / "database" / "migrations"  # also re-exported for tests
 
 # Acceptance threshold for compute_overall_score fixture tests
 # (§3.6 + §11.3.2). Centralized so per-team fixture loaders all use
@@ -132,7 +143,7 @@ async def _apply_wave_1(dsn: str) -> None:
         if already is not None:
             return
         for name in _WAVE_1_MIGRATIONS:
-            sql = (_MIGRATIONS_DIR / name).read_text(encoding="utf-8")
+            sql = (MIGRATIONS_DIR / name).read_text(encoding="utf-8")
             await conn.execute(sql)
     finally:
         await conn.close()
