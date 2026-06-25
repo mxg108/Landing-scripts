@@ -18,7 +18,7 @@ import pytest
 
 from database import runner
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 MIGRATIONS_DIR = REPO_ROOT / "database" / "migrations"
 UP_SQL = (MIGRATIONS_DIR / "004_create_schemas_and_teams.sql").read_text()
 DOWN_SQL = (MIGRATIONS_DIR / "004_create_schemas_and_teams_down.sql").read_text()

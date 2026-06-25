@@ -20,7 +20,7 @@ import pytest_asyncio
 
 from database import runner
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 MIGRATIONS_DIR = REPO_ROOT / "database" / "migrations"
 
 UP_004 = (MIGRATIONS_DIR / "004_create_schemas_and_teams.sql").read_text()
@@ -188,18 +188,24 @@ async def test_sop_documents_one_current_per_team_language(
     pg_007: asyncpg.Connection,
 ) -> None:
     """Partial UNIQUE on (team_id, language) WHERE is_current=TRUE —
-    cross-language `is_current` rows for the same team coexist."""
+    cross-language `is_current` rows for the same team coexist.
+
+    Note version_tags differ per row: the full UNIQUE on
+    (team_id, version_tag) means EN and ES can't share a tag even with
+    different languages — that's a separate invariant; this test
+    exercises only the language-partial UNIQUE.
+    """
     await pg_007.execute(
         "INSERT INTO embeddings.sop_documents "
         "(team_id, title, version_tag, language, is_current) "
-        "VALUES ('sales', 'EN', 'v1', 'en', TRUE), "
-        "       ('sales', 'ES', 'v1', 'es', TRUE)"
+        "VALUES ('sales', 'EN', 'v1-en', 'en', TRUE), "
+        "       ('sales', 'ES', 'v1-es', 'es', TRUE)"
     )
     with pytest.raises(asyncpg.exceptions.UniqueViolationError):
         await pg_007.execute(
             "INSERT INTO embeddings.sop_documents "
             "(team_id, title, version_tag, language, is_current) "
-            "VALUES ('sales', 'EN-v2', 'v2', 'en', TRUE)"
+            "VALUES ('sales', 'EN-v2', 'v2-en', 'en', TRUE)"
         )
 
 

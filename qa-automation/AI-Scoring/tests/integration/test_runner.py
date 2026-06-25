@@ -184,8 +184,10 @@ async def test_down_refuses_irreversible_migration(
 ) -> None:
     migdir = tmp_path / "migrations"
     migdir.mkdir()
-    (migdir / "100_no_down.sql").write_text("CREATE TABLE public.x (id INT);")
-    # No _down.sql — irreversible.
+    # NOTE: do NOT name this `100_no_down.sql` — the `_down` suffix is
+    # reserved by the down-file convention and the runner's parser would
+    # treat it as the down companion of a non-existent `100_no.sql`.
+    (migdir / "100_irreversible.sql").write_text("CREATE TABLE public.x (id INT);")
 
     await runner.cmd_up(clean_pg, migrations_dir=migdir)
     rc = await runner.cmd_down(clean_pg)

@@ -38,8 +38,19 @@ import pytest
 import pytest_asyncio
 from testcontainers.postgres import PostgresContainer
 
-# Make ``database.runner`` importable without an install step.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+# Make ``database.runner`` importable without an install step. Walk up
+# from this file until we find ``database/migrations/`` — robust against
+# anyone restructuring the test tree (parents[N] miscounts otherwise).
+def _find_repo_root() -> Path:
+    p = Path(__file__).resolve()
+    while p.parent != p:
+        if (p / "database" / "migrations").is_dir():
+            return p
+        p = p.parent
+    raise RuntimeError("Could not locate repo root (no database/migrations/ ancestor)")
+
+
+_REPO_ROOT = _find_repo_root()
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 

@@ -11,10 +11,20 @@ the fixture isolation is caught at PR time.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import asyncpg
 import pytest
 
-from conftest import EPSILON, load_overall_formula
+# conftest.py is loaded by pytest but not importable by name. Add this
+# directory to sys.path so we can `import conftest` like a regular module.
+_INTEGRATION_DIR = Path(__file__).resolve().parent
+if str(_INTEGRATION_DIR) not in sys.path:
+    sys.path.insert(0, str(_INTEGRATION_DIR))
+
+import conftest as _conftest  # noqa: E402
+from conftest import EPSILON, load_overall_formula  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

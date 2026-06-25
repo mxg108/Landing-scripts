@@ -11,6 +11,7 @@ rolls back to confirm the down script leaves the database in the state
 
 from __future__ import annotations
 
+import datetime
 import json
 from pathlib import Path
 
@@ -20,7 +21,7 @@ import pytest_asyncio
 
 from database import runner
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 MIGRATIONS_DIR = REPO_ROOT / "database" / "migrations"
 
 UP_004 = (MIGRATIONS_DIR / "004_create_schemas_and_teams.sql").read_text()
@@ -114,7 +115,7 @@ async def test_webhook_events_partial_unique_dedupes_call_kind(
     """The (dialpad_call_id, state, event_timestamp) UNIQUE applies only
     to event_kind='call' — a replayed call payload with the same triple
     must collide."""
-    ts = "2026-06-23T10:00:00Z"
+    ts = datetime.datetime(2026, 6, 23, 10, 0, 0, tzinfo=datetime.timezone.utc)
     await pg_005.execute(
         """
         INSERT INTO command_center.webhook_events
@@ -140,7 +141,7 @@ async def test_webhook_events_partial_unique_dedupes_call_kind(
 async def test_webhook_events_partial_unique_dedupes_agent_status(
     pg_005: asyncpg.Connection,
 ) -> None:
-    ts = "2026-06-23T10:00:00Z"
+    ts = datetime.datetime(2026, 6, 23, 10, 0, 0, tzinfo=datetime.timezone.utc)
     await pg_005.execute(
         """
         INSERT INTO command_center.webhook_events
@@ -168,7 +169,7 @@ async def test_webhook_events_different_kinds_same_timestamp_both_ok(
 ) -> None:
     """Two partial UNIQUEs are independent — a call event and an
     agent_status event with the same timestamp do NOT collide."""
-    ts = "2026-06-23T10:00:00Z"
+    ts = datetime.datetime(2026, 6, 23, 10, 0, 0, tzinfo=datetime.timezone.utc)
     await pg_005.execute(
         """
         INSERT INTO command_center.webhook_events
