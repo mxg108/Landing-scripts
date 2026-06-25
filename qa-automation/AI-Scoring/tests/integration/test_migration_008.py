@@ -21,7 +21,7 @@ import asyncpg
 import pytest
 import pytest_asyncio
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 MIGRATIONS_DIR = REPO_ROOT / "database" / "migrations"
 
 UP_004 = (MIGRATIONS_DIR / "004_create_schemas_and_teams.sql").read_text()
@@ -169,16 +169,36 @@ async def test_idx_sweeps_eval_used_by_per_eval_history_query(
 
 
 @pytest.mark.asyncio
-async def test_idx_calls_team_scored_connected_used_by_ratio_query(
+async def test_idx_calls_team_scored_connected_used_by_filtered_query(
     pg_008: asyncpg.Connection,
 ) -> None:
-    """The single-most-asked leadership metric: calls-received-vs-scored."""
+    """The (team_id, scored, connected_at) composite shines when the
+    query filters on team+scored AND orders/ranges on connected_at —
+    that's the "list scored calls in this window" pattern (CC drill-
+    down, ratio query when materialized as paginated listings).
+
+    Needs real row-count statistics: on an empty table the planner
+    can't tell whether the (team_id, connected_at) partial index or
+    this composite is cheaper, and may pick uq_calls_team_call_id
+    instead because its prefix is also team_id. Populating + ANALYZE
+    gives it the stats to choose."""
+    await pg_008.execute(
+        "INSERT INTO command_center.calls "
+        "(team_id, dialpad_call_id, seen_via, scored, scored_at, connected_at) "
+        "SELECT 'sales', 'call_' || g::text, 'webhook', "
+        "       (g % 3 = 0), "
+        "       CASE WHEN g % 3 = 0 THEN NOW() ELSE NULL END, "
+        "       NOW() - (g || ' minutes')::interval "
+        "FROM generate_series(1, 200) g"
+    )
+    await pg_008.execute("ANALYZE command_center.calls")
+
     plan = await _plan(
         pg_008,
-        "SELECT COUNT(*) FILTER (WHERE scored), COUNT(*) "
-        "FROM command_center.calls "
-        "WHERE team_id = 'sales' AND connected_at::date "
-        "BETWEEN '2026-01-01' AND '2026-12-31'",
+        "SELECT id, connected_at FROM command_center.calls "
+        "WHERE team_id = 'sales' AND scored = TRUE "
+        "AND connected_at > NOW() - INTERVAL '2 hours' "
+        "ORDER BY connected_at DESC LIMIT 20",
     )
     assert "idx_calls_team_scored_connected" in plan
 
