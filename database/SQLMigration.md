@@ -1,6 +1,8 @@
 # SQL Migration — Design & Implementation Reference
 
-**Status:** v1.1 — Phase A.5 reframed (again). v1's "parity report with three outcome paths" framing is replaced: the migration **ships a revised `formula_version` from day one** rather than waiting on a parity comparison to decide. Epsilon's role narrows to a **historic-compliance signal** — sweeping backfilled rows under the new formula, flagging those whose recomputed score diverges from the stored sheet score by > ε, and surfacing flagged-row patterns to iterate the new formula. The shadow-the-sheet column on `qa.evaluations` (`overall_score_parity_check_value`) is replaced by an immutable `qa.formula_compliance_sweeps` table (§3.13) so iterative re-sweeps under successive formula versions are preserved instead of overwritten. Migration file plan (§7.6), runbook (§7.7), tests (§11), and Phase ordering (§7.1) all updated to match.
+**Status:** v1.2 — Ops VP review (2026-06-24) adds three coupled concerns to the qa schema: (a) a **manager-driven coaching workflow** modeled as `qa.coachings` (1 session, M:N to evaluations via `qa.coaching_evaluations` — escalations from TL → Manager → HR can revisit the same eval and one session can cover multiple evals); (b) a **normalized tag taxonomy** in `qa.tags` + `qa.evaluation_tags` (4 initial human-review-focus tags: sop / soft_skills / hard_skills / efficiency; future categories `compliance`, `operational`, `product`, `outcome` ship as rows-not-migrations; per-tag-source provenance ready for LandGPT auto-tagging); (c) a **pipeline trigger** that flags evaluations for human review when `process_adherence` or `call_resolution` scores ≤ 3, surfaced via a new `'flagged_human_review'` value on `qa.evaluations.scoring_status`. The `documentation` section is deprecated (clean break — new evals never write it; historical rows keep their `evaluation_sections` rows forever) and replaced by `human_review_required` (numeric 1–5, NA-by-default → na-redistribute via the existing rule pipeline). Migrations renumbered: new `009_vp_review_additions.sql` lands in Wave 1; the prior 009/011/012 shift to 010/012/013. Spec sections added: §3.14–§3.18.
+
+**Prior status (v1.1):** Phase A.5 reframed (again). v1's "parity report with three outcome paths" framing is replaced: the migration **ships a revised `formula_version` from day one** rather than waiting on a parity comparison to decide. Epsilon's role narrows to a **historic-compliance signal** — sweeping backfilled rows under the new formula, flagging those whose recomputed score diverges from the stored sheet score by > ε, and surfacing flagged-row patterns to iterate the new formula. The shadow-the-sheet column on `qa.evaluations` (`overall_score_parity_check_value`) is replaced by an immutable `qa.formula_compliance_sweeps` table (§3.13) so iterative re-sweeps under successive formula versions are preserved instead of overwritten. Migration file plan (§7.6), runbook (§7.7), tests (§11), and Phase ordering (§7.1) all updated to match.
 
 **Scope:** A single Railway Postgres instance hosts three logical concerns separated by schema namespace: `qa` (replaces the Sheets-as-DB QA pipeline + houses analytics points + persists LandGPT cascade artifacts), `command_center` (Dialpad real-time state via webhook replay), and `embeddings` (model-agnostic, multi-language RAG groundwork for LandGPT v2). This doc defines the table-level shape across all three, the migration sequencing for the QA cutover, and the analytics-layer migration off Sheets.
 
@@ -135,6 +137,10 @@ One row per scored call across its entire lifecycle (draft → approved → fina
 | `annotated_transcript` | JSONB NULL | 1 | LandGPT Qwen2-Audio output: per-turn `speaker / text / emotion / paraphrase_intent / pace_marker / interruption`. NULL pre-LandGPT-cutover. Schema in §8.2. |
 | `key_strengths` | TEXT NULL | 1 / 1.5 | |
 | `opportunities` | TEXT NULL | 1 / 1.5 | (was `improvements` in §003) |
+| `needs_coaching` | TEXT NULL | 2 / 4 | New in v1.2. `Y` / `N` / NULL. Manager-set flag; intent only — no FK enforcement to `qa.coachings` (a `pending` coaching row is manager-triggered via the frontend per §3.17). Independent of `tags`: a manager can set `needs_coaching='N'` and still apply tags. |
+| `action_plan` | TEXT NULL | 2 / 4 | New in v1.2. The evaluator's initial proposed plan at score time. Snapshotted into `qa.coachings.action_plan` when a coaching row is created (§3.17); the coaching's plan is what's actually agreed in the session and may diverge. |
+| `human_review_required_at` | TIMESTAMPTZ NULL | 1 | New in v1.2. Set by the AI scorer when the §3.14 trigger condition fires (`process_adherence` or `call_resolution` ≤ 3 — configurable per team). Pairs with `scoring_status='flagged_human_review'`. |
+| `human_review_completed_at` | TIMESTAMPTZ NULL | 1.5 | New in v1.2. Set when a human reviewer fills the `human_review_required` section score and the eval proceeds toward approval. NULL when `human_review_required_at` is NULL (the auto-flow case). |
 | `overall_score` | NUMERIC(5,1) NULL | 3 pre-cutover / 2 post-cutover | See §3.4.3 (relaxed CHECK). Pre-cutover rows hold the Sheet ARRAYFORMULA value; post-cutover rows hold `compute_overall_score()` under the row's `formula_version`. |
 | `formula_version` | TEXT NULL | 2 post-cutover | FK-by-string → `qa.formula_versions.formula_version` (§3.12). Backfilled historic rows: NULL (the sheet's implicit formula has no version row). Post-cutover rows: the new formula version stamped at score-compute time. |
 | `models_used` | JSONB NOT NULL | 1 | Cascade provenance — see §8.1 |
@@ -143,7 +149,7 @@ One row per scored call across its entire lifecycle (draft → approved → fina
 | `csat_score` | NUMERIC(3,1) NULL | future | |
 | `sop_used_document_id` | BIGINT FK NULL | future (LandGPT v2 RAG) | `embeddings.sop_documents.id` |
 | `sampling_status` | TEXT | 1 | `not_sampled` default |
-| `scoring_status` | TEXT | 1 | `complete` / `flagged_long_call` / `errored` / `landgpt_unavailable_routed_to_gemini` (Plan B telemetry) |
+| `scoring_status` | TEXT | 1 | `complete` / `flagged_long_call` / `errored` / `landgpt_unavailable_routed_to_gemini` (Plan B telemetry) / `flagged_human_review` (v1.2 — see §3.14) |
 | `created_at` | TIMESTAMPTZ | 1 | Draft-insert time |
 | `approved_at` | TIMESTAMPTZ NULL | 2 | Was sheet `eval_approved_at` |
 | `finalized_at` | TIMESTAMPTZ NULL | 4 | |
@@ -178,7 +184,16 @@ CHECK (state IN ('draft','approved','finalized'))
 CHECK (state != 'finalized' OR overall_score IS NOT NULL)
 CHECK (state = 'draft' OR (evaluator_email IS NOT NULL AND approved_at IS NOT NULL))
 CHECK (state != 'finalized' OR finalized_at IS NOT NULL)
+-- v1.2 additions:
+CHECK (needs_coaching IS NULL OR needs_coaching IN ('Y','N'))
+CHECK (scoring_status IN ('complete','flagged_long_call','errored',
+                          'landgpt_unavailable_routed_to_gemini',
+                          'flagged_human_review'))
+CHECK (human_review_completed_at IS NULL
+       OR human_review_required_at IS NOT NULL)
 ```
+
+The last CHECK is the pair invariant: a `human_review_completed_at` timestamp cannot exist without a corresponding `human_review_required_at` — it's nonsensical to complete a review that was never started.
 
 **Post-cutover tightening.** Once `compute_overall_score()` is truth (Phase B+), it runs inside the Stage 2 approval transaction (§3.2), and `state='approved' → overall_score IS NOT NULL` becomes naturally true. Reinstate the strict constraint with `ADD CONSTRAINT ... NOT VALID` + `VALIDATE CONSTRAINT`. The constraint history itself documents the cutover.
 
@@ -203,6 +218,14 @@ Normalized section scores. One row per section per evaluation.
 
 CHECKs enforce "exactly one of `numeric_score`/`binary_value` populated, matching `score_type`" and "`ai_provider` populated iff `score_source='ai'`". UNIQUE `(evaluation_id, section_id)`. INDEX on `(section_id, evaluation_id)` for category trend queries (§9.1).
 
+**v1.2 — `documentation` section deprecation, `human_review_required` introduced.** The `documentation` section is dropped from per-team configs going forward (`config/scoring/<team>.json` removes its entry). Historical `evaluation_sections` rows with `section_id='documentation'` are preserved forever — `section_id` is TEXT, no enum to update, no migration touches them. New evaluations from the deprecation date onward write a `human_review_required` section instead: `score_type='numeric'` (1–5), `na_applicable=true`, NA by default. Its score semantics:
+
+- **1** = "Agent handled this interaction poorly; section weight contributes 0 points." Standard `numeric_score=1` → `1/5 × weight = 0.2 × weight` under the normal formula; the *effective zero* comes from the rubric, not a special rule.
+- **5** = "Agent handled this call well; this was a false flag; award the full section weight (~10 points)."
+- **NA** = "The auto-flow trigger never fired; redistribute this section's weight via the existing `na_redistribution` rule." This is the common case — the section exists in the rubric but is only filled when §3.14's pipeline trigger flags the eval for human review.
+
+No formula-engine change is required for the section itself — it behaves like any other numeric section with NA support. The trigger logic lives separately in §3.14.
+
 ### 3.6 Overall-score reimplementation — new formula day-one, ε as historic-compliance signal (reframed in v1.1)
 
 The migration is a forcing function to make the scoring intent explicit and versioned. v1's "two-week parity shadow" gave that decision a window; v1.1 commits earlier: **a revised formula ships at the start of Phase A.5 as a new `qa.formula_versions` row**, and from that point new scoring uses the new formula. Epsilon's role shrinks from "decides whether to promote Python" to **"signals which historic rows fall outside the new formula's tolerance band."**
@@ -226,6 +249,8 @@ Pipeline:
 - Flags whose pattern reveals an *unintended* formula behavior (e.g. weight transfer cascades that overshoot when three rules fire together on rare historic rows) are the iteration triggers.
 - Flags that cluster on specific agents or specific time windows are NOT scoring concerns — they're an artifact of agent skill or process changes during that period. Surface but don't iterate on those.
 
+**v1.2 — `human_review_required` interacts with formula iteration.** The new section ships as a sectioned numeric with NA-redistribute. Historic rows from before the deprecation date have `section_id='documentation'` rows in `evaluation_sections`; the new formula references `human_review_required`. The §3.13 historic-compliance sweep handles this naturally — `compute_overall_score()` runs against the row's actual sections (whatever ID they have), so a historic row with `documentation` evaluates under whatever weight that section had at its time, and a new row with `human_review_required` evaluates under the new weight. Sweep flags from the documentation→human_review_required transition are *design-intent* flags (the formula is doing what it's supposed to). The runbook (§7.7) categorizes them accordingly.
+
 ### 3.7 Dialpad metadata persistence
 
 `dialpad_client.py:362` `get_call_details()` (expanded in v0.2 of this doc) returns every payload field — flat top-level keys for stable consumers, plus `raw`. Writer responsibility:
@@ -241,12 +266,14 @@ Per-team formulas live at `config/scoring/<team>/overall_formula.json` (schema-c
 
 ```json
 {
-  "formula_version": "member_support_v1",
+  "formula_version": "member_support_v2",
   "scale": { "numeric_min": 1, "numeric_max": 5, "output_max": 100 },
   "sections": [
-    { "section_id": "greeting",            "kind": "numeric", "weight": 10 },
-    { "section_id": "identity_validation", "kind": "binary",  "weight": 10,
-      "binary_map": { "Y": 1.0, "N": 0.0 } }
+    { "section_id": "greeting",               "kind": "numeric", "weight": 10 },
+    { "section_id": "identity_validation",    "kind": "binary",  "weight": 10,
+      "binary_map": { "Y": 1.0, "N": 0.0 } },
+    { "section_id": "human_review_required",  "kind": "numeric", "weight": 10,
+      "na_default": true }
   ],
   "rules": [
     { "type": "hard_zero",
@@ -256,10 +283,18 @@ Per-team formulas live at `config/scoring/<team>/overall_formula.json` (schema-c
       "if": { "section": "feature_toggle_x", "equals": "NA" },
       "mode": "proportional", "targets": "remaining" },
 
+    { "type": "na_redistribution",
+      "if": { "section": "human_review_required", "equals": "NA" },
+      "mode": "proportional", "targets": "remaining" },
+
     { "type": "weight_transfer",
       "if": { "section": "upsell_offered", "equals": "N" },
       "from": "upsell_quality",
       "to": { "resolution": 0.6, "empathy": 0.4 } }
+  ],
+  "human_review_triggers": [
+    { "section_id": "process_adherence", "max_score_to_trigger": 3 },
+    { "section_id": "call_resolution",   "max_score_to_trigger": 3 }
   ]
 }
 ```
@@ -271,6 +306,8 @@ Design decisions encoded:
 3. **Pydantic-validate at load:** weights sum to 100 pre-rules, every `section_id` referenced exists in team config, `binary_map` present iff `kind=binary`, transfer fractions sum to 1.0. Startup check cross-validates section IDs against team config. Formula bugs become startup failures, not score drift.
 4. **Golden fixtures over synthetic tests.** Per team, extract 30–50 real Analyst_History rows *with their sheet-computed scores* into `tests/fixtures/overall_formula/<team>.json`. Phase A.5 then has a deterministic offline core plus the two-week live shadow; fixtures stay as regression armor.
 5. **`formula_version` on `qa.evaluations`** (§3.4), stamped at score-compute time. Every score is reproducible: row + sections + versioned formula → same number. **Future revisions of the formula schema must extend, not replace, this shape.** Adding new `rule.type` values, new `sections.kind` values, new `scale` fields is forward-compatible; renaming or repurposing existing keys is not — the `qa.formula_versions` archive (§3.12) is the load-bearing constraint that makes this matter.
+6. **`human_review_triggers` is config, not a rule** (v1.2). The array lives at the top level alongside `sections` and `rules`. It does NOT participate in `compute_overall_score()` — score computation runs after the trigger has decided whether the eval flows to auto-finalize or pauses at `state='draft' / scoring_status='flagged_human_review'`. Pydantic-validate at load: every `section_id` exists in `sections` and `max_score_to_trigger` is in `[1, scale.numeric_max]`. Per-team override of *which* sections trigger keeps the human-review queue tunable without a schema change.
+7. **`sections[].na_default` is presentational, not a rule** (v1.2). Marks sections (currently only `human_review_required`) where the writer should auto-fill `binary_value='NA'` / `numeric_score=NULL` when the section is created at Stage 1 absent a real score. The pre-existing `na_redistribution` rule still does the weight redistribution; `na_default: true` just tells the writer where to start.
 
 ### 3.9 `qa.score_audit` (6 months hot) + `qa.score_audit_archive` (permanent)
 
@@ -385,6 +422,159 @@ for eval_row in qa.evaluations:  # backfilled historic rows only
 Idempotent — restart-safe. Sweeps for *new* (post-Phase A.5) evaluations are not needed because those rows are scored under the new formula at write time.
 
 **Retention:** permanent. Sweeps are a load-bearing audit artifact ("here's why we picked formula v3 over v2"); we keep them as long as the corresponding formula version rows exist.
+
+### 3.14 Pipeline trigger — human-review flagging (new in v1.2)
+
+The Ops VP review (2026-06-24) introduced an explicit "stop the auto-flow if the call looks bad" gate. The pipeline now decides at Stage 1 whether the eval can finalize automatically or must wait for a human reviewer.
+
+**Trigger condition.** After the AI cascade returns per-section scores, the writer evaluates each entry in `human_review_triggers` (§3.8). If any configured section's `numeric_score ≤ max_score_to_trigger`, the eval flags. Default config (member_support, sales): `process_adherence ≤ 3 OR call_resolution ≤ 3`. Per-team config can add or remove sections.
+
+**State transitions at Stage 1:**
+
+| Trigger fires? | `state` | `scoring_status` | `human_review_required_at` | `human_review_required` section |
+|---|---|---|---|---|
+| No (auto-flow) | `draft` | `complete` | NULL | inserted with `binary_value='NA'` (writer default per `na_default: true`) |
+| Yes (paused) | `draft` | `flagged_human_review` | `NOW()` | inserted with `binary_value='NA'` and waits for reviewer to overwrite to a 1–5 numeric score |
+
+The eval stays at `state='draft'` in both cases. Auto-flow proceeds through Stage 2 approval (manager opens, accepts, signs) normally. Paused evals require a human reviewer to:
+
+1. Open the eval in the AI-Scoring frontend (a dedicated "Human Review" queue lists evals where `scoring_status='flagged_human_review'`).
+2. Listen to the call, review the AI-generated transcript and per-section scores.
+3. Set the `human_review_required` section to a 1–5 numeric score reflecting the reviewer's assessment (1 = full agree with the AI flag; 5 = false flag, agent handled well).
+4. Set `human_review_completed_at = NOW()`, transition `scoring_status` back to `'complete'`.
+5. Proceed with normal Stage 2 approval.
+
+**The trigger is recomputed at finalize-time, not just Stage 1.** Manager edits to `process_adherence` or `call_resolution` during Stage 1.5 (analyst edits) re-evaluate the trigger. If the analyst raises a triggering score above 3, the flag clears (`scoring_status` flips back to `'complete'`, `human_review_required_at` NULL'd); if the analyst lowers a score into trigger range, the flag fires (`scoring_status='flagged_human_review'`).
+
+**Where the policy lives.** Trigger config is per-team in `overall_formula.json` (§3.8 `human_review_triggers`). Schema records the outcome (the `scoring_status` value + timestamp), not the policy itself.
+
+**Indexes.** New partial index on the queue (`009`):
+
+```sql
+CREATE INDEX idx_eval_human_review_queue
+    ON qa.evaluations (team_id, human_review_required_at)
+    WHERE state = 'draft'
+      AND scoring_status = 'flagged_human_review';
+```
+
+This is the read pattern for the human-review queue endpoint (`GET /api/{team_id}/human_review_queue`).
+
+### 3.15 `qa.tags` — controlled tag taxonomy (new in v1.2)
+
+The Ops VP review locked in a normalized, category-aware tag taxonomy that ships expansion-ready. The current frontend exposes only the 4 initial human-review-focus tags; future broader categories (compliance, operational, product, outcome) ship as new rows, not new migrations.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | BIGINT IDENTITY PK | |
+| `slug` | TEXT UNIQUE NOT NULL | Stable identifier — e.g. `sop`, `soft_skills`, `compliance.profanity_agent` (dotted slugs for nested categories) |
+| `category` | TEXT NOT NULL | `human_review_focus` / `compliance` / `soft_skills` / `operational` / `product` / `outcome` (and future). Drives `WHERE category = …` analytics. |
+| `label` | TEXT NOT NULL | Display string for the frontend |
+| `description` | TEXT NULL | Optional longer description for tooltips and reviewer training |
+| `active` | BOOLEAN NOT NULL DEFAULT TRUE | Soft-delete — managers can stop seeing a tag in dropdowns without losing historical references |
+| `created_at` | TIMESTAMPTZ NOT NULL DEFAULT NOW() | |
+
+UNIQUE on `slug`. INDEX on `(category) WHERE active = TRUE` for dropdown lookups.
+
+**Seed (4 rows, all `category='human_review_focus'`):**
+
+| slug | label | description |
+|---|---|---|
+| `sop` | SOP | Standard operating procedure / process compliance |
+| `soft_skills` | Soft Skills | Communication, empathy, tone, customer experience |
+| `hard_skills` | Hard Skills | Product knowledge, tool usage, technical execution |
+| `efficiency` | Efficiency | Call structure, hold time use, escalation appropriateness, resource leverage |
+
+**Future expansion** is row-additive: e.g. `INSERT INTO qa.tags (slug, category, label) VALUES ('compliance.pii_exposure', 'compliance', 'PII Exposure')`. No schema migration needed.
+
+**Why `category='human_review_focus'` for the 4 initial tags:** they're distinct from analytical category tags (compliance, operational, etc.) that LandGPT v2 may auto-emit. Future analytics queries `WHERE category != 'human_review_focus'` cleanly exclude the manager-driven coaching axes from AI-driven taxonomies.
+
+### 3.16 `qa.evaluation_tags` — M:N join with provenance (new in v1.2)
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | BIGINT IDENTITY PK | |
+| `evaluation_id` | BIGINT FK → `qa.evaluations(id)` ON DELETE CASCADE | |
+| `tag_id` | BIGINT FK → `qa.tags(id)` | |
+| `source` | TEXT NOT NULL | `manager` / `ai` / `auto` (CHECK). `manager` is the only source today; `ai` lands when LandGPT v2's annotated-transcript path emits tag suggestions (§8.6); `auto` is reserved for future rule-based tagging (e.g. profanity detector flags `compliance.profanity_agent` without human or AI involvement). |
+| `created_by` | TEXT NULL | Email — populated when `source='manager'`. NULL for `ai`/`auto`. |
+| `created_at` | TIMESTAMPTZ NOT NULL DEFAULT NOW() | |
+
+UNIQUE `(evaluation_id, tag_id, source)` — the same tag can land on an eval from multiple sources (manager and AI both say `soft_skills`), and that's information worth preserving. INDEX on `(evaluation_id)` for "what tags does this eval have"; INDEX on `(tag_id, source)` for "which evals got tagged X by AI".
+
+**Tags are independent of `needs_coaching`.** A manager can tag without scheduling coaching (`needs_coaching='N'`), and a coaching can exist without tags. The two flag systems serve different consumers — tags drive analytics + future auto-tagging; `needs_coaching` drives the coaching workflow.
+
+### 3.17 `qa.coachings` — coaching workflow records (new in v1.2)
+
+One row per coaching session. Many-to-many with evaluations via §3.18 — a session can cover multiple evals, and an eval can be revisited across multiple sessions (escalation: TL → Manager → HR).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | BIGINT IDENTITY PK | |
+| `agent_id` | BIGINT NOT NULL FK → `qa.agents(id)` | The agent being coached |
+| `team_id` | TEXT NOT NULL FK → `public.teams(id)` | |
+| `conducted_by_role` | TEXT NOT NULL CHECK | `team_lead` / `manager` / `hr` / `external` — escalation level is derived from this role |
+| `conducted_by_email` | TEXT NULL | Who actually ran it (free text email; not FK'd to a roles table) |
+| `status` | TEXT NOT NULL DEFAULT `'pending'` CHECK | `pending` / `completed` / `cancelled` |
+| `action_plan` | TEXT NULL | The plan agreed in (or planned for) this session. Distinct from `qa.evaluations.action_plan` (evaluator's initial proposal) — the coaching's plan supersedes once agreed. |
+| `action_plan_deadline` | TIMESTAMPTZ NULL | When the agent has committed to demonstrating the plan |
+| `coaching_summary` | TEXT NULL | What was actually discussed. Free text. Only required when `status='completed'`. |
+| `agent_attitude` | TEXT NULL CHECK | Enum: `receptive` / `engaged` / `neutral` / `defensive` / `dismissive` / `mixed`. NULL acceptable for pending coachings. |
+| `created_at` | TIMESTAMPTZ NOT NULL DEFAULT NOW() | When the coaching row was created (frontend "Schedule Coaching" action) |
+| `scheduled_at` | TIMESTAMPTZ NULL | When the session is set to happen — populated when known, often set at create time |
+| `completed_at` | TIMESTAMPTZ NULL | When the manager filled `coaching_summary` and marked completed |
+| `completed_by` | TEXT NULL | Email — populated when `status='completed'` |
+
+CHECKs:
+
+```sql
+CHECK (conducted_by_role IN ('team_lead', 'manager', 'hr', 'external'))
+CHECK (status IN ('pending', 'completed', 'cancelled'))
+CHECK (agent_attitude IS NULL OR agent_attitude IN
+       ('receptive', 'engaged', 'neutral', 'defensive', 'dismissive', 'mixed'))
+CHECK (status <> 'completed'
+       OR (coaching_summary IS NOT NULL AND completed_at IS NOT NULL
+           AND completed_by IS NOT NULL))
+```
+
+The last CHECK is the completion-pair invariant — you can't mark a coaching completed without summary + timestamp + actor.
+
+**No FK enforcement to `qa.evaluations.needs_coaching`.** The flag on the evaluation is intent only (§3.4 + Q4 of the Ops review). A manager who flags `needs_coaching='Y'` may never schedule the coaching; bandwidth realities apply. We track the flag and the eventual coachings separately rather than forcing creation on Stage 4 finalize — better to surface "agents with unhonored coaching flags" as a dashboard signal than to overflow the table with auto-created `pending` rows that get ignored.
+
+**Future Google Calendar integration:** the frontend currently exposes a "Schedule Coaching" action that pre-fills a `pending` row. A later iteration (not in v1.2 scope) connects to Google Calendar's API to create the meeting event and auto-fill `scheduled_at` from the calendar invite.
+
+**Indexes.** Two new partial indexes ship in `009`:
+
+```sql
+CREATE INDEX idx_coachings_pending
+    ON qa.coachings (team_id, action_plan_deadline)
+    WHERE status = 'pending';
+
+CREATE INDEX idx_coachings_agent_status
+    ON qa.coachings (agent_id, status, created_at DESC);
+```
+
+The first surfaces overdue-deadline reporting; the second supports the per-agent coaching history view.
+
+### 3.18 `qa.coaching_evaluations` — M:N coachings ↔ evaluations (new in v1.2)
+
+Each row links one coaching session to one evaluation. A session covering 3 evals creates 3 rows. An eval revisited across TL → Manager → HR appears in 3 rows across 3 different coaching sessions.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | BIGINT IDENTITY PK | |
+| `coaching_id` | BIGINT NOT NULL FK → `qa.coachings(id)` ON DELETE CASCADE | |
+| `evaluation_id` | BIGINT NOT NULL FK → `qa.evaluations(id)` | |
+| `opportunities_snapshot` | TEXT NULL | Snapshot of `qa.evaluations.opportunities` at the moment this eval was linked to the coaching. Preserves what was discussed even if the eval is edited later. |
+| `per_eval_note` | TEXT NULL | Anything specific to this eval within the coaching context — e.g. "second offense for this same SOP miss" |
+| `linked_at` | TIMESTAMPTZ NOT NULL DEFAULT NOW() | |
+
+UNIQUE `(coaching_id, evaluation_id)` — duplicates would just be UX-confusing rather than data-corruption, but the constraint catches double-clicks on "Add to coaching".
+
+**ON DELETE CASCADE on `coaching_id` but NOT on `evaluation_id`.** Deleting a coaching wipes its linked-eval rows (the coaching itself was the parent). Deleting an evaluation should NOT silently strip it from historical coaching records — if the workflow allows eval deletion (admin path only per §3.9), the coaching record keeps the orphaned FK and surfaces it as an `evaluation_orphaned` signal. We rely on FK violation (rather than CASCADE) to alert when this happens; the admin delete path explicitly handles it.
+
+**Why snapshots not FKs to live opportunity text:** standard audit-log pattern (Slack message edits don't rewrite the channel history). If the evaluator edits `qa.evaluations.opportunities` after a coaching is recorded, the coaching's `opportunities_snapshot` preserves what was actually discussed in the session.
+
+**Indexes.** Single index on `(evaluation_id)` to support the per-eval coaching history surface (an evaluation's "this call has been coached on N times" badge).
 
 ---
 
@@ -720,7 +910,7 @@ TEXT PK so config-driven references stay readable. Seed migration: `004_seed_tea
 
 ### 7.1 Phases
 
-1. **Phase A — Schemas + dual-write.** Create `public.teams` + seed, `qa.*` tables (including §3.12 `formula_versions`). Stage 1–4 writes to Postgres in addition to Sheets; persists full `dialpad_call_metadata` and (if LandGPT pilot is live for the team) `annotated_transcript` + `models_used`. Sheets remains truth. Postgres-write failures swallowed.
+1. **Phase A — Schemas + dual-write.** Create `public.teams` + seed, `qa.*` tables (including §3.12 `formula_versions` and the v1.2 additions §3.14–3.18: `tags` + seed, `evaluation_tags`, `coachings`, `coaching_evaluations`, plus the new columns on `qa.evaluations`). Stage 1–4 writes to Postgres in addition to Sheets; persists full `dialpad_call_metadata` and (if LandGPT pilot is live for the team) `annotated_transcript` + `models_used`. **v1.2:** the writer also evaluates the §3.14 trigger at Stage 1 and sets `scoring_status='flagged_human_review'` when conditions are met. Sheets remains truth. Postgres-write failures swallowed.
 2. **Phase A.5 — New formula ship + historic-compliance sweep (§3.6, reframed in v1.1).** Author the revised formula JSON with QA leadership, drop into `config/scoring/<team>/overall_formula.json`, restart FastAPI (§3.12 write path picks it up automatically). From this point all new Stage 2 approvals run `compute_overall_score()` under the new `formula_version`. Then run the historic-compliance sweep script (§3.13) per team — recomputes every backfilled historic row under the new formula, persists results in `qa.formula_compliance_sweeps`, flags rows where `|recomputed - sheet_original| > ε = 0.05`. Surface flag-rate distributions per team to drive formula iteration (§7.7). Loop until QA leadership accepts the flagged set; each iteration is a fresh `formula_version` row + a fresh sweep.
 3. **Phase B — Backfill (QA-only — scope clarified in v1).** Read Analyst_History per team, insert into `qa.evaluations` + `qa.evaluation_sections` with `state='finalized'`. **For every backfilled evaluation, also insert (or merge) a stub row into `command_center.calls` with `seen_via='qa_backfill'`** so the `command_center_call_id` FK is populated end-to-end (§4.2 write path 3). Then a **second-stage enrichment script** refetches `get_call_details()` per historical `dialpad_call_id` and merges the full payload into the corresponding `command_center.calls` row. **`agent_stat_points` seeding orders by the sheet's `eval_approved_at` column, NOT `finalized_at`** — `finalized_at` on backfilled rows is the backfill clock, not the historical approval clock, and per-agent series need the true approval order.
 
@@ -802,22 +992,29 @@ v1 ships the following ordered migration set. Each has a companion `_down.sql` f
 | 006 | `006_qa_tables.sql` | 1 | All `qa` tables: `agents`, `evaluations` (without the v1 parity column — v1.1 reframe), `evaluation_sections`, `formula_versions`, **`formula_compliance_sweeps` (new in v1.1, §3.13)**, `score_audit`, `score_audit_archive`, `api_audit_log`, `agent_stat_points`. Includes the relaxed-pre-cutover CHECK constraints (§3.4.3). **Reversible.** |
 | 007 | `007_embeddings_tables.sql` | 1 | `embedding_models`, `sop_documents`, `sop_chunks`, `sop_chunk_embeddings`, `embedding_runs`. **Reversible.** |
 | 008 | `008_indexes.sql` | 1 | All analytics indexes (§9.1), KNN HNSW indexes (§5.6), `qa.formula_compliance_sweeps` indexes (§3.13), partial UNIQUE indexes not declared in 005/006. Splitting indexes into a separate file lets them be created `CONCURRENTLY` post-deploy without holding locks during initial table creation. **Reversible.** |
-| 009 | `009_calls_backfill_state.sql` | 2 | Transient `command_center.calls_backfill_state` table used by §7.1 enrichment script. **Reversible.** Dropped explicitly by 011. |
-| 010 | (no migration — Phase A.5 is application-code: formula JSON drop + sweep script run, both reversible via re-running) | — | |
-| 011 | `011_drop_calls_backfill_state.sql` | 3 (post-backfill) | Drops the transient backfill state table. **Reversible** by re-applying 009. |
-| 012 | `012_qa_evaluations_strict_state_check.sql` | 3 (Phase C, per team) | `ADD CONSTRAINT … NOT VALID` + `VALIDATE CONSTRAINT` to tighten the pre-cutover relaxed CHECK to its strict post-cutover form (§3.4.3). **Reversible** via `DROP CONSTRAINT`. |
+| 009 | `009_vp_review_additions.sql` (new in v1.2) | 1 | Ops VP review (2026-06-24) additions: ALTER `qa.evaluations` (add `needs_coaching`, `action_plan`, `human_review_required_at`, `human_review_completed_at`; extend `scoring_status` CHECK with `'flagged_human_review'`); CREATE `qa.tags` + seed 4 rows; `qa.evaluation_tags`; `qa.coachings`; `qa.coaching_evaluations`; new partial indexes (`idx_eval_human_review_queue`, `idx_coachings_pending`, `idx_coachings_agent_status`, `idx_eval_tags_*`, `idx_tags_category_active`, `idx_coaching_evals_eval`). **Reversible.** |
+| 010 | `010_calls_backfill_state.sql` (shifted from 009 in v1.2) | 2 | Transient `command_center.calls_backfill_state` table used by §7.1 enrichment script. **Reversible.** Dropped explicitly by 012. |
+| 011 | (no migration — Phase A.5 is application-code: formula JSON drop + sweep script run, both reversible via re-running) | — | |
+| 012 | `012_drop_calls_backfill_state.sql` (shifted from 011 in v1.2) | 3 (post-backfill) | Drops the transient backfill state table. **Reversible** by re-applying 010. |
+| 013 | `013_qa_evaluations_strict_state_check.sql` (shifted from 012 in v1.2) | 3 (Phase C, per team) | `ADD CONSTRAINT … NOT VALID` + `VALIDATE CONSTRAINT` to tighten the pre-cutover relaxed CHECK to its strict post-cutover form (§3.4.3). **Reversible** via `DROP CONSTRAINT`. |
+
+**v1.1 → v1.2 migration plan changes:**
+
+- **Added:** migration 009 (`009_vp_review_additions.sql`). Single coherent "VP review additions" Wave-1 migration. Lives in Wave 1 (alongside 004–008) so the schema is consistent before any Wave-2 dual-write or backfill scripts can write to it.
+- **Renumbered (no semantic change):** old 009 → 010, old 010 placeholder → 011, old 011 → 012, old 012 → 013. The shift is purely so 009 maps to "VP review additions" and Wave 2/3 numbering stays contiguous.
+- **Rationale for separate migration vs. amending 006:** 006 is already merged to main and represents the "Sheets→Postgres baseline" pre-VP-review. Keeping 006 stable and adding 009 maps the 2026-06-24 design conversation to a single PR — better audit trail for the recruit (per `[[project_recruit_onboarding]]`) and future schema archaeologists.
 
 **v1 → v1.1 migration plan changes:**
 
 - **Dropped:** migration 013 (`013_drop_parity_check_value.sql`). The `overall_score_parity_check_value` column never exists in v1.1 — replaced by the persistent `qa.formula_compliance_sweeps` table (folded into 006). Nothing to drop later.
 - **Folded into 006:** `qa.formula_compliance_sweeps` table DDL. No separate migration; it's part of the qa-tables wave-1 PR.
-- **Reduced irreversibility surface:** v1's migration set had one irreversible migration (013). v1.1 has zero. Every migration in the v1.1 set is reversible. The compliance sweep history is preserved through the entire migration sequence — there is no "drop the audit artifact" moment.
+- **Reduced irreversibility surface:** v1's migration set had one irreversible migration (013). v1.1+ has zero. Every migration in the v1.2 set is reversible. The compliance sweep history is preserved through the entire migration sequence — there is no "drop the audit artifact" moment.
 
 **Ordering invariants** the migration runner must enforce:
 
-- 004 → {005, 006, 007} → 008. Within Wave 1, 005 before 006 (cross-schema FK), 006 and 007 independent.
-- 009 before backfill script execution; 011 only after backfill confirmed complete (all `qa.evaluations` backfilled, all `command_center.calls` enriched).
-- 012 per team, only after that team's Phase A.5 outcome is decided (§7.7) and Phase C truth-flip is complete.
+- 004 → {005, 006, 007} → 008 → 009. Within Wave 1, 005 before 006 (cross-schema FK), 006 and 007 independent. 009 must follow 006 (ALTERs the existing `qa.evaluations` table and FKs to `qa.agents`).
+- 010 before backfill script execution; 012 only after backfill confirmed complete (all `qa.evaluations` backfilled, all `command_center.calls` enriched).
+- 013 per team, only after that team's Phase A.5 outcome is decided (§7.7) and Phase C truth-flip is complete.
 
 **Each migration file is its own PR** so multi-agent ownership maps to file ownership cleanly. Cross-file dependencies are explicit in the migration metadata header.
 
@@ -991,6 +1188,23 @@ The TOAST-compress decision for `annotated_transcript` (v0.4 §10 Q5) is deferre
 
 `qa.evaluations.scoring_status` gets a new value: `landgpt_unavailable_routed_to_gemini`. Surfaces "the cascade was down, full-call Gemini fallback fired" in dashboards distinctly from "Plan B section-level routing" (which is `models_used.fallback`, not a status). Two failure modes, two ways to query them.
 
+**v1.2 addition:** `'flagged_human_review'` joins the enum. Surfaces "the §3.14 trigger fired, this eval is awaiting a human reviewer" — distinct from the LandGPT-availability path and routed to a different frontend queue. Three failure / pause modes, three ways to query.
+
+### 8.6 Annotated transcript as future SOT for tags (new in v1.2)
+
+The Ops VP review noted that LandGPT's annotated transcript should eventually become the source of truth for `qa.evaluation_tags`. The v1.2 schema already supports this — the `source` column on `qa.evaluation_tags` admits `'ai'` from day one, so no future migration is needed. The path:
+
+1. **Today (v1.2):** managers manually tag from the 4 human-review-focus tags via the frontend pre-filled scorecard. Every row in `qa.evaluation_tags` has `source='manager'`.
+2. **LandGPT v2 ships:** the Qwen2-Audio + Gemma 4 cascade includes a tag-suggestion pass that reads the annotated transcript and emits suggested tags (likely from broader categories like `compliance.profanity_agent`, `soft_skills.empathy_miss`). These land as `qa.evaluation_tags` rows with `source='ai'`, written by the same Stage 1 writer.
+3. **Future SOT shift:** if AI tagging proves reliable, managers' UI moves to a "review AI tags" surface rather than "pick from scratch." Schema doesn't change — manager confirmations could be modeled as `source='manager'` rows that mirror the AI's selections (preserves provenance), or the frontend just hides AI-tagged rows from manager edit unless they explicitly override.
+
+**What the schema commits to in v1.2:**
+- `source` is permanent provenance — even if a manager later removes an AI-suggested tag, the AI row is kept (or soft-deleted via an `active` flag on a future migration if needed). Provenance for "what did LandGPT think at the time" is auditable forever.
+- The `(evaluation_id, tag_id, source)` UNIQUE means a tag from `manager` and from `ai` coexist as distinct rows — agreement between the two is information ("the AI saw this and the manager confirmed").
+- No CHECK constraint on `category` cross-source — the AI may emit broader-category tags (`compliance.*`) on the same eval where the manager picked human-review-focus tags. Both are legitimate.
+
+The schema is forward-compatible with the auto-tagging path without committing to it in v1.2. LandGPT v2's tag-suggestion logic and its prompt design are LandGPT-side concerns (`landing-ai/LandGPT.md` v2 scope).
+
 ---
 
 ## 9. Analytics layer on Railway
@@ -1046,9 +1260,18 @@ CC and AI-Scoring share a process. In-process bus. LISTEN/NOTIFY reserved for a 
 
 ---
 
-## 10. Question history — closed through v1.1
+## 10. Question history — closed through v1.2
 
-**v1 → v1.1 reframe (this revision):**
+**v1.1 → v1.2 reframe (this revision — Ops VP review 2026-06-24):**
+
+- **Coaching workflow becomes first-class.** Two new tables (`qa.coachings`, `qa.coaching_evaluations`) capture the manager-driven escalation flow (TL → Manager → HR can revisit the same eval; one session can cover multiple evals). The `coaching_summary` + `agent_attitude` + `action_plan_deadline` triple makes the post-coaching follow-up auditable.
+- **Tags taxonomy normalized.** `qa.tags` registry + `qa.evaluation_tags` M:N join with `source` provenance. Seeds 4 human-review-focus tags (`sop`, `soft_skills`, `hard_skills`, `efficiency`); future analytical categories ship as rows, not migrations. Forward-compatible with LandGPT v2 auto-tagging (§8.6).
+- **Pipeline trigger for human review.** New `scoring_status='flagged_human_review'` + `human_review_required_at`/`human_review_completed_at` timestamps + per-team `human_review_triggers` config in `overall_formula.json`. The §3.14 trigger evaluates at Stage 1 and Stage 1.5 (re-evaluates on analyst edits). Documentation section is deprecated cleanly (no rewrite of historical rows); `human_review_required` numeric section replaces it.
+- **`needs_coaching` + `action_plan` columns on `qa.evaluations`.** Denormalized intent flag + initial proposed plan, both nullable, no FK enforcement to `qa.coachings`. A `pending` coaching row is manager-triggered later (Q7 — magic numbers matter; don't overflow with un-actioned auto-creates).
+- **Migration plan renumbered.** New 009 = "VP review additions" (Wave 1). Old 009/011/012 shift to 010/012/013. Each migration in the v1.2 set is reversible.
+- **Question history closes v1.2 Q1–Q12:** Q1 → M:N coachings ↔ evaluations (§3.17 / §3.18); Q2 → opportunities stay TEXT, snapshot at coaching link time; Q3 → human_review_required is a normal numeric section, 1=0pts / 5=full weight; Q4 → `needs_coaching` is a flag with no FK enforcement, tags independent; Q5b → 4th tag is `efficiency`; Q6 → 6-value attitude enum incl. `mixed`; Q7 → manager-triggered, never auto-created; Q8 → `conducted_by_role` enum incl. `external`; Q9 → action_plan + coaching_summary on `qa.coachings`; Q10 → new migration 009; Q11 → clean break on documentation; Q12 → full v1.2 covering §3.6, §3.8, §8.6.
+
+**v1 → v1.1 reframe:**
 
 - **Phase A.5 changed from "two-week shadow + decide" to "ship new formula day-one + iterate via historic-compliance sweep."** Drivers in §3.6 spell out why: the cutover is the right moment to fix the formula, not preserve it; shadowing delays the decision the team is going to make anyway. Schema changes: drop `overall_score_parity_check_value` column; add `qa.formula_compliance_sweeps` table (§3.13). Migration set changes: drop migration 013 (no parity column to drop); fold the sweeps table into migration 006.
 - **Sweep is iteration-aware.** Each formula version produces its own immutable sweep row per evaluation, so v2 vs v1 flag-count comparison is a single GROUP BY. v1's transient column would have been overwritten.
@@ -1073,7 +1296,7 @@ All prior-version questions also closed:
 - v0.4 Q1–Q6 → resolved in v0.5.
 - v0.3 Q1–Q7 → resolved in v0.4 + earlier.
 
-**Nothing open at v1.1.** Future revisions ship as new doc minor versions (v1.2, etc.) with their own migration file numbers.
+**Nothing open at v1.2.** Future revisions ship as new doc minor versions (v1.3, etc.) with their own migration file numbers.
 
 ---
 
@@ -1100,6 +1323,11 @@ The headline of v0.6. Without tests, every diff post-cutover is a risk we can't 
 | `tests/qa/test_formula_compliance_sweeps.py` (new in v1.1) | `test_sweep_inserts_one_row_per_eval_per_version`, `test_sweep_idempotent_under_rerun` (ON CONFLICT DO NOTHING), `test_delta_generated_column_signed_correctly`, `test_flagged_matches_abs_delta_gt_epsilon`, `test_multiple_formula_versions_preserve_per_version_history` | §3.13 — historic-compliance sweep writer correctness + iteration preservation. |
 | `tests/qa/test_evaluation_sections_provider.py` | `test_ai_provider_required_when_score_source_ai`, `test_ai_provider_null_for_manual` | §3.5 — `ai_provider` CHECK aligned with `score_source`. |
 | `tests/qa/test_score_audit_orphan.py` | `test_orphaned_action_writes_score_audit_and_flips_flag` | §3.9 + §4.2 — `evaluation_orphaned` consistency. |
+| `tests/qa/test_evaluations_v1_2_columns.py` (new in v1.2) | `test_needs_coaching_check_accepts_y_n_null`, `test_needs_coaching_check_rejects_other`, `test_human_review_pair_invariant_requires_required_at_first`, `test_scoring_status_extended_check_accepts_flagged_human_review` | §3.4 + §3.4.3 — v1.2 column additions on `qa.evaluations`. |
+| `tests/qa/test_tags_and_evaluation_tags.py` (new in v1.2) | `test_tags_slug_unique`, `test_tags_category_index_present`, `test_evaluation_tags_unique_per_eval_tag_source`, `test_evaluation_tags_source_check`, `test_seed_includes_four_human_review_focus_tags` | §3.15 + §3.16 — tag taxonomy invariants + seed. |
+| `tests/qa/test_coachings_lifecycle.py` (new in v1.2) | `test_conducted_by_role_check`, `test_status_check`, `test_agent_attitude_check`, `test_completion_pair_invariant`, `test_completed_requires_summary_and_completed_by`, `test_pending_coaching_allows_null_summary` | §3.17 — coachings table CHECKs + completion pair invariant. |
+| `tests/qa/test_coaching_evaluations_mn.py` (new in v1.2) | `test_unique_coaching_eval_pair`, `test_cascade_on_coaching_delete_wipes_links`, `test_fk_violation_on_evaluation_delete` (no CASCADE on evaluation_id), `test_one_coaching_covers_multiple_evals`, `test_one_eval_appears_in_multiple_coachings` | §3.18 — M:N semantics + cascade boundaries. |
+| `tests/qa/test_human_review_trigger.py` (new in v1.2) | `test_trigger_fires_when_process_adherence_le_3`, `test_trigger_fires_when_call_resolution_le_3`, `test_trigger_does_not_fire_when_above_threshold`, `test_per_team_config_can_add_trigger_sections`, `test_re_evaluation_at_stage_1_5_clears_or_re_fires_flag` | §3.14 + §3.8 — pipeline trigger policy + per-team config + re-evaluation on edits. |
 | `tests/command_center/test_webhook_events_dedupe.py` | `test_duplicate_call_event_is_idempotent`, `test_duplicate_agent_status_is_idempotent`, `test_different_event_kinds_same_timestamp_both_succeed` | §4.1 partial UNIQUE indexes by `event_kind`. |
 | `tests/command_center/test_calls_upsert.py` | `test_webhook_then_qa_upsert_merges_fields`, `test_qa_on_demand_creates_row_when_cc_never_saw_it`, `test_seen_via_immutable_on_subsequent_writes` | §4.2 write paths 1+2. |
 | `tests/command_center/test_chiclets_data_writethrough.py` | `test_chiclet_update_writes_through_to_data_jsonb`, `test_snapshot_renders_from_data_alone` | §4.3 + CC P2.2 resolution. |
@@ -1352,10 +1580,15 @@ Every implementation PR meets the bar below before merge. v1's job, not v0.6's:
 - ≥1 referential-integrity test (FK enforces).
 - ≥1 graceful-degradation test (NULLABLE FK behavior under CC outage where the QA write must still succeed).
 
-**For every state-machine column** (`qa.evaluations.state`):
+**For every state-machine column** (`qa.evaluations.state`; `qa.evaluations.scoring_status` since v1.2; `qa.coachings.status` since v1.2):
 
-- ≥1 transition test per allowed transition (`draft → approved`, `approved → finalized`).
+- ≥1 transition test per allowed transition (`draft → approved`, `approved → finalized`; for v1.2: `complete ↔ flagged_human_review` re-evaluation at Stage 1.5; `pending → completed` and `pending → cancelled` on coachings).
 - ≥1 invalid-transition rejection test.
+
+**For every CHECK pair invariant** (v1.2 — `human_review_completed_at` requires `human_review_required_at`; `qa.coachings` completion pair):
+
+- ≥1 test that the second-half column cannot be set without the first.
+- ≥1 test that the pair can be cleared (NULL'd) coherently when the eval transitions back to auto-flow.
 
 **For every analytics index** (§9.1):
 
