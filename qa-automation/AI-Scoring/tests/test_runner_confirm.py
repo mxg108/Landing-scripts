@@ -201,3 +201,67 @@ def test_status_does_not_carry_yes_flag() -> None:
     parser = runner._make_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["status", "--yes"])
+
+
+# ---------------------------------------------------------------------------
+# _action_label — per-subcommand label generation
+#
+# Regression layer for the bug shipped in the initial confirmation-prompt
+# PR: a dict literal in main_async eagerly evaluated args.limit for every
+# command, but the bootstrap subparser doesn't declare --limit. Computing
+# the label per command (if/elif) instead of via a dict keeps each branch
+# isolated. These tests instantiate args through the actual parser so we
+# catch any future drift between subparser flags and the label function.
+# ---------------------------------------------------------------------------
+
+
+def test_action_label_bootstrap_does_not_reference_limit() -> None:
+    """The regression. Bootstrap's args namespace has no `limit`; touching
+    it raises AttributeError. The label function MUST work with bare
+    bootstrap args."""
+    parser = runner._make_parser()
+    args = parser.parse_args(["bootstrap", "--yes"])
+    label = runner._action_label(args)
+    assert "register" in label
+    # Both pre-existing versions are mentioned in the label so the
+    # operator sees exactly what's about to be marked applied.
+    assert "001" in label
+    assert "002" in label
+
+
+def test_action_label_up_without_limit() -> None:
+    parser = runner._make_parser()
+    args = parser.parse_args(["up"])
+    assert runner._action_label(args) == "apply ALL pending migrations"
+
+
+def test_action_label_up_with_limit() -> None:
+    parser = runner._make_parser()
+    args = parser.parse_args(["up", "--limit", "2"])
+    label = runner._action_label(args)
+    assert "limit=2" in label
+
+
+def test_action_label_down_default_limit() -> None:
+    """`down` defaults --limit to 1. The label should reflect that."""
+    parser = runner._make_parser()
+    args = parser.parse_args(["down"])
+    label = runner._action_label(args)
+    assert "1 most-recent migration" in label
+
+
+def test_action_label_down_with_limit() -> None:
+    parser = runner._make_parser()
+    args = parser.parse_args(["down", "--limit", "3"])
+    label = runner._action_label(args)
+    assert "roll back the 3 most-recent" in label
+
+
+def test_action_label_rejects_status() -> None:
+    """`status` is read-only; the label function is only valid for
+    mutating commands. Defensive — caller (main_async) gates by command,
+    but tests of this invariant document the contract."""
+    import argparse
+    args = argparse.Namespace(command="status")
+    with pytest.raises(ValueError, match="unexpected mutating command"):
+        runner._action_label(args)
