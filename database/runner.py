@@ -374,6 +374,30 @@ def _make_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _action_label(args: argparse.Namespace) -> str:
+    """Human-readable action label shown in the confirmation prompt.
+
+    Branches per subcommand so each path only references the args
+    attributes its own subparser declared. A dict literal here would
+    eagerly evaluate every entry (including ``args.limit`` on the
+    ``down`` entry), which crashed bootstrap — that subparser has no
+    ``--limit`` flag.
+    """
+    if args.command == "up":
+        return (
+            f"apply pending migrations (limit={args.limit})"
+            if args.limit is not None else "apply ALL pending migrations"
+        )
+    if args.command == "down":
+        return f"roll back the {args.limit} most-recent migration(s)"
+    if args.command == "bootstrap":
+        return (
+            "register pre-runner migrations as applied "
+            f"({', '.join(f'{v:03d}' for v in PREEXISTING_VERSIONS)})"
+        )
+    raise ValueError(f"unexpected mutating command: {args.command}")
+
+
 async def main_async(args: argparse.Namespace) -> int:
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
@@ -382,18 +406,8 @@ async def main_async(args: argparse.Namespace) -> int:
 
     # Mutating commands: show what we're about to do and prompt for y/N.
     if args.command in ("up", "down", "bootstrap"):
-        action = {
-            "up": (
-                f"apply pending migrations (limit={args.limit})"
-                if args.limit is not None else "apply ALL pending migrations"
-            ),
-            "down": f"roll back the {args.limit} most-recent migration(s)",
-            "bootstrap": (
-                "register pre-runner migrations as applied "
-                f"({', '.join(f'{v:03d}' for v in PREEXISTING_VERSIONS)})"
-            ),
-        }[args.command]
-        if not _confirm(action, dsn, yes=getattr(args, "yes", False)):
+        if not _confirm(_action_label(args), dsn,
+                        yes=getattr(args, "yes", False)):
             print("Aborted.", file=sys.stderr)
             return 1
 
