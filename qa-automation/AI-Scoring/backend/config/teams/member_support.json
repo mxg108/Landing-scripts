@@ -2,7 +2,6 @@
   "team_id": "member_support",
   "display_name": "Member Support",
   "company": "Landing Living LLC",
-  "rubric_version": "2.0",
 
   "excluded_test_agents": ["Maximiliano Perez"],
 
@@ -36,15 +35,15 @@
       "tab_name": "Form Responses 1",
       "section_score_columns": {
         "D": "greeting",
-        "E": "caller_identity_validation",
-        "F": "purpose_of_call",
-        "G": "matching_the_moment",
+        "E": "caller_id",
+        "F": "purpose",
+        "G": "matching",
         "H": "process_adherence",
         "I": "call_resolution",
-        "J": "communication",
-        "K": "efficiency_call_handling",
-        "L": "documentation",
-        "M": "customer_resolution_indicator"
+        "J": "comms",
+        "K": "efficiency",
+        "L": "human_review_required",
+        "M": "cri"
       },
       "score_readback_col": "Q",
       "arrayformula_buffer_seconds": 4,
@@ -56,197 +55,203 @@
         "opportunities": "O",
         "dialpad_link": "P"
       },
-      "metadata_cols_note": "Call-time initiative (PR-1): `timestamp` (col A) now semantically holds the call's date_connected from Dialpad, not the eval/approval clock. Sourced via fr_ai_row[COL_TIMESTAMP] in Stage 2 — the FR-AI tab's col C was repurposed by sheets_service.write_draft_to_fr_ai. The JSON value 'A' didn't change; only the meaning of what lands there did. See references/CallTimeOnAnalystHistory.md."
+      "metadata_cols_note": "Call-time initiative (PR-1): `timestamp` (col A) now semantically holds the call's date_connected from Dialpad, not the eval/approval clock. Sourced via fr_ai_row[COL_TIMESTAMP] in Stage 2 — the FR-AI tab's col C was repurposed by sheets_service.write_draft_to_fr_ai. The JSON value 'A' didn't change; only the meaning of what lands there did. See references/CallTimeOnAnalystHistory.md. Section keys updated 2026-06-30 to Ops-signed short ids per Wave2Plan.md §9; column letters unchanged — sheet ARRAYFORMULAs reference letters, not names."
     },
     "mails_tab": "Mails"
   },
 
-  "sections": [
-    {
-      "id": "greeting",
-      "history_id": "greeting",
-      "name": "Greeting",
-      "section_number": 1,
-      "score_type": "numeric",
-      "score_range": [1, 5],
-      "audio_dependent": false,
-      "rubric_question": "Did the agent use the institutional greeting, their name and answer immediately?",
-      "score_descriptions": {
-        "1": "Not ready, no script, noisy headset",
-        "2": "Used script but poor tone, didn't pick up promptly",
-        "3": "Used script, answered within 5 seconds",
-        "4": "Missed self-introduction but answered timely",
-        "5": "Used script, great opening tone, answered immediately"
+  "rubric": {
+    "rubric_version": "member_support_v2",
+    "sections": [
+      {
+        "id": "greeting",
+        "history_id": "greeting",
+        "name": "Greeting",
+        "section_number": 1,
+        "score_type": "numeric",
+        "score_range": [1, 5],
+        "audio_dependent": false,
+        "rubric_question": "Did the agent use the institutional greeting, their name and answer immediately?",
+        "score_descriptions": {
+          "1": "Not ready, no script, noisy headset",
+          "2": "Used script but poor tone, didn't pick up promptly",
+          "3": "Used script, answered within 5 seconds",
+          "4": "Missed self-introduction but answered timely",
+          "5": "Used script, great opening tone, answered immediately"
+        },
+        "na_applicable": false,
+        "confidence_cap": null,
+        "special_reasoning_instructions": null
       },
-      "na_applicable": false,
-      "confidence_cap": null,
-      "special_reasoning_instructions": null
-    },
-    {
-      "id": "caller_identity_validation",
-      "history_id": "identity_validation",
-      "name": "Caller Identity Validation",
-      "section_number": 2,
-      "score_type": "yn",
-      "audio_dependent": false,
-      "rubric_question": "Did the agent verify: full name AND DOB (OR last 4 digits of payment method OR last 4 of SSN)?",
-      "na_applicable": true,
-      "confidence_cap": null,
-      "special_reasoning_instructions": null
-    },
-    {
-      "id": "purpose_of_call",
-      "history_id": "purpose_of_call",
-      "name": "Purpose of the Call",
-      "section_number": 3,
-      "score_type": "numeric",
-      "score_range": [1, 5],
-      "audio_dependent": false,
-      "rubric_question": "Did the agent ask relevant questions to understand the issue?",
-      "score_descriptions": {
-        "1": "Immediate transfer, no probing",
-        "2": "Repeated the question or asked obvious questions",
-        "3": "Understood but didn't probe or questions were convoluted",
-        "4": "Probing questions to get to root cause",
-        "5": "Multiple probing questions, reinstated problem back to member"
+      {
+        "id": "caller_id",
+        "history_id": "identity_validation",
+        "name": "Caller ID",
+        "section_number": 2,
+        "score_type": "yn",
+        "audio_dependent": false,
+        "rubric_question": "Did the agent verify: full name AND DOB (OR last 4 digits of payment method OR last 4 of SSN)?",
+        "na_applicable": true,
+        "confidence_cap": null,
+        "special_reasoning_instructions": null
       },
-      "na_applicable": false,
-      "confidence_cap": null,
-      "special_reasoning_instructions": null
-    },
-    {
-      "id": "matching_the_moment",
-      "history_id": "matching_the_moment",
-      "name": "Matching the Moment",
-      "section_number": 4,
-      "score_type": "numeric",
-      "score_range": [1, 5],
-      "audio_dependent": true,
-      "rubric_question": "Was tone and pace appropriate to the context of the call?",
-      "score_descriptions": {
-        "1": "Contrary/sarcastic tone, interrupting the guest",
-        "2": "Disregarded sentiment, monotonous, not assertive",
-        "3": "Matched the tone",
-        "4": "2 of 3: Assurance of assistance, empathy, paraphrasing",
-        "5": "All 3: Assurance + empathy + paraphrasing reason for call"
+      {
+        "id": "purpose",
+        "history_id": "purpose_of_call",
+        "name": "Purpose of the Call",
+        "section_number": 3,
+        "score_type": "numeric",
+        "score_range": [1, 5],
+        "audio_dependent": false,
+        "rubric_question": "Did the agent ask relevant questions to understand the issue?",
+        "score_descriptions": {
+          "1": "Immediate transfer, no probing",
+          "2": "Repeated the question or asked obvious questions",
+          "3": "Understood but didn't probe or questions were convoluted",
+          "4": "Probing questions to get to root cause",
+          "5": "Multiple probing questions, reinstated problem back to member"
+        },
+        "na_applicable": false,
+        "confidence_cap": null,
+        "special_reasoning_instructions": null
       },
-      "na_applicable": false,
-      "confidence_cap": "medium",
-      "special_reasoning_instructions": null
-    },
-    {
-      "id": "process_adherence",
-      "history_id": "process_adherence",
-      "name": "Process Adherence",
-      "section_number": 5,
-      "score_type": "numeric",
-      "score_range": [1, 5],
-      "audio_dependent": false,
-      "rubric_question": "Did the agent follow correct process and company policies?",
-      "score_descriptions": {
-        "1": "Misinformed member, no action, didn't follow process",
-        "2": "Missing steps, incomplete info, gray areas",
-        "3": "Right steps but missed something minor",
-        "4": "Completed right steps",
-        "5": "Above and beyond, steps followed completely"
+      {
+        "id": "matching",
+        "history_id": "matching_the_moment",
+        "name": "Matching the Moment",
+        "section_number": 4,
+        "score_type": "numeric",
+        "score_range": [1, 5],
+        "audio_dependent": true,
+        "rubric_question": "Was tone and pace appropriate to the context of the call?",
+        "score_descriptions": {
+          "1": "Contrary/sarcastic tone, interrupting the guest",
+          "2": "Disregarded sentiment, monotonous, not assertive",
+          "3": "Matched the tone",
+          "4": "2 of 3: Assurance of assistance, empathy, paraphrasing",
+          "5": "All 3: Assurance + empathy + paraphrasing reason for call"
+        },
+        "na_applicable": false,
+        "confidence_cap": "medium",
+        "special_reasoning_instructions": null
       },
-      "na_applicable": false,
-      "confidence_cap": null,
-      "special_reasoning_instructions": null
-    },
-    {
-      "id": "call_resolution",
-      "history_id": "call_resolution",
-      "name": "Call Resolution",
-      "section_number": 6,
-      "score_type": "numeric",
-      "score_range": [1, 5],
-      "audio_dependent": false,
-      "rubric_question": "Was the issue fully resolved or clear resolution path provided?",
-      "score_descriptions": {
-        "1": "No solution provided or no follow-up",
-        "2": "Incorrect solution or improper expectations",
-        "3": "Found solution but missed small details",
-        "4": "Handled call, provided resolution but missed next steps",
-        "5": "Solution found, educated member on process and next steps"
+      {
+        "id": "process_adherence",
+        "history_id": "process_adherence",
+        "name": "Process Adherence",
+        "section_number": 5,
+        "score_type": "numeric",
+        "score_range": [1, 5],
+        "audio_dependent": false,
+        "rubric_question": "Did the agent follow correct process and company policies?",
+        "score_descriptions": {
+          "1": "Misinformed member, no action, didn't follow process",
+          "2": "Missing steps, incomplete info, gray areas",
+          "3": "Right steps but missed something minor",
+          "4": "Completed right steps",
+          "5": "Above and beyond, steps followed completely"
+        },
+        "na_applicable": false,
+        "confidence_cap": null,
+        "special_reasoning_instructions": null
       },
-      "na_applicable": false,
-      "confidence_cap": null,
-      "special_reasoning_instructions": null
-    },
-    {
-      "id": "communication",
-      "history_id": "communication",
-      "name": "Communication",
-      "section_number": 7,
-      "score_type": "numeric",
-      "score_range": [1, 5],
-      "audio_dependent": false,
-      "rubric_question": "Clear, concise, helpful information?",
-      "score_descriptions": {
-        "1": "Confusing, unclear, inappropriate language",
-        "2": "Landing lingo, grammatical errors, rambling, inappropriate slang",
-        "3": "Good simple communication",
-        "4": "Appropriate communication",
-        "5": "Professional wording, clear/concise, engaging, built rapport"
+      {
+        "id": "call_resolution",
+        "history_id": "call_resolution",
+        "name": "Call Resolution",
+        "section_number": 6,
+        "score_type": "numeric",
+        "score_range": [1, 5],
+        "audio_dependent": false,
+        "rubric_question": "Was the issue fully resolved or clear resolution path provided?",
+        "score_descriptions": {
+          "1": "No solution provided or no follow-up",
+          "2": "Incorrect solution or improper expectations",
+          "3": "Found solution but missed small details",
+          "4": "Handled call, provided resolution but missed next steps",
+          "5": "Solution found, educated member on process and next steps"
+        },
+        "na_applicable": false,
+        "confidence_cap": null,
+        "special_reasoning_instructions": null
       },
-      "na_applicable": false,
-      "confidence_cap": null,
-      "special_reasoning_instructions": null
-    },
-    {
-      "id": "efficiency_call_handling",
-      "history_id": "efficiency",
-      "name": "Efficiency & Call Handling",
-      "section_number": 8,
-      "score_type": "numeric",
-      "score_range": [1, 5],
-      "audio_dependent": true,
-      "rubric_question": "Handled efficiently without unnecessary delays?",
-      "score_descriptions": {
-        "1": "Call avoidance, inefficient hold use, didn't announce hold",
-        "2": "Didn't refresh member timely, wasted time finding solution",
-        "3": "Assisted but didn't inform caller about time needed",
-        "4": "Assisted guest in timely manner",
-        "5": "No hold/dead air OR proper hold expectations set, confident throughout"
+      {
+        "id": "comms",
+        "history_id": "communication",
+        "name": "Communication",
+        "section_number": 7,
+        "score_type": "numeric",
+        "score_range": [1, 5],
+        "audio_dependent": false,
+        "rubric_question": "Clear, concise, helpful information?",
+        "score_descriptions": {
+          "1": "Confusing, unclear, inappropriate language",
+          "2": "Landing lingo, grammatical errors, rambling, inappropriate slang",
+          "3": "Good simple communication",
+          "4": "Appropriate communication",
+          "5": "Professional wording, clear/concise, engaging, built rapport"
+        },
+        "na_applicable": false,
+        "confidence_cap": null,
+        "special_reasoning_instructions": null
       },
-      "na_applicable": false,
-      "confidence_cap": "medium",
-      "special_reasoning_instructions": "ALWAYS include timestamps if holds longer than 3 minutes or significant dead air (longer than 30 seconds) were detected"
-    },
-    {
-      "id": "documentation",
-      "history_id": "documentation",
-      "name": "Documentation",
-      "section_number": 9,
-      "score_type": "manual",
-      "score_range": [1, 5],
-      "audio_dependent": false,
-      "rubric_question": null,
-      "score_descriptions": null,
-      "na_applicable": false,
-      "confidence_cap": null,
-      "special_reasoning_instructions": null,
-      "manual_default_value": "1"
-    },
-    {
-      "id": "customer_resolution_indicator",
-      "history_id": "customer_resolution_indicator",
-      "name": "Customer Resolution Indicator",
-      "section_number": 10,
-      "score_type": "yn",
-      "audio_dependent": false,
-      "rubric_question": "Did agent summarize result/actions AND ask if there is anything else they can do?",
-      "na_applicable": true,
-      "confidence_cap": null,
-      "special_reasoning_instructions": null
+      {
+        "id": "efficiency",
+        "history_id": "efficiency",
+        "name": "Efficiency & Call Handling",
+        "section_number": 8,
+        "score_type": "numeric",
+        "score_range": [1, 5],
+        "audio_dependent": true,
+        "rubric_question": "Handled efficiently without unnecessary delays?",
+        "score_descriptions": {
+          "1": "Call avoidance, inefficient hold use, didn't announce hold",
+          "2": "Didn't refresh member timely, wasted time finding solution",
+          "3": "Assisted but didn't inform caller about time needed",
+          "4": "Assisted guest in timely manner",
+          "5": "No hold/dead air OR proper hold expectations set, confident throughout"
+        },
+        "na_applicable": false,
+        "confidence_cap": "medium",
+        "special_reasoning_instructions": "ALWAYS include timestamps if holds longer than 3 minutes or significant dead air (longer than 30 seconds) were detected"
+      },
+      {
+        "id": "human_review_required",
+        "history_id": "human_review_required",
+        "name": "Human Review Required",
+        "section_number": 9,
+        "score_type": "manual",
+        "score_range": [1, 5],
+        "audio_dependent": false,
+        "rubric_question": null,
+        "score_descriptions": {
+          "1": "Reviewer agrees with the AI flag — agent handled this interaction poorly.",
+          "5": "Reviewer disagrees — false flag; agent handled the call well."
+        },
+        "na_applicable": true,
+        "confidence_cap": null,
+        "special_reasoning_instructions": "Filled by a human reviewer only when the AI trigger fires (§3.14). Default state is NA — the auto-flow never fires this section.",
+        "manual_default_value": "1"
+      },
+      {
+        "id": "cri",
+        "history_id": "customer_resolution_indicator",
+        "name": "Customer Resolution Indicator",
+        "section_number": 10,
+        "score_type": "yn",
+        "audio_dependent": false,
+        "rubric_question": "Did agent summarize result/actions AND ask if there is anything else they can do?",
+        "na_applicable": true,
+        "confidence_cap": null,
+        "special_reasoning_instructions": null
+      }
+    ],
+    "scoring_prompt": {
+      "system_prompt_template": "You are a QA evaluator for a call center at {company}.\nYou will listen to a full call recording and score it using the rubric provided.\n\nCRITICAL OUTPUT RULES:\n- Return ONLY a valid JSON object. No markdown fences, no prose, no explanations outside the JSON.\n- All string values must have apostrophes and internal quotes escaped.\n- Never use raw newlines inside string values — use a space instead.\n- The JSON must be parseable by Python json.loads() without modification.\n- Use the Second person (\"you\") when referring to the agent in the reasoning AND feedback sections, as if you are directly addressing them with a personal tone, DO NOT use the Third person (\"they/them\") anywhere in your outputs.",
+      "confidence_levels_note": "- \"high\": Clear evidence in audio, no ambiguity\n- \"medium\": Reasonable inference, some ambiguity or audio-dependent nuance\n- \"low\": Insufficient signal, heavy guessing required",
+      "sop_sections": ["process_adherence", "call_resolution"],
+      "long_call_focus_sections": ["efficiency"],
+      "audio_dependent_sections": ["matching", "efficiency"]
     }
-  ],
-
-  "scoring_prompt": {
-    "system_prompt_template": "You are a QA evaluator for a call center at {company}.\nYou will listen to a full call recording and score it using the rubric provided.\n\nCRITICAL OUTPUT RULES:\n- Return ONLY a valid JSON object. No markdown fences, no prose, no explanations outside the JSON.\n- All string values must have apostrophes and internal quotes escaped.\n- Never use raw newlines inside string values — use a space instead.\n- The JSON must be parseable by Python json.loads() without modification.\n- Use the Second person (\"you\") when referring to the agent in the reasoning AND feedback sections, as if you are directly addressing them with a personal tone, DO NOT use the Third person (\"they/them\") anywhere in your outputs.",
-    "confidence_levels_note": "- \"high\": Clear evidence in audio, no ambiguity\n- \"medium\": Reasonable inference, some ambiguity or audio-dependent nuance\n- \"low\": Insufficient signal, heavy guessing required",
-    "sop_sections": [5, 6],
-    "long_call_focus_sections": ["efficiency_call_handling"]
   }
 }
