@@ -44,7 +44,8 @@ from backend.config.history_layout import col_index_to_letter, col_letter_to_ind
 from backend.models.scorecard import ScorecardWithMeta
 
 if TYPE_CHECKING:
-    from backend.config.team_config import SectionDef, TeamConfig
+    from backend.config.team_config import TeamConfig
+    from backend.models.formula import RubricSection
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -124,7 +125,7 @@ def _format_call_started(call_started_at_utc) -> str:
     return call_started_at_utc.strftime("%m/%d/%Y %H:%M:%S")
 
 
-def _format_ai_score(sec_def: SectionDef, ai_section: dict) -> str:
+def _format_ai_score(sec_def: RubricSection, ai_section: dict) -> str:
     """Convert AI-output section dict to a score-cell string.
 
     Explicit N/A wins regardless of score_type: when ``yn_value == "NA"``,

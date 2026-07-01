@@ -28,7 +28,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from backend.config import history_layout  # noqa: E402
-from backend.config.team_config import TeamConfig  # noqa: E402
+from backend.config.team_config import TeamConfig, _assemble_rubric_block  # noqa: E402
 
 _FIXTURE_DIR = Path(__file__).parent / "fixtures" / "teams"
 _PROD_CONFIG_DIR = _REPO_ROOT / "backend" / "config" / "teams"
@@ -47,14 +47,17 @@ def load_test_config(name: str) -> TeamConfig:
     fixture_path = _FIXTURE_DIR / f"{name}.json"
     if fixture_path.exists():
         raw = json.loads(fixture_path.read_text(encoding="utf-8"))
-        return TeamConfig(**raw)
-    prod_path = _PROD_CONFIG_DIR / f"{name}.json"
-    if prod_path.exists():
+    else:
+        prod_path = _PROD_CONFIG_DIR / f"{name}.json"
+        if not prod_path.exists():
+            raise FileNotFoundError(
+                f"No config '{name}' under {_FIXTURE_DIR} or {_PROD_CONFIG_DIR}"
+            )
         raw = json.loads(prod_path.read_text(encoding="utf-8"))
-        return TeamConfig(**raw)
-    raise FileNotFoundError(
-        f"No config '{name}' under {_FIXTURE_DIR} or {_PROD_CONFIG_DIR}"
-    )
+    raw["rubric"] = _assemble_rubric_block(raw)
+    for legacy_key in ("rubric_version", "sections", "scoring_prompt"):
+        raw.pop(legacy_key, None)
+    return TeamConfig(**raw)
 
 
 @pytest.fixture(params=TEST_CONFIG_NAMES)
