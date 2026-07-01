@@ -1,6 +1,8 @@
 # SQL Migration — Design & Implementation Reference
 
-**Status:** v1.3 — Rubric versioning lands as a first-class concern. Until now we versioned **formulas** (`qa.formula_versions`) but the **rubric** (section definitions, AI scoring prompt, per-section metadata) lived only in `config/teams/<team>.json` as file-source-of-truth. v1.3 promotes the rubric to the database (`qa.rubric_versions`, §3.19) and shifts the configuration model to **DB-as-source**: the JSON file becomes a generated export artifact, not authoritative. Each evaluation now stamps both `formula_version` AND `rubric_version` (§3.4), making `compute_overall_score()` fully reproducible from the row alone (§3.6) regardless of how many times the rubric is reshaped later. `scoring_prompt` lives inside `rubric_json` (one row versions the AI scoring contract end-to-end — the prompt's `long_call_focus_sections` and `sop_sections` arrays reference section_ids and must be inseparable from their sections per Q1.a). Rubric ↔ formula compatibility is **hard-fail** validated at the write API (Q2.a — saving a rubric that drops a section the active formula references is rejected; the formula must update first). `public.teams` absorbs the operational config (`stats_config`, `gemini_config`, `excluded_test_agents`, plus `sheets_config` as a legacy holdover dropped at Phase D) so the JSON file is fully DB-generable. New migration `010_rubric_versioning.sql` lands in Wave 1 with seeds for both teams' current rubrics; the prior 010 placeholder → 011, 011/012/013 → 012/013/014. Spec sections added: §3.19. Updated: §3.4, §3.6, §6, §7.6, §10, §11.1.
+**Status:** v1.4 — AI progression assessments become persistent. Until v1.3 the frontend's `AI Progression Assessment` view (agent's cross-eval trends + per-section coaching tips) was generated on demand and cached in-memory with a 1-hour TTL — no DB persistence, no history, expensive to regenerate every time. v1.4 promotes assessments to first-class DB artifacts: `qa.assessments` (§3.20) is an append-only history keyed by `(agent_id, time_range_days, generated_at)`, with per-section detail normalized into `qa.assessment_sections` (§3.21, Q3.a). Each row stamps both `rubric_version` and `formula_version` (per-eval reproducibility, Q5.a) plus provenance (`models_used` JSONB, `estimated_cost_usd`). The 1-hour TTL becomes a `max_age` staleness check at read time — the DB row is the persistence, not a cache. **Assessments are strictly immutable AI artifacts** (Q4.a): no UPDATE endpoints, no post-generation edits, no manager overrides on assessment text. Ops VP directive: pure unadulterated AI output preserves clean HR separation — managers can never be accused of tampering with an assessment during an appeal. Manager commentary continues to live in the `qa.coachings` workflow (§3.17), never on the assessment row. New migration `011_assessments.sql` lands in Wave 1; the prior 011/012/013/014 shift to 012/013/014/015. Spec sections added: §3.20, §3.21. Updated: §7.6, §10, §11.1.
+
+**Prior status (v1.3):** Rubric versioning lands as a first-class concern. Until now we versioned **formulas** (`qa.formula_versions`) but the **rubric** (section definitions, AI scoring prompt, per-section metadata) lived only in `config/teams/<team>.json` as file-source-of-truth. v1.3 promotes the rubric to the database (`qa.rubric_versions`, §3.19) and shifts the configuration model to **DB-as-source**: the JSON file becomes a generated export artifact, not authoritative. Each evaluation now stamps both `formula_version` AND `rubric_version` (§3.4), making `compute_overall_score()` fully reproducible from the row alone (§3.6) regardless of how many times the rubric is reshaped later. `scoring_prompt` lives inside `rubric_json` (one row versions the AI scoring contract end-to-end — the prompt's `long_call_focus_sections` and `sop_sections` arrays reference section_ids and must be inseparable from their sections per Q1.a). Rubric ↔ formula compatibility is **hard-fail** validated at the write API (Q2.a — saving a rubric that drops a section the active formula references is rejected; the formula must update first). `public.teams` absorbs the operational config (`stats_config`, `gemini_config`, `excluded_test_agents`, plus `sheets_config` as a legacy holdover dropped at Phase D) so the JSON file is fully DB-generable. New migration `010_rubric_versioning.sql` lands in Wave 1 with seeds for both teams' current rubrics; the prior 010 placeholder → 011, 011/012/013 → 012/013/014. Spec sections added: §3.19. Updated: §3.4, §3.6, §6, §7.6, §10, §11.1.
 
 **Prior status (v1.2):** Ops VP review (2026-06-24) adds three coupled concerns to the qa schema: (a) a **manager-driven coaching workflow** modeled as `qa.coachings` (1 session, M:N to evaluations via `qa.coaching_evaluations` — escalations from TL → Manager → HR can revisit the same eval and one session can cover multiple evals); (b) a **normalized tag taxonomy** in `qa.tags` + `qa.evaluation_tags` (4 initial human-review-focus tags: sop / soft_skills / hard_skills / efficiency; future categories `compliance`, `operational`, `product`, `outcome` ship as rows-not-migrations; per-tag-source provenance ready for LandGPT auto-tagging); (c) a **pipeline trigger** that flags evaluations for human review when `process_adherence` or `call_resolution` scores ≤ 3, surfaced via a new `'flagged_human_review'` value on `qa.evaluations.scoring_status`. The `documentation` section is deprecated (clean break — new evals never write it; historical rows keep their `evaluation_sections` rows forever) and replaced by `human_review_required` (numeric 1–5, NA-by-default → na-redistribute via the existing rule pipeline). Migrations renumbered: new `009_vp_review_additions.sql` lands in Wave 1; the prior 009/011/012 shift to 010/012/013. Spec sections added: §3.14–§3.18.
 
@@ -691,6 +693,121 @@ The row + both archives + the eval's `evaluation_sections` rows uniquely determi
 
 Per §6 split, operational config (`stats_config`, `gemini_config`) overwrites in place on `public.teams`. If a future audit need promotes one to per-eval reproducibility — e.g. "what Gemini temperature scored this contested eval?" — the migration adds the corresponding `qa.stats_versions` or `qa.gemini_versions` table on the same `qa.rubric_versions` template (slug-style version, JSONB, `effective_from`/`until`), plus a column on `qa.evaluations`. Schema is ready for that pattern without disturbing v1.3.
 
+### 3.20 `qa.assessments` — persistent AI progression assessments (new in v1.4)
+
+The frontend's `AI Progression Assessment` view analyzes an agent's evaluation history across a time window (7w = 49d, 30d, 60d, 90d — flexible) and returns an overall summary plus per-section trends and coaching tips (see `qa-automation/AI-Scoring/backend/prompts/progression_prompt.py` for the current output schema). Pre-v1.4 this was generated on demand and cached in-memory for 1 hour with no persistence. v1.4 persists every assessment as an append-only row so:
+
+- Repeat views for the same agent + window don't re-hit the Gemini API (DB row served if fresher than `max_age`)
+- Historical assessments accumulate — reviewing "what did the AI say about this agent last quarter?" becomes a normal SQL query
+- Every assessment is reproducible against the row + its `rubric_version` + `formula_version` archives
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | BIGINT IDENTITY PK | |
+| `agent_id` | BIGINT NOT NULL FK → `qa.agents(id)` | |
+| `team_id` | TEXT NOT NULL FK → `public.teams(id)` | |
+| `time_range_days` | INTEGER NOT NULL | 7w=49, 30, 60, 90 — future-flexible. Frontend passes; backend computes `range_start_at` = `range_end_at - INTERVAL 'N days'`. |
+| `range_start_at` | TIMESTAMPTZ NOT NULL | Window start — the `finalized_at` cutoff for which evals were pulled |
+| `range_end_at` | TIMESTAMPTZ NOT NULL | Window end (typically ≈ `generated_at`) |
+| `evaluations_included` | INTEGER NOT NULL | How many `qa.evaluations` rows went into the assessment. Detailed eval list is reconstructable via `SELECT id FROM qa.evaluations WHERE agent_id=? AND state='finalized' AND finalized_at BETWEEN range_start_at AND range_end_at` — no join table needed. |
+| `overall_assessment` | TEXT NOT NULL | The 2-4 sentence top-level summary (blue box in the UI) |
+| `rubric_version` | TEXT NOT NULL FK → `qa.rubric_versions(rubric_version)` | Snapshot of the rubric active at generation time. Assessment section list references it. |
+| `formula_version` | TEXT FK → `qa.formula_versions(formula_version)` NULL | Snapshot of the scoring formula. NULL only if no formula version had been set for the team at generation time (edge case — earliest evals). Per Q5.a, we stamp it for reproducibility even though the assessment doesn't directly consume the formula. |
+| `models_used` | JSONB NOT NULL | Cascade provenance, same shape as `qa.evaluations.models_used` (§8.1). E.g. `{"text": {"provider": "gemini", "model": "gemini-2.5-flash"}}`. LandGPT auto-tagging path lands here when v2 ships. |
+| `estimated_cost_usd` | NUMERIC(8,4) NULL | Cloud API cost per Q5.a. Small (~$0.01-0.05 per assessment) but visible in cost dashboards; multiplies across team volume. |
+| `generated_at` | TIMESTAMPTZ NOT NULL DEFAULT NOW() | |
+| `is_current` | BOOLEAN NOT NULL DEFAULT TRUE | The load-bearing flag for read-path: `WHERE is_current = TRUE AND agent_id = ? AND time_range_days = ?`. Flipped FALSE in the same transaction that INSERTs a successor for the same `(agent_id, time_range_days)`. |
+
+**Immutability by convention (Q4.a).** No column on `qa.assessments` is UPDATE-friendly: no `edited_at`, no `edited_by`, no `edit_reason`. The API surface exposes only `POST /api/{team_id}/assessment` (creates a new row, flips prior `is_current`) and `GET /api/{team_id}/assessment` (reads current). There is no PUT / PATCH. This is a load-bearing HR concern per Ops VP directive: assessments must be pure AI artifacts so an agent's appeal cannot be answered with "the manager tampered with the AI's output before showing it to me." Manager commentary lives in the coaching workflow (§3.17 `qa.coachings.coaching_summary`), separated from the AI record at the schema level.
+
+The `is_current` flag *is* technically an UPDATE on `qa.assessments`, but it's the ONLY UPDATE the API path performs, and it doesn't touch the assessment content (only the "which row is authoritative for the current view" pointer). Application code disallows editing any other column post-INSERT.
+
+**Read-path (§3.20.1).**
+
+```python
+def get_current_assessment(agent_id: int, time_range_days: int, max_age_hours: int = 24):
+    row = SELECT * FROM qa.assessments
+        WHERE agent_id = ?
+          AND time_range_days = ?
+          AND is_current = TRUE
+        ORDER BY generated_at DESC LIMIT 1
+    if row and row.generated_at > NOW() - INTERVAL max_age_hours HOURS:
+        return row  # DB cache hit; no Gemini call
+    # else regenerate — see write path
+```
+
+`max_age_hours` is per-team config (default 24). Q6.a says the frontend re-queries fresh on view; no client-side cache.
+
+**Write-path (§3.20.2).**
+
+```python
+def generate_and_persist_assessment(agent_id, time_range_days):
+    evals = SELECT * FROM qa.evaluations
+        WHERE agent_id = ?
+          AND state = 'finalized'
+          AND finalized_at BETWEEN NOW() - INTERVAL N DAYS AND NOW()
+    ai_output = call_gemini(build_progression_prompt(...))
+    with transaction:
+        UPDATE qa.assessments SET is_current = FALSE
+            WHERE agent_id = ? AND time_range_days = ? AND is_current = TRUE
+        assessment = INSERT INTO qa.assessments (...) RETURNING id
+        INSERT INTO qa.assessment_sections (assessment_id, ...) for each section in ai_output
+    return assessment
+```
+
+The prior `is_current` flip + new INSERT + all section rows land in a single transaction — no half-state where two rows carry `is_current=TRUE` for the same `(agent, window)`.
+
+**Indexes (§3.20.3).**
+
+```sql
+-- The hot read path per §3.20.1
+CREATE INDEX idx_assessments_current
+    ON qa.assessments (agent_id, time_range_days, generated_at DESC)
+    WHERE is_current = TRUE;
+
+-- Team-wide "assessments generated this week" listing
+CREATE INDEX idx_assessments_team_generated
+    ON qa.assessments (team_id, generated_at DESC);
+```
+
+**Storage trajectory.** ~30 agents/team × 4 windows (7w/30d/60d/90d) × 1 fresh assessment per window per week ≈ 6,000 rows/year at steady state. At ~5KB/row including embedded JSONB, ~30MB/year. Negligible.
+
+**Retention.** Permanent. Same rationale as `qa.formula_compliance_sweeps` — assessments are load-bearing audit artifacts ("here's why we said this agent had declining process_adherence three months ago") that back up HR conversations. Aging is possible post-v1.4 if storage becomes a concern; the append-only shape makes archival trivial.
+
+### 3.21 `qa.assessment_sections` — per-section detail, normalized (Q3.a, new in v1.4)
+
+One row per section per assessment. Snapshots section identity (name + number) at generation time so historical assessments render correctly even after the rubric is reshaped.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | BIGINT IDENTITY PK | |
+| `assessment_id` | BIGINT NOT NULL FK → `qa.assessments(id)` ON DELETE CASCADE | |
+| `section_id` | TEXT NOT NULL | e.g. `greeting`, `process_adherence`. Matches `evaluation_sections.section_id` at gen time — but no FK to a rubric_versions.sections row since sections live inside `rubric_json` JSONB. Consistency is enforced application-side against the assessment's `rubric_version.rubric_json.sections`. |
+| `section_name` | TEXT NOT NULL | Display name at generation time (snapshot). "Process Adherence", "Efficiency & Call Handling", etc. Preserves render fidelity if a section is later renamed. |
+| `section_number` | SMALLINT NOT NULL | Position in the rubric at generation time (snapshot). Preserves ordering in the UI even after rubric reshuffles. |
+| `trend` | TEXT NOT NULL | `improving` / `stable` / `declining` (CHECK enforced). The green/red trend chip in the UI. |
+| `summary` | TEXT NOT NULL | The per-section narrative paragraph (~2-3 sentences). |
+| `coaching_tip` | TEXT NOT NULL | The actionable coaching recommendation (~1-2 sentences). |
+
+CHECK: `trend IN ('improving', 'stable', 'declining')`. UNIQUE `(assessment_id, section_id)` — the AI cannot output two entries for the same section.
+
+**Indexes.**
+
+```sql
+CREATE INDEX idx_assessment_sections_assessment
+    ON qa.assessment_sections (assessment_id);
+
+-- Trend analytics: "find all agents with declining process_adherence this quarter"
+CREATE INDEX idx_assessment_sections_section_trend
+    ON qa.assessment_sections (section_id, trend);
+```
+
+The second index unlocks the Wave 2 analytics use case Ops has been asking for — cross-agent trend spotting per section without joining through evaluations.
+
+**Snapshot rationale (why `section_name` isn't a JOIN back to `rubric_versions`).** The rubric's `sections` array lives inside `rubric_json` JSONB (§3.19.1), not as normalized rows. Snapshotting `section_name` + `section_number` on every `assessment_sections` row is O(N sections × M assessments) storage overhead — but O(N sections) per assessment is tiny (typically 10-20 sections × ~50 chars = ~1KB per assessment). The alternative — extracting names from `rubric_json` at read time — requires a JOIN + a JSONB path expression per assessment surface. Snapshotting is the cleaner tradeoff at Landing's scale.
+
+**Cascade boundary.** `ON DELETE CASCADE` on `assessment_id` means deleting an assessment wipes its sections (paired concept). The reverse — deleting a `qa.rubric_versions` row — is blocked by `qa.assessments.rubric_version` FK, so section snapshots stay well-formed even if operators try to prune old rubric versions.
+
 ---
 
 ## 4. Schema `command_center` — table-level shape
@@ -1117,10 +1234,17 @@ v1 ships the following ordered migration set. Each has a companion `_down.sql` f
 | 008 | `008_indexes.sql` | 1 | All analytics indexes (§9.1), KNN HNSW indexes (§5.6), `qa.formula_compliance_sweeps` indexes (§3.13), partial UNIQUE indexes not declared in 005/006. Splitting indexes into a separate file lets them be created `CONCURRENTLY` post-deploy without holding locks during initial table creation. **Reversible.** |
 | 009 | `009_vp_review_additions.sql` (new in v1.2) | 1 | Ops VP review (2026-06-24) additions: ALTER `qa.evaluations` (add `needs_coaching`, `action_plan`, `human_review_required_at`, `human_review_completed_at`; extend `scoring_status` CHECK with `'flagged_human_review'`); CREATE `qa.tags` + seed 4 rows; `qa.evaluation_tags`; `qa.coachings`; `qa.coaching_evaluations`; new partial indexes (`idx_eval_human_review_queue`, `idx_coachings_pending`, `idx_coachings_agent_status`, `idx_eval_tags_*`, `idx_tags_category_active`, `idx_coaching_evals_eval`). **Reversible.** |
 | 010 | `010_rubric_versioning.sql` (new in v1.3) | 1 | CREATE `qa.rubric_versions`; ALTER `qa.evaluations` to add `rubric_version` FK; ALTER `public.teams` to add `company`, `stats_config`, `gemini_config`, `excluded_test_agents`, `sheets_config`, `updated_at` — the operational config the JSON files currently carry. Seeds `qa.rubric_versions` with `sales_v1` + `member_support_v1` (full embedded `rubric_json` for each) and backfills the new `public.teams` columns from the same JSON content. From this point forward the file becomes a generated export, not source. **Reversible.** |
-| 011 | `011_calls_backfill_state.sql` (shifted from 010 in v1.3) | 2 | Transient `command_center.calls_backfill_state` table used by §7.1 enrichment script. **Reversible.** Dropped explicitly by 013. |
-| 012 | (no migration — Phase A.5 is application-code: formula JSON drop + sweep script run, both reversible via re-running) | — | |
-| 013 | `013_drop_calls_backfill_state.sql` (shifted from 012 in v1.3) | 3 (post-backfill) | Drops the transient backfill state table. **Reversible** by re-applying 011. |
-| 014 | `014_qa_evaluations_strict_state_check.sql` (shifted from 013 in v1.3) | 3 (Phase C, per team) | `ADD CONSTRAINT … NOT VALID` + `VALIDATE CONSTRAINT` to tighten the pre-cutover relaxed CHECK to its strict post-cutover form (§3.4.3). **Reversible** via `DROP CONSTRAINT`. |
+| 011 | `011_assessments.sql` (new in v1.4) | 1 | CREATE `qa.assessments` (append-only history, immutable AI artifacts per Q4.a, stamps `rubric_version` + `formula_version`, `models_used` + `estimated_cost_usd` per Q5.a) and `qa.assessment_sections` (normalized per-section per Q3.a, `trend` CHECK, `section_name` + `section_number` snapshotted at gen time). Includes 4 indexes: current-per-agent-window partial, team-generated listing, per-assessment lookup, section-trend analytics. **Reversible.** |
+| 012 | `012_calls_backfill_state.sql` (shifted from 011 in v1.4) | 2 | Transient `command_center.calls_backfill_state` table used by §7.1 enrichment script. **Reversible.** Dropped explicitly by 014. |
+| 013 | (no migration — Phase A.5 is application-code: formula JSON drop + sweep script run, both reversible via re-running) | — | |
+| 014 | `014_drop_calls_backfill_state.sql` (shifted from 013 in v1.4) | 3 (post-backfill) | Drops the transient backfill state table. **Reversible** by re-applying 012. |
+| 015 | `015_qa_evaluations_strict_state_check.sql` (shifted from 014 in v1.4) | 3 (Phase C, per team) | `ADD CONSTRAINT … NOT VALID` + `VALIDATE CONSTRAINT` to tighten the pre-cutover relaxed CHECK to its strict post-cutover form (§3.4.3). **Reversible** via `DROP CONSTRAINT`. |
+
+**v1.3 → v1.4 migration plan changes:**
+
+- **Added:** migration 011 (`011_assessments.sql`). Persists `AI Progression Assessment` output (previously in-memory-only with a 1h TTL) as an append-only history via `qa.assessments` + `qa.assessment_sections`. Lives in Wave 1 so the assessment writer (Wave 2 application code) can persist immediately from cutover, not just cache. Stamps `rubric_version` + `formula_version` for reproducibility per Q5.a.
+- **Renumbered (no semantic change):** old 011 → 012, old 012 placeholder → 013, old 013 → 014, old 014 → 015.
+- **Rationale for separate migration vs. amending 010:** same reasoning as v1.3 vs. v1.2 — 010 is on main and represents "rubric versioning" as a discrete design conversation. Keeping the assessments concern in its own migration/PR maps to a discrete design conversation (2026-06-30 immutability + persistence decision), better archaeology.
 
 **v1.2 → v1.3 migration plan changes:**
 
@@ -1142,9 +1266,9 @@ v1 ships the following ordered migration set. Each has a companion `_down.sql` f
 
 **Ordering invariants** the migration runner must enforce:
 
-- 004 → {005, 006, 007} → 008 → 009 → 010. Within Wave 1, 005 before 006 (cross-schema FK), 006 and 007 independent. 009 must follow 006 (ALTERs the existing `qa.evaluations` table and FKs to `qa.agents`). 010 must follow 006 + 009 — ALTERs `qa.evaluations` to add `rubric_version` and depends on the v1.2 columns from 009 being present (for the seed's INSERT shape verification).
-- 011 before backfill script execution; 013 only after backfill confirmed complete (all `qa.evaluations` backfilled, all `command_center.calls` enriched).
-- 014 per team, only after that team's Phase A.5 outcome is decided (§7.7) and Phase C truth-flip is complete.
+- 004 → {005, 006, 007} → 008 → 009 → 010 → 011. Within Wave 1, 005 before 006 (cross-schema FK), 006 and 007 independent. 009 must follow 006 (ALTERs the existing `qa.evaluations` table and FKs to `qa.agents`). 010 must follow 006 + 009 (ALTERs `qa.evaluations` to add `rubric_version`, depends on v1.2 columns). 011 must follow 010 (FKs `qa.assessments.rubric_version` to `qa.rubric_versions`, seeded there).
+- 012 before backfill script execution; 014 only after backfill confirmed complete (all `qa.evaluations` backfilled, all `command_center.calls` enriched).
+- 015 per team, only after that team's Phase A.5 outcome is decided (§7.7) and Phase C truth-flip is complete.
 
 **Each migration file is its own PR** so multi-agent ownership maps to file ownership cleanly. Cross-file dependencies are explicit in the migration metadata header.
 
@@ -1390,9 +1514,19 @@ CC and AI-Scoring share a process. In-process bus. LISTEN/NOTIFY reserved for a 
 
 ---
 
-## 10. Question history — closed through v1.3
+## 10. Question history — closed through v1.4
 
-**v1.2 → v1.3 reframe (this revision — rubric versioning 2026-06-29):**
+**v1.3 → v1.4 reframe (this revision — assessment persistence 2026-06-30):**
+
+- **AI Progression Assessments persist to DB, no more 1h in-memory TTL.** New `qa.assessments` (§3.20) is an append-only history with `is_current` flag for the read path. The 1h TTL becomes a `max_age` staleness check at read time — the DB row IS the persistence, not a cache.
+- **Immutable AI artifacts** (Q4.a). No UPDATE endpoints on assessments. Ops VP directive: pure unadulterated AI output preserves HR-appeal separation. Manager commentary stays in the coaching workflow (§3.17), never on the assessment row. The one exception — flipping `is_current=FALSE` on a prior row when a successor is generated — doesn't touch assessment content.
+- **Normalized per-section detail** (Q3.a). `qa.assessment_sections` gets its own table with `section_id` + `section_name` + `section_number` snapshotted at gen time (preserves render fidelity if a section is renamed later), `trend` CHECK, and indexes for the "cross-agent trend spotting per section" analytics use case Ops wants.
+- **Rubric + formula version stamps** (Q5.a). Every assessment stores `rubric_version` (required) and `formula_version` (nullable for edge cases) so the assessment is reproducible against the row + the two archives. `models_used` + `estimated_cost_usd` follow the same pattern as `qa.evaluations`.
+- **Frontend fetches fresh from backend on view** (Q6.a). No client-side cache — the backend's DB read IS the cache. Simple, real-time.
+- **Migration plan renumbered:** new 011 = "assessments" (Wave 1). Old 011/012/013/014 → 012/013/014/015. All reversible.
+- **Question history closes v1.4 Q3–Q6:** Q3 → normalized `qa.assessment_sections`; Q4 → immutable, no post-generation edits; Q5 → both formula_version + cost stamped; Q6 → no client cache, backend serves DB.
+
+**v1.2 → v1.3 reframe (rubric versioning 2026-06-29):**
 
 - **Rubric becomes versioned + DB-as-source.** `qa.rubric_versions` (§3.19) is now the canonical store for section definitions + AI scoring prompt. `config/teams/<team>.json` becomes a generated export — never read by application code post-cutover. The Wave-2 PR set will refactor `team_config.py` to query from DB instead of file.
 - **Every evaluation stamps both `formula_version` AND `rubric_version`** (§3.4). `compute_overall_score()` signature simplifies to `(evaluation_id)` — both archives are joined from the row alone (§3.6 pseudocode). Old rows remain scoreable forever, regardless of how many times the rubric is later reshaped.
@@ -1436,7 +1570,7 @@ All prior-version questions also closed:
 - v0.4 Q1–Q6 → resolved in v0.5.
 - v0.3 Q1–Q7 → resolved in v0.4 + earlier.
 
-**Nothing open at v1.3.** Future revisions ship as new doc minor versions (v1.4, etc.) with their own migration file numbers.
+**Nothing open at v1.4.** Future revisions ship as new doc minor versions (v1.5, etc.) with their own migration file numbers.
 
 ---
 
@@ -1470,6 +1604,8 @@ The headline of v0.6. Without tests, every diff post-cutover is a risk we can't 
 | `tests/qa/test_human_review_trigger.py` (new in v1.2) | `test_trigger_fires_when_process_adherence_le_3`, `test_trigger_fires_when_call_resolution_le_3`, `test_trigger_does_not_fire_when_above_threshold`, `test_per_team_config_can_add_trigger_sections`, `test_re_evaluation_at_stage_1_5_clears_or_re_fires_flag` | §3.14 + §3.8 — pipeline trigger policy + per-team config + re-evaluation on edits. |
 | `tests/qa/test_rubric_versions.py` (new in v1.3) | `test_rubric_version_unique`, `test_seed_includes_sales_v1_and_member_support_v1`, `test_seed_rubric_json_contains_sections_and_scoring_prompt`, `test_effective_until_pair_invariant`, `test_team_id_fk_enforced`, `test_qa_evaluations_rubric_version_fk_enforced`, `test_qa_evaluations_rubric_version_nullable_for_backfill` | §3.19 — qa.rubric_versions write path + FK + seed verification. |
 | `tests/qa/test_teams_operational_columns.py` (new in v1.3) | `test_stats_config_jsonb_accepts_canonical_shape`, `test_gemini_config_jsonb_accepts_canonical_shape`, `test_excluded_test_agents_array_seeded`, `test_sheets_config_legacy_column_present_and_nullable`, `test_updated_at_default_now` | §6 — operational config columns on public.teams + seed values from migration 010. |
+| `tests/qa/test_assessments_lifecycle.py` (new in v1.4) | `test_insert_populates_all_required_columns`, `test_rubric_version_fk_enforced`, `test_formula_version_fk_nullable`, `test_is_current_defaults_true`, `test_second_row_flip_prior_current_transaction`, `test_time_range_days_integer_flexible`, `test_generated_at_default_now` | §3.20 — qa.assessments write path + is_current successor semantics. |
+| `tests/qa/test_assessment_sections_shape.py` (new in v1.4) | `test_trend_check_accepts_three_values`, `test_trend_check_rejects_other`, `test_unique_assessment_section`, `test_cascade_on_assessment_delete`, `test_section_name_number_snapshotted_at_gen_time`, `test_idx_section_trend_present_for_analytics` | §3.21 — normalized per-section detail + trend CHECK + cascade + snapshot columns. |
 | `tests/command_center/test_webhook_events_dedupe.py` | `test_duplicate_call_event_is_idempotent`, `test_duplicate_agent_status_is_idempotent`, `test_different_event_kinds_same_timestamp_both_succeed` | §4.1 partial UNIQUE indexes by `event_kind`. |
 | `tests/command_center/test_calls_upsert.py` | `test_webhook_then_qa_upsert_merges_fields`, `test_qa_on_demand_creates_row_when_cc_never_saw_it`, `test_seen_via_immutable_on_subsequent_writes` | §4.2 write paths 1+2. |
 | `tests/command_center/test_chiclets_data_writethrough.py` | `test_chiclet_update_writes_through_to_data_jsonb`, `test_snapshot_renders_from_data_alone` | §4.3 + CC P2.2 resolution. |
