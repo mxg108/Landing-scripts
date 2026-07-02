@@ -579,10 +579,15 @@ class EvaluationSection(BaseModel):
         is_numeric = self.score_type in ("numeric", "manual_numeric")
         is_binary = self.score_type in ("binary", "manual_binary")
         if is_numeric:
-            if self.numeric_score is None or self.binary_value is not None:
+            # Migration 012 / §3.8 point 7: an unscored na_default section
+            # persists as numeric_score NULL + binary_value 'NA'. Y/N on a
+            # numeric row remains invalid.
+            is_na = self.numeric_score is None and self.binary_value == "NA"
+            if not is_na and (self.numeric_score is None or self.binary_value is not None):
                 raise ValueError(
                     f"section {self.section_id!r}: score_type={self.score_type!r} "
-                    "requires numeric_score set and binary_value NULL"
+                    "requires numeric_score set and binary_value NULL (or the "
+                    "NA shape: numeric_score NULL and binary_value='NA')"
                 )
         elif is_binary:
             if self.binary_value is None or self.numeric_score is not None:
