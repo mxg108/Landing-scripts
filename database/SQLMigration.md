@@ -223,6 +223,8 @@ Normalized section scores. One row per section per evaluation.
 
 CHECKs enforce "exactly one of `numeric_score`/`binary_value` populated, matching `score_type`" and "`ai_provider` populated iff `score_source='ai'`". UNIQUE `(evaluation_id, section_id)`. INDEX on `(section_id, evaluation_id)` for category trend queries (§9.1).
 
+**v1.5 (migration 012) — NA on numeric sections.** The 006 value-matches-type CHECK contradicted §3.8 point 7: `na_default` sections (currently only `human_review_required`) are created at Stage 1 as `numeric_score = NULL` / `binary_value = 'NA'`, which the original CHECK rejected for numeric score_types. Migration 012 widens the CHECK with exactly that branch — numeric/manual_numeric rows may carry `binary_value = 'NA'` (and only `'NA'`) when `numeric_score` is NULL. `Y`/`N` on numeric rows remains invalid. The Pydantic `EvaluationSection` writer-boundary validator mirrors the same shape.
+
 **v1.2 — `documentation` section deprecation, `human_review_required` introduced.** The `documentation` section is dropped from per-team configs going forward (`config/scoring/<team>.json` removes its entry). Historical `evaluation_sections` rows with `section_id='documentation'` are preserved forever — `section_id` is TEXT, no enum to update, no migration touches them. New evaluations from the deprecation date onward write a `human_review_required` section instead: `score_type='numeric'` (1–5), `na_applicable=true`, NA by default. Its score semantics:
 
 - **1** = "Agent handled this interaction poorly; section weight contributes 0 points." Standard `numeric_score=1` → `1/5 × weight = 0.2 × weight` under the normal formula; the *effective zero* comes from the rubric, not a special rule.

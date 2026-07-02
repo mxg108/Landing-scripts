@@ -471,6 +471,33 @@ class TestEvaluationSectionValidators:
                 "numeric_score": 6,  # > 5
             })
 
+    def test_numeric_na_shape_allowed(self):
+        """Migration 012 / §3.8 point 7: unscored na_default sections persist
+        as numeric_score NULL + binary_value 'NA'."""
+        section = EvaluationSection.model_validate({
+            "section_id": "human_review_required", "section_number": 9,
+            "score_type": "manual_numeric", "score_source": "manual_default",
+            "binary_value": "NA",
+        })
+        assert section.numeric_score is None
+        assert section.binary_value == "NA"
+
+    def test_numeric_with_yn_binary_still_invalid(self):
+        with pytest.raises(ValidationError, match="requires numeric_score"):
+            EvaluationSection.model_validate({
+                "section_id": "human_review_required", "section_number": 9,
+                "score_type": "manual_numeric", "score_source": "manual",
+                "binary_value": "Y",  # only 'NA' is legal on numeric rows
+            })
+
+    def test_numeric_na_alongside_score_invalid(self):
+        with pytest.raises(ValidationError, match="requires numeric_score"):
+            EvaluationSection.model_validate({
+                "section_id": "human_review_required", "section_number": 9,
+                "score_type": "manual_numeric", "score_source": "manual",
+                "numeric_score": 3, "binary_value": "NA",
+            })
+
 
 # ---------------------------------------------------------------------------
 # AssessmentSection, ModelsUsed, AnnotatedTranscript, RecordingUrls
