@@ -41,20 +41,23 @@ from backend.services.rule_engine import evaluate_formula  # noqa: E402
 
 _REPO_ROOT = _AI_SCORING.parent.parent
 
-# CSV column -> legacy section_id (the v0_sheet formula keys / v1 rubric ids).
+# CSV column -> section_id, using the archived member_support_v1 rubric ids
+# (migration 010 seed) — the v0_sheet formula keys match these so the
+# §3.19.3 cross-check holds for backfilled rows. NOTE: two differ from the
+# sheet-era history_ids (identity_validation, efficiency).
 MS_SECTIONS = {
     "Greeting": "greeting",
-    "Caller Identity Validation": "identity_validation",
+    "Caller Identity Validation": "caller_identity_validation",
     "Purpose of the Call": "purpose_of_call",
     "Matching the Moment": "matching_the_moment",
     "Process Adherence": "process_adherence",
     "Call Resolution": "call_resolution",
     "Communication": "communication",
-    "Efficiency & Call Handling": "efficiency",
+    "Efficiency & Call Handling": "efficiency_call_handling",
     "Documentation": "documentation",
     "Customer Resolution Indicator": "customer_resolution_indicator",
 }
-MS_BINARY = {"identity_validation", "customer_resolution_indicator"}
+MS_BINARY = {"caller_identity_validation", "customer_resolution_indicator"}
 
 BINARY_VOCAB = {"Y": "Y", "Yes": "Y", "N": "N", "No": "N", "Not Applicable": "NA", "NA": "NA"}
 

@@ -1,5 +1,7 @@
 """FastAPI application entry point."""
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
@@ -12,6 +14,7 @@ import os
 _env_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(_env_path)
 
+from backend.services.version_ship import run_startup_ship
 from backend.routes.scoring import router as scoring_router
 from backend.routes.dashboard import router as dashboard_router
 from backend.routes.team import router as team_router
@@ -21,10 +24,24 @@ from backend.routes.events import router as events_router
 from backend.middleware.auth import AUTH_DEPENDENCY, TEAM_AUTH_DEPENDENCY
 from backend.middleware.audit import AuditLogMiddleware
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # §3.12 formula-version ship: validate config/scoring/*/overall_formula.json
+    # (always — formula bugs are startup failures) and archive new versions in
+    # qa.formula_versions when a DB is configured. "Drop a revised JSON +
+    # restart" is the whole ship ceremony; see services/version_ship.py.
+    await run_startup_ship(
+        os.environ.get("DATABASE_URL"),
+        strict=os.environ.get("QA_VERSION_SHIP_STRICT", "") == "1",
+    )
+    yield
+
+
 app = FastAPI(
     title="Landing QA Scoring API",
     description="AI-powered call center QA scoring pipeline",
     version="1.2.0",
+    lifespan=_lifespan,
 )
 
 _allowed_origins = [

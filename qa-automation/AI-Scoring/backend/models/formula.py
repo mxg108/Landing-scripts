@@ -483,13 +483,14 @@ class ScoringPrompt(BaseModel):
 
     system_prompt_template: str
     confidence_levels_note: str
-    sop_sections: list[str] = Field(default_factory=list)
-    """Section ids (not numbers) that need SOP context in the prompt.
+    sop_sections: list[Union[str, int]] = Field(default_factory=list)
+    """Section ids that need SOP context in the prompt.
 
     §3.19.1 validation: every id must exist in Rubric.sections[].id.
-    Historical note: `team_config.ScoringPromptConfig` accepted
-    section_number ints; the archived rubric_json shape (§3.19.1) uses ids
-    for stability across renumbering.
+    Ints are accepted as legacy section_number references because the
+    migration-010 seed archived them that way (e.g. member_support_v1 has
+    `[5, 6]`) and archived rubric_json is immutable — Rubric normalizes
+    them to ids at parse time. New content should always use ids.
     """
     long_call_focus_sections: list[str] = Field(default_factory=list)
     audio_dependent_sections: list[str] = Field(default_factory=list)
@@ -514,6 +515,25 @@ class Rubric(BaseModel):
             raise ValueError(
                 f"rubric {self.rubric_version!r}: duplicate section ids {dupes}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _normalize_legacy_sop_section_numbers(self) -> "Rubric":
+        """Archived pre-v2 rubrics reference sop_sections by section_number
+        (ints). Normalize to ids so downstream consumers see one shape."""
+        if any(isinstance(i, int) for i in self.scoring_prompt.sop_sections):
+            by_number = {s.section_number: s.id for s in self.sections}
+            unknown = [i for i in self.scoring_prompt.sop_sections
+                       if isinstance(i, int) and i not in by_number]
+            if unknown:
+                raise ValueError(
+                    f"rubric {self.rubric_version!r}: sop_sections references "
+                    f"unknown section numbers {unknown}"
+                )
+            self.scoring_prompt.sop_sections = [
+                by_number[i] if isinstance(i, int) else i
+                for i in self.scoring_prompt.sop_sections
+            ]
         return self
 
     @model_validator(mode="after")

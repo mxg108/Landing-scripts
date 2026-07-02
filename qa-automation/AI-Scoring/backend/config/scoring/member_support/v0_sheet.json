@@ -10,18 +10,18 @@
   },
   "sections": [
     { "key": "greeting",                      "label": "Greeting",                      "score_type": "rating_1_5",   "weight": 0.0,                "trigger": null },
-    { "key": "identity_validation",           "label": "Caller Identity Validation",    "score_type": "binary_yn_na", "weight": 0.0,                "trigger": null },
+    { "key": "caller_identity_validation",    "label": "Caller Identity Validation",    "score_type": "binary_yn_na", "weight": 0.0,                "trigger": null },
     { "key": "purpose_of_call",               "label": "Purpose of the Call",           "score_type": "rating_1_5",   "weight": 8.333333333333334,  "trigger": null },
     { "key": "matching_the_moment",           "label": "Matching the Moment",           "score_type": "rating_1_5",   "weight": 0.0,                "trigger": null },
     { "key": "process_adherence",             "label": "Process Adherence",             "score_type": "rating_1_5",   "weight": 0.0,                "trigger": null },
     { "key": "call_resolution",               "label": "Call Resolution",               "score_type": "rating_1_5",   "weight": 33.333333333333336, "trigger": null },
     { "key": "communication",                 "label": "Communication",                 "score_type": "rating_1_5",   "weight": 16.666666666666668, "trigger": null },
-    { "key": "efficiency",                    "label": "Efficiency & Call Handling",    "score_type": "rating_1_5",   "weight": 16.666666666666668, "trigger": null },
+    { "key": "efficiency_call_handling",      "label": "Efficiency & Call Handling",    "score_type": "rating_1_5",   "weight": 16.666666666666668, "trigger": null },
     { "key": "documentation",                 "label": "Documentation",                 "score_type": "rating_1_5",   "weight": 16.666666666666668, "trigger": null },
     { "key": "customer_resolution_indicator", "label": "Customer Resolution Indicator", "score_type": "binary_yn_na", "weight": 8.333333333333334,  "trigger": null }
   ],
   "rules": [
-    { "id": "civ_na_redistribute", "type": "na_redistribution", "enabled": true, "when": { "section": "identity_validation", "equals": "NA" },           "mode": "proportional", "targets": "remaining", "note": "no-op today (weight 0) — kept so the archived formula states NA policy for every NA-able section" },
+    { "id": "civ_na_redistribute", "type": "na_redistribution", "enabled": true, "when": { "section": "caller_identity_validation", "equals": "NA" },   "mode": "proportional", "targets": "remaining", "note": "no-op today (weight 0) — kept so the archived formula states NA policy for every NA-able section" },
     { "id": "cri_na_redistribute", "type": "na_redistribution", "enabled": true, "when": { "section": "customer_resolution_indicator", "equals": "NA" }, "mode": "proportional", "targets": "remaining" }
   ],
   "evaluation_order": [

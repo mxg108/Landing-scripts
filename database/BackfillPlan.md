@@ -105,7 +105,7 @@ Target rows: one `qa.evaluations` + 10 `qa.evaluation_sections` per CSV row.
 | — | `evaluations.state = 'finalized'` | seed rows are settled history; CHECKs need `approved_at`/`finalized_at` + `overall_score` — all satisfied |
 | — | `evaluations.source` | `Source='ai'` → `ai_reviewed` (AI-drafted, analyst-approved — the CHECK's vocabulary); blank → `manual`. Confirm against what live Stage 2 stamps at dual-write time. |
 | — | `evaluations.models_used` | AI era: `{"text":{"provider":"gemini","model":"gemini-2.5-flash"}}`; manual era: `{"text":{"provider":"human","model":"human_brain"}}` (§8 D4) |
-| 10 section scores | `evaluation_sections` rows | legacy `history_id`s as `section_id` (incl. `documentation`) — §3.6 v1.2 |
+| 10 section scores | `evaluation_sections` rows | `section_id` = the **archived `member_support_v1` rubric ids** (migration 010 seed): `caller_identity_validation`, `efficiency_call_handling`, `documentation`, … — not the sheet-era history_ids, so the §3.19.4 rubric pinning holds — §3.6 v1.2 |
 | 10 reasonings | `evaluation_sections.reasoning` | AI era only |
 | 10 confidences | `evaluation_sections.confidence` | normalized to `HIGH` etc. |
 | Key Strengths / Opportunities | `evaluations.key_strengths` / `.opportunities` | |
