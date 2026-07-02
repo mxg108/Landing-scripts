@@ -1,0 +1,829 @@
+{
+  "formula_id": "member_support_v0_sheet",
+  "source": "Analyst_History export (BackfillPlan.md \u00a76); anonymized",
+  "fixtures": [
+    {
+      "label": "me-0001",
+      "era": "manual",
+      "year_month": "2025-02",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 3,
+        "matching_the_moment": 3,
+        "process_adherence": 5,
+        "call_resolution": 5,
+        "communication": 4,
+        "efficiency": 2,
+        "documentation": 3,
+        "customer_resolution_indicator": "Y"
+      },
+      "sheet_overall": 77,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0002",
+      "era": "manual",
+      "year_month": "2025-02",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "N",
+        "purpose_of_call": 1,
+        "matching_the_moment": 3,
+        "process_adherence": 1,
+        "call_resolution": 1,
+        "communication": 1,
+        "efficiency": 1,
+        "documentation": 1,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 18,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0003",
+      "era": "manual",
+      "year_month": "2025-02",
+      "answers": {
+        "greeting": 4,
+        "identity_validation": "Y",
+        "purpose_of_call": 4,
+        "matching_the_moment": 3,
+        "process_adherence": 2,
+        "call_resolution": 2,
+        "communication": 3,
+        "efficiency": 4,
+        "documentation": 2,
+        "customer_resolution_indicator": "Y"
+      },
+      "sheet_overall": 58,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0004",
+      "era": "manual",
+      "year_month": "2025-02",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 2,
+        "matching_the_moment": 1,
+        "process_adherence": 1,
+        "call_resolution": 1,
+        "communication": 1,
+        "efficiency": 1,
+        "documentation": 1,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 20,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0005",
+      "era": "manual",
+      "year_month": "2025-04",
+      "answers": {
+        "greeting": 4,
+        "identity_validation": "Y",
+        "purpose_of_call": 3,
+        "matching_the_moment": 2,
+        "process_adherence": 4,
+        "call_resolution": 5,
+        "communication": 3,
+        "efficiency": 5,
+        "documentation": 1,
+        "customer_resolution_indicator": "Y"
+      },
+      "sheet_overall": 77,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0006",
+      "era": "manual",
+      "year_month": "2025-06",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 5,
+        "matching_the_moment": 4,
+        "process_adherence": 4,
+        "call_resolution": 4,
+        "communication": 4,
+        "efficiency": 5,
+        "documentation": 5,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 82,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0007",
+      "era": "manual",
+      "year_month": "2025-06",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 3,
+        "matching_the_moment": 1,
+        "process_adherence": 3,
+        "call_resolution": 1,
+        "communication": 1,
+        "efficiency": 2,
+        "documentation": 2,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 28,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0008",
+      "era": "manual",
+      "year_month": "2025-06",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 5,
+        "matching_the_moment": 5,
+        "process_adherence": 5,
+        "call_resolution": 5,
+        "communication": 5,
+        "efficiency": 4,
+        "documentation": 5,
+        "customer_resolution_indicator": "Y"
+      },
+      "sheet_overall": 97,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0009",
+      "era": "manual",
+      "year_month": "2025-06",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 5,
+        "matching_the_moment": 4,
+        "process_adherence": 5,
+        "call_resolution": 5,
+        "communication": 5,
+        "efficiency": 5,
+        "documentation": 5,
+        "customer_resolution_indicator": "Y"
+      },
+      "sheet_overall": 100,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0010",
+      "era": "manual",
+      "year_month": "2025-11",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 5,
+        "matching_the_moment": 5,
+        "process_adherence": 5,
+        "call_resolution": 5,
+        "communication": 5,
+        "efficiency": 5,
+        "documentation": 5,
+        "customer_resolution_indicator": "Y"
+      },
+      "sheet_overall": 100,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0011",
+      "era": "manual",
+      "year_month": "2026-03",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "N",
+        "purpose_of_call": 5,
+        "matching_the_moment": 5,
+        "process_adherence": 5,
+        "call_resolution": 5,
+        "communication": 1,
+        "efficiency": 1,
+        "documentation": 1,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 52,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0012",
+      "era": "ai",
+      "year_month": "2026-03",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 2,
+        "matching_the_moment": 3,
+        "process_adherence": 3,
+        "call_resolution": 3,
+        "communication": 4,
+        "efficiency": 5,
+        "documentation": 1,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 57,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0013",
+      "era": "ai",
+      "year_month": "2026-03",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 4,
+        "matching_the_moment": 4,
+        "process_adherence": 3,
+        "call_resolution": 3,
+        "communication": 4,
+        "efficiency": 2,
+        "documentation": 1,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 50,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0014",
+      "era": "ai",
+      "year_month": "2026-04",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 5,
+        "matching_the_moment": 5,
+        "process_adherence": 5,
+        "call_resolution": 5,
+        "communication": 5,
+        "efficiency": 5,
+        "documentation": 5,
+        "customer_resolution_indicator": "Y"
+      },
+      "sheet_overall": 100,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0015",
+      "era": "ai",
+      "year_month": "2026-04",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 5,
+        "matching_the_moment": 5,
+        "process_adherence": 4,
+        "call_resolution": 5,
+        "communication": 5,
+        "efficiency": 5,
+        "documentation": 5,
+        "customer_resolution_indicator": "Y"
+      },
+      "sheet_overall": 100,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0016",
+      "era": "ai",
+      "year_month": "2026-04",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 4,
+        "matching_the_moment": 5,
+        "process_adherence": 5,
+        "call_resolution": 5,
+        "communication": 5,
+        "efficiency": 3,
+        "documentation": 4,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 80,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0017",
+      "era": "ai",
+      "year_month": "2026-04",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 5,
+        "matching_the_moment": 3,
+        "process_adherence": 4,
+        "call_resolution": 4,
+        "communication": 4,
+        "efficiency": 4,
+        "documentation": 5,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 78,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0018",
+      "era": "ai",
+      "year_month": "2026-05",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 3,
+        "matching_the_moment": 2,
+        "process_adherence": 2,
+        "call_resolution": 1,
+        "communication": 2,
+        "efficiency": 1,
+        "documentation": 1,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 25,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0019",
+      "era": "ai",
+      "year_month": "2026-05",
+      "answers": {
+        "greeting": 4,
+        "identity_validation": "N",
+        "purpose_of_call": 4,
+        "matching_the_moment": 3,
+        "process_adherence": 1,
+        "call_resolution": 1,
+        "communication": 2,
+        "efficiency": 2,
+        "documentation": 3,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 37,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0020",
+      "era": "ai",
+      "year_month": "2026-05",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 5,
+        "matching_the_moment": 5,
+        "process_adherence": 4,
+        "call_resolution": 4,
+        "communication": 4,
+        "efficiency": 2,
+        "documentation": 3,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 65,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0021",
+      "era": "ai",
+      "year_month": "2026-05",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "NA",
+        "purpose_of_call": 5,
+        "matching_the_moment": 4,
+        "process_adherence": 5,
+        "call_resolution": 5,
+        "communication": 5,
+        "efficiency": 5,
+        "documentation": 5,
+        "customer_resolution_indicator": "Y"
+      },
+      "sheet_overall": 100,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0022",
+      "era": "ai",
+      "year_month": "2026-05",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "NA",
+        "purpose_of_call": 5,
+        "matching_the_moment": 5,
+        "process_adherence": 5,
+        "call_resolution": 5,
+        "communication": 5,
+        "efficiency": 5,
+        "documentation": 5,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 92,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0023",
+      "era": "ai",
+      "year_month": "2026-05",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 5,
+        "matching_the_moment": 4,
+        "process_adherence": 1,
+        "call_resolution": 1,
+        "communication": 5,
+        "efficiency": 2,
+        "documentation": 1,
+        "customer_resolution_indicator": "Y"
+      },
+      "sheet_overall": 50,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0024",
+      "era": "ai",
+      "year_month": "2026-05",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "NA",
+        "purpose_of_call": 2,
+        "matching_the_moment": 2,
+        "process_adherence": 1,
+        "call_resolution": 1,
+        "communication": 1,
+        "efficiency": 3,
+        "documentation": 2,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 30,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0025",
+      "era": "ai",
+      "year_month": "2026-05",
+      "answers": {
+        "greeting": 3,
+        "identity_validation": "Y",
+        "purpose_of_call": 3,
+        "matching_the_moment": 4,
+        "process_adherence": 4,
+        "call_resolution": 3,
+        "communication": 4,
+        "efficiency": 5,
+        "documentation": 5,
+        "customer_resolution_indicator": "NA"
+      },
+      "sheet_overall": 78,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0026",
+      "era": "ai",
+      "year_month": "2026-05",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "NA",
+        "purpose_of_call": 5,
+        "matching_the_moment": 4,
+        "process_adherence": 4,
+        "call_resolution": 5,
+        "communication": 5,
+        "efficiency": 5,
+        "documentation": 5,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 92,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0027",
+      "era": "ai",
+      "year_month": "2026-05",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 4,
+        "matching_the_moment": 5,
+        "process_adherence": 4,
+        "call_resolution": 4,
+        "communication": 5,
+        "efficiency": 5,
+        "documentation": 4,
+        "customer_resolution_indicator": "Y"
+      },
+      "sheet_overall": 88,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0028",
+      "era": "ai",
+      "year_month": "2026-06",
+      "answers": {
+        "greeting": 4,
+        "identity_validation": "NA",
+        "purpose_of_call": 5,
+        "matching_the_moment": 2,
+        "process_adherence": 1,
+        "call_resolution": 1,
+        "communication": 2,
+        "efficiency": 2,
+        "documentation": 3,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 38,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0029",
+      "era": "ai",
+      "year_month": "2026-06",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "NA",
+        "purpose_of_call": 3,
+        "matching_the_moment": 3,
+        "process_adherence": 4,
+        "call_resolution": 4,
+        "communication": 3,
+        "efficiency": 2,
+        "documentation": 1,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 52,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0030",
+      "era": "ai",
+      "year_month": "2026-06",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 5,
+        "matching_the_moment": 5,
+        "process_adherence": 4,
+        "call_resolution": 4,
+        "communication": 5,
+        "efficiency": 5,
+        "documentation": 5,
+        "customer_resolution_indicator": "Y"
+      },
+      "sheet_overall": 93,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0031",
+      "era": "ai",
+      "year_month": "2026-06",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "NA",
+        "purpose_of_call": 5,
+        "matching_the_moment": 5,
+        "process_adherence": 2,
+        "call_resolution": 1,
+        "communication": 5,
+        "efficiency": 1,
+        "documentation": 1,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 38,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0032",
+      "era": "ai",
+      "year_month": "2026-06",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "NA",
+        "purpose_of_call": 4,
+        "matching_the_moment": 3,
+        "process_adherence": 4,
+        "call_resolution": 4,
+        "communication": 4,
+        "efficiency": 3,
+        "documentation": 2,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 63,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0033",
+      "era": "ai",
+      "year_month": "2026-06",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "NA",
+        "purpose_of_call": 3,
+        "matching_the_moment": 4,
+        "process_adherence": 4,
+        "call_resolution": 3,
+        "communication": 4,
+        "efficiency": 3,
+        "documentation": 1,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 52,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0034",
+      "era": "ai",
+      "year_month": "2026-06",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 5,
+        "matching_the_moment": 5,
+        "process_adherence": 4,
+        "call_resolution": 5,
+        "communication": 5,
+        "efficiency": 5,
+        "documentation": 5,
+        "customer_resolution_indicator": "Y"
+      },
+      "sheet_overall": 100,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0035",
+      "era": "ai",
+      "year_month": "2026-06",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 2,
+        "matching_the_moment": 2,
+        "process_adherence": 2,
+        "call_resolution": 1,
+        "communication": 2,
+        "efficiency": 2,
+        "documentation": 3,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 33,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0036",
+      "era": "ai",
+      "year_month": "2026-06",
+      "answers": {
+        "greeting": 3,
+        "identity_validation": "N",
+        "purpose_of_call": 4,
+        "matching_the_moment": 4,
+        "process_adherence": 5,
+        "call_resolution": 4,
+        "communication": 5,
+        "efficiency": 5,
+        "documentation": 5,
+        "customer_resolution_indicator": "NA"
+      },
+      "sheet_overall": 91,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0037",
+      "era": "ai",
+      "year_month": "2026-06",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "NA",
+        "purpose_of_call": 5,
+        "matching_the_moment": 5,
+        "process_adherence": 2,
+        "call_resolution": 2,
+        "communication": 5,
+        "efficiency": 4,
+        "documentation": 1,
+        "customer_resolution_indicator": "Y"
+      },
+      "sheet_overall": 63,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0038",
+      "era": "ai",
+      "year_month": "2026-06",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "NA",
+        "purpose_of_call": 5,
+        "matching_the_moment": 5,
+        "process_adherence": 5,
+        "call_resolution": 5,
+        "communication": 5,
+        "efficiency": 5,
+        "documentation": 5,
+        "customer_resolution_indicator": "Y"
+      },
+      "sheet_overall": 100,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0039",
+      "era": "ai",
+      "year_month": "2026-06",
+      "answers": {
+        "greeting": 3,
+        "identity_validation": "N",
+        "purpose_of_call": 4,
+        "matching_the_moment": 3,
+        "process_adherence": 4,
+        "call_resolution": 4,
+        "communication": 3,
+        "efficiency": 4,
+        "documentation": 1,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 60,
+      "expect_exact": true
+    },
+    {
+      "label": "me-0040",
+      "era": "ai",
+      "year_month": "2026-06",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "N",
+        "purpose_of_call": 5,
+        "matching_the_moment": 5,
+        "process_adherence": 4,
+        "call_resolution": 5,
+        "communication": 5,
+        "efficiency": 5,
+        "documentation": 5,
+        "customer_resolution_indicator": "NA"
+      },
+      "sheet_overall": 100,
+      "expect_exact": true
+    },
+    {
+      "label": "me-edit-01",
+      "era": "ai",
+      "year_month": "2026-04",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 4,
+        "matching_the_moment": 4,
+        "process_adherence": 5,
+        "call_resolution": 4,
+        "communication": 4,
+        "efficiency": 3,
+        "documentation": 5,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 82,
+      "engine_overall": 73,
+      "expect_exact": false,
+      "note": "sheet overall hand-edited \u2014 inconsistent with the reconstructed formula (BackfillPlan.md \u00a74)"
+    },
+    {
+      "label": "me-edit-02",
+      "era": "ai",
+      "year_month": "2026-04",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "Y",
+        "purpose_of_call": 4,
+        "matching_the_moment": 3,
+        "process_adherence": 3,
+        "call_resolution": 3,
+        "communication": 4,
+        "efficiency": 4,
+        "documentation": 5,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 76,
+      "engine_overall": 70,
+      "expect_exact": false,
+      "note": "sheet overall hand-edited \u2014 inconsistent with the reconstructed formula (BackfillPlan.md \u00a74)"
+    },
+    {
+      "label": "me-edit-03",
+      "era": "ai",
+      "year_month": "2026-05",
+      "answers": {
+        "greeting": 5,
+        "identity_validation": "N",
+        "purpose_of_call": 5,
+        "matching_the_moment": 4,
+        "process_adherence": 4,
+        "call_resolution": 4,
+        "communication": 5,
+        "efficiency": 5,
+        "documentation": 5,
+        "customer_resolution_indicator": "N"
+      },
+      "sheet_overall": 93,
+      "engine_overall": 85,
+      "expect_exact": false,
+      "note": "sheet overall hand-edited \u2014 inconsistent with the reconstructed formula (BackfillPlan.md \u00a74)"
+    }
+  ]
+}
