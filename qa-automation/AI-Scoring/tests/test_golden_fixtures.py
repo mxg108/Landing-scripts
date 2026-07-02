@@ -18,7 +18,12 @@ from pathlib import Path
 
 import pytest
 
-from backend.models.formula import WEIGHTED_SUM, Formula
+from backend.models.formula import (
+    WEIGHTED_SUM,
+    Formula,
+    Rubric,
+    validate_formula_against_rubric,
+)
 from backend.services.rule_engine import evaluate_formula
 
 _AI_SCORING = Path(__file__).resolve().parent.parent
@@ -51,9 +56,24 @@ class TestV0SheetFormula:
     def test_four_sections_carry_zero_weight(self, v0_formula):
         zeros = {s.key for s in v0_formula.sections if s.weight == 0.0}
         assert zeros == {
-            "greeting", "identity_validation",
+            "greeting", "caller_identity_validation",
             "matching_the_moment", "process_adherence",
         }
+
+    def test_cross_validates_against_the_archived_v1_rubric(self, v0_formula):
+        """v0_sheet pins rubric_version=member_support_v1 — the migration-010
+        seed already live in qa.rubric_versions. The §3.19.3 check must hold
+        for that exact content or compute_overall_score() rejects every
+        backfilled row. Parses the rubric out of the migration SQL so drift
+        between repo formula and shipped seed fails here, not in production."""
+        sql = (_AI_SCORING.parent.parent / "database" / "migrations"
+               / "010_rubric_versioning.sql").read_text(encoding="utf-8")
+        marker = "$rubric_ms_v1$"
+        start = sql.index(marker) + len(marker)
+        rubric_json = sql[start: sql.index(marker, start)].strip()
+        rubric = Rubric.model_validate(json.loads(rubric_json))
+        assert rubric.rubric_version == v0_formula.rubric_version
+        validate_formula_against_rubric(v0_formula, rubric)  # raises on drift
 
     def test_twelfth_weights(self, v0_formula):
         w = {s.key: s.weight for s in v0_formula.sections}
