@@ -35,6 +35,9 @@ async def _lifespan(app: FastAPI):
         strict=os.environ.get("QA_VERSION_SHIP_STRICT", "") == "1",
     )
     yield
+    # Wave 2 Phase 4a: dual-write pool (lazy-created on first Stage 1 write).
+    from backend.services.eval_store import close_pool
+    await close_pool()
 
 
 app = FastAPI(

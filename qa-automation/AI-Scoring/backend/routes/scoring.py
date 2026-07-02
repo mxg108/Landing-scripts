@@ -27,6 +27,7 @@ from backend.services.history_service import (
     agent_name_for_email,
     email_in_team_mails,
 )
+from backend.services.eval_store import record_draft_evaluation
 from backend.services.event_bus import get_event_bus
 from backend.services.scoring_service import score_call
 from backend.services.sheets_service import (
@@ -301,8 +302,12 @@ async def score_single_call(
                     call_details=call_details,
                 )
             row_num = write_draft_to_fr_ai(scorecard, config)
+            # Stage 1 dual-write (Wave 2 Phase 4a) — §7.3 Phase A: never
+            # raises; Postgres failures are logged and swallowed.
+            evaluation_id = await record_draft_evaluation(scorecard, config)
             _jobs[key]["status"] = "complete"
             _jobs[key]["sheets_row"] = row_num
+            _jobs[key]["evaluation_id"] = evaluation_id
             _jobs[key]["scorecard"] = scorecard.model_dump()
         except Exception as e:
             _jobs[key]["status"] = "error"
@@ -414,8 +419,10 @@ async def score_batch(
                         duration_ms=dur,
                     )
                 row_num = write_draft_to_fr_ai(scorecard, config)
+                evaluation_id = await record_draft_evaluation(scorecard, config)
                 _jobs[k]["status"] = "complete"
                 _jobs[k]["sheets_row"] = row_num
+                _jobs[k]["evaluation_id"] = evaluation_id
                 _jobs[k]["scorecard"] = scorecard.model_dump()
             except Exception as e:
                 _jobs[k]["status"] = "error"
