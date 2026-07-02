@@ -32,3 +32,8 @@ CLAUDE.md
 # the shared/tracked policy doc; this file is the tutor-style companion that
 # lives only on the lead's machine.
 docs/git-for-the-recruit.md
+
+# Raw Analyst_History sheet exports — qa.evaluations backfill seeds. Contain
+# PII (agent/caller names, phones, Dialpad links); only derived, anonymized
+# fixtures under tests/fixtures/ are committed.
+database/analyst_history_*.csv
