@@ -59,6 +59,28 @@ _pool_lock: Optional[asyncio.Lock] = None
 
 
 # ---------------------------------------------------------------------------
+# Per-team scoring truth flag (migration 013 / CutoverDesign §4)
+# ---------------------------------------------------------------------------
+
+async def get_scoring_owner(team_id: str) -> str:
+    """'sheets' (legacy pipeline is truth) or 'postgres' (engine scores,
+    Sheets are projections). Queried per request — the flip is a one-line
+    UPDATE and must take effect without a deploy. Any failure or missing
+    DB degrades to 'sheets' (the safe, legacy mode)."""
+    try:
+        pool = await _get_pool()
+        if pool is None:
+            return "sheets"
+        owner = await pool.fetchval(
+            "SELECT scoring_owner FROM public.teams WHERE id = $1", team_id
+        )
+        return owner or "sheets"
+    except Exception:
+        logger.exception("eval_store: scoring_owner lookup failed for %s — using 'sheets'", team_id)
+        return "sheets"
+
+
+# ---------------------------------------------------------------------------
 # §3.14 human-review trigger (Wave 2 Phase 4e / CutoverDesign slice 1)
 # ---------------------------------------------------------------------------
 
@@ -195,19 +217,27 @@ def build_draft_sections(
 # ---------------------------------------------------------------------------
 
 async def record_draft_evaluation(
-    scorecard: "ScorecardWithMeta", config: "TeamConfig"
+    scorecard: "ScorecardWithMeta", config: "TeamConfig", strict: bool = False
 ) -> Optional[int]:
     """Write the Stage-1 draft to Postgres. Returns the qa.evaluations id,
-    or None when dual-write is off or anything failed (logged, swallowed)."""
+    or None when dual-write is off or anything failed (logged, swallowed).
+    `strict` is the §7.3 Phase C mode (scoring_owner='postgres'): the DB row
+    is truth, so failures raise instead."""
     try:
         pool = await _get_pool()
         if pool is None:
+            if strict:
+                raise RuntimeError(
+                    f"scoring_owner='postgres' for {config.team_id} but no DATABASE_URL"
+                )
             return None
         row = build_draft_row(scorecard, config)
         sections = build_draft_sections(scorecard, config)
         async with pool.acquire() as conn:
             return await _upsert_draft(conn, row, sections)
     except Exception:
+        if strict:
+            raise
         logger.exception(
             "eval_store: Stage 1 dual-write failed for team=%s call=%s — "
             "swallowed per §7.3 Phase A",
@@ -430,19 +460,33 @@ async def record_approval(
     overall_score_raw: Any,
     agent_email: Optional[str] = None,
     model: str = "gemini-2.5-flash",
+    strict: bool = False,
+    resolving_review: bool = False,
 ) -> Optional[int]:
-    """Record the approve transition. Never raises (§7.3 Phase A)."""
+    """Record the approve transition. Never raises (§7.3 Phase A) unless
+    `strict` (Phase C). `resolving_review` marks a §3.14 step-4 resolution:
+    the reviewer has assessed the flagged call, so the flag clears and
+    `human_review_completed_at` is stamped even if the triggering scores
+    remain in range — their judgment IS the resolution."""
     try:
         pool = await _get_pool()
         if pool is None:
+            if strict:
+                raise RuntimeError(
+                    f"scoring_owner='postgres' for {config.team_id} but no DATABASE_URL"
+                )
             return None
         sections, any_changed = build_approval_sections(
             approved_sections, draft_sections, config, model
         )
         overall = _parse_overall(overall_score_raw)
-        # §3.14 recompute at approval: analyst edits can fire or clear the flag.
+        # §3.14 recompute at approval: analyst edits can fire or clear the
+        # flag — unless the reviewer is explicitly resolving it.
         formula = _active_formula(config.team_id)
-        flagged_review = human_review_trigger_fired(formula, approved_sections)
+        flagged_review = (
+            False if resolving_review
+            else human_review_trigger_fired(formula, approved_sections)
+        )
         _shadow_engine_compare(
             formula, approved_sections, overall_score_raw, flagged_review, config.team_id
         )
@@ -471,6 +515,7 @@ async def record_approval(
                     "  state = $8, "
                     "  scoring_status = $9, "
                     "  human_review_required_at = $10, "
+                    "  human_review_completed_at = COALESCE($11, human_review_completed_at), "
                     "  approved_at = NOW(), "
                     "  finalized_at = CASE WHEN $8 = 'finalized' THEN NOW() ELSE finalized_at END "
                     "WHERE id = $1",
@@ -484,6 +529,7 @@ async def record_approval(
                     "finalized" if overall is not None else "approved",
                     "flagged_human_review" if flagged_review else "complete",
                     datetime.now(timezone.utc) if flagged_review else None,
+                    datetime.now(timezone.utc) if resolving_review else None,
                 )
                 await conn.execute(
                     "DELETE FROM qa.evaluation_sections WHERE evaluation_id = $1",
@@ -503,11 +549,77 @@ async def record_approval(
                     )
         return evaluation_id
     except Exception:
+        if strict:
+            raise
         logger.exception(
             "eval_store: approve dual-write failed for team=%s — swallowed per §7.3 Phase A",
             config.team_id,
         )
         return None
+
+
+# ---------------------------------------------------------------------------
+# Post-flip finalize — engine score + version stamping (CutoverDesign §2)
+# ---------------------------------------------------------------------------
+
+async def stamp_and_finalize(
+    evaluation_id: int,
+    config: "TeamConfig",
+    evaluator_email: str,
+) -> Any:
+    """The post-cutover Stage 2 (§3.6): resolve the team's active
+    formula/rubric versions, stamp them on the row, compute the engine
+    score, and finalize — one transaction. Always strict (Phase C): this
+    only runs when scoring_owner='postgres', where the DB row is truth.
+
+    `evaluator_email` is the analyst on a flagged-call resolution, or the
+    operator who triggered scoring on the auto-flow (the §3.4.3 CHECK
+    requires an evaluator + approved_at to leave 'draft').
+
+    Returns the ScoreComputation (engine trace included) for the caller to
+    surface/project."""
+    from backend.services.score_compute import (
+        compute_score_detail,
+        get_active_versions,
+    )
+
+    pool = await _get_pool()
+    if pool is None:
+        raise RuntimeError(
+            f"scoring_owner='postgres' for {config.team_id} but no DATABASE_URL"
+        )
+    async with pool.acquire() as conn:
+        versions = await get_active_versions(conn, config.team_id)
+        detail = await compute_score_detail(
+            conn,
+            evaluation_id,
+            formula_version=versions.formula_version,
+            rubric_version=versions.rubric_version,
+        )
+        async with conn.transaction():
+            await conn.execute(
+                "UPDATE qa.evaluations SET "
+                "  overall_score = $2, "
+                "  formula_version = $3, "
+                "  rubric_version = $4, "
+                "  evaluator_email = COALESCE(evaluator_email, $5), "
+                "  state = 'finalized', "
+                "  scoring_status = 'complete', "
+                "  approved_at = COALESCE(approved_at, NOW()), "
+                "  finalized_at = NOW() "
+                "WHERE id = $1",
+                evaluation_id,
+                detail.overall_score,
+                versions.formula_version,
+                versions.rubric_version,
+                evaluator_email,
+            )
+    logger.info(
+        "eval_store: finalized eval %s under %s/%s — engine score %s",
+        evaluation_id, versions.formula_version, versions.rubric_version,
+        detail.overall_score,
+    )
+    return detail
 
 
 # ---------------------------------------------------------------------------
@@ -530,6 +642,11 @@ async def _get_pool():
     return _pool
 
 
+async def get_pool():
+    """Public accessor for co-located DB consumers (sheets_projection)."""
+    return await _get_pool()
+
+
 async def close_pool() -> None:
     """Lifespan teardown."""
     global _pool
@@ -541,6 +658,9 @@ async def close_pool() -> None:
 __all__ = [
     "record_draft_evaluation",
     "record_approval",
+    "stamp_and_finalize",
+    "get_scoring_owner",
+    "get_pool",
     "build_draft_row",
     "build_draft_sections",
     "build_approval_sections",

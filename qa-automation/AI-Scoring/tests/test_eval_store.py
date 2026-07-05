@@ -577,3 +577,170 @@ class TestApprovalRecomputeAndShadow:
         with caplog.at_level(logging.INFO, logger="backend.services.eval_store"):
             await self._approve(ms_config, _approval_sections(ms_config))
         assert not [r for r in caplog.records if r.getMessage().startswith("shadow: team=")]
+
+
+# ---------------------------------------------------------------------------
+# scoring_owner flag + strict mode + stamp_and_finalize (cutover slice 2)
+# ---------------------------------------------------------------------------
+
+class OwnerFakePool:
+    def __init__(self, owner):
+        self.owner = owner
+
+    async def fetchval(self, query, *args):
+        assert "scoring_owner FROM public.teams" in query
+        return self.owner
+
+
+class TestScoringOwner:
+    pytestmark = pytest.mark.asyncio
+
+    async def test_no_pool_defaults_to_sheets(self, monkeypatch):
+        async def no_pool():
+            return None
+        monkeypatch.setattr(eval_store, "_get_pool", no_pool)
+        assert await eval_store.get_scoring_owner("member_support") == "sheets"
+
+    async def test_reads_flag(self, monkeypatch):
+        async def pool():
+            return OwnerFakePool("postgres")
+        monkeypatch.setattr(eval_store, "_get_pool", pool)
+        assert await eval_store.get_scoring_owner("member_support") == "postgres"
+
+    async def test_lookup_failure_degrades_to_sheets(self, monkeypatch):
+        async def exploding():
+            raise ConnectionError("pg down")
+        monkeypatch.setattr(eval_store, "_get_pool", exploding)
+        assert await eval_store.get_scoring_owner("member_support") == "sheets"
+
+
+class TestStrictMode:
+    pytestmark = pytest.mark.asyncio
+
+    async def test_draft_strict_raises_without_dsn(self, ms_config, monkeypatch):
+        async def no_pool():
+            return None
+        monkeypatch.setattr(eval_store, "_get_pool", no_pool)
+        with pytest.raises(RuntimeError, match="no DATABASE_URL"):
+            await record_draft_evaluation(_scorecard(ms_config), ms_config, strict=True)
+
+    async def test_draft_strict_reraises_db_errors(self, ms_config, monkeypatch):
+        async def exploding():
+            raise ConnectionError("pg down")
+        monkeypatch.setattr(eval_store, "_get_pool", exploding)
+        with pytest.raises(ConnectionError):
+            await record_draft_evaluation(_scorecard(ms_config), ms_config, strict=True)
+
+    async def test_approval_strict_reraises(self, ms_config, monkeypatch):
+        async def exploding():
+            raise ConnectionError("pg down")
+        monkeypatch.setattr(eval_store, "_get_pool", exploding)
+        with pytest.raises(ConnectionError):
+            await eval_store.record_approval(
+                ms_config, evaluation_id=1, dialpad_link=None,
+                evaluator_email="x@y.com", approved_sections=[],
+                draft_sections=[], key_strengths="", opportunities="",
+                overall_score_raw=None, strict=True,
+            )
+
+
+class TestResolvingReview:
+    pytestmark = pytest.mark.asyncio
+
+    @pytest.fixture(autouse=True)
+    def _no_real_pool(self, monkeypatch):
+        self.conn = ApprovalFakeConn()
+
+        async def fake_get_pool():
+            return FakePool(self.conn)
+
+        monkeypatch.setattr(eval_store, "_get_pool", fake_get_pool)
+
+    async def test_reviewer_resolution_clears_flag_despite_low_scores(self, ms_config):
+        """§3.14 step 4: the reviewer's judgment IS the resolution — the
+        flag clears and completed_at stamps even with process still at 2."""
+        sections = _approval_sections(
+            ms_config,
+            process_adherence=_ai_section("process_adherence", "Process", score=2),
+        )
+        draft = [s.model_dump() for s in _scorecard(ms_config).sections]
+        await eval_store.record_approval(
+            ms_config, evaluation_id=101, dialpad_link=None,
+            evaluator_email="lead@landing.com", approved_sections=sections,
+            draft_sections=draft, key_strengths="", opportunities="",
+            overall_score_raw=None, resolving_review=True,
+        )
+        (args,) = self.conn.eval_updates
+        assert args[8] == "complete"          # flag cleared
+        assert args[9] is None                # required_at cleared
+        assert args[10] is not None           # completed_at stamped
+
+
+class FinalizeFakeConn:
+    def __init__(self):
+        self.executed: list[tuple] = []
+
+    @asynccontextmanager
+    async def transaction(self):
+        yield
+
+    async def execute(self, query, *args):
+        assert query.startswith("UPDATE qa.evaluations")
+        self.executed.append(args)
+
+
+class FinalizePool:
+    def __init__(self, conn):
+        self.conn = conn
+
+    @asynccontextmanager
+    async def acquire(self):
+        yield self.conn
+
+
+class TestStampAndFinalize:
+    pytestmark = pytest.mark.asyncio
+
+    async def test_stamps_versions_and_engine_score(self, ms_config, monkeypatch):
+        from decimal import Decimal
+        from backend.services import score_compute
+
+        conn = FinalizeFakeConn()
+
+        async def pool():
+            return FinalizePool(conn)
+
+        async def fake_versions(c, team_id):
+            assert team_id == "member_support"
+            return score_compute.ActiveVersions(
+                formula_version="member_support_v3", rubric_version="member_support_v2"
+            )
+
+        class FakeDetail:
+            overall_score = Decimal("91.7")
+
+        async def fake_detail(c, evaluation_id, formula_version=None, rubric_version=None, signals=None):
+            assert evaluation_id == 55
+            assert formula_version == "member_support_v3"
+            return FakeDetail()
+
+        monkeypatch.setattr(eval_store, "_get_pool", pool)
+        monkeypatch.setattr(score_compute, "get_active_versions", fake_versions)
+        monkeypatch.setattr(score_compute, "compute_score_detail", fake_detail)
+
+        detail = await eval_store.stamp_and_finalize(55, ms_config, "op@landing.com")
+        assert detail.overall_score == Decimal("91.7")
+        (args,) = conn.executed
+        # (id, overall, formula_version, rubric_version, evaluator)
+        assert args[0] == 55
+        assert args[1] == Decimal("91.7")
+        assert args[2] == "member_support_v3"
+        assert args[3] == "member_support_v2"
+        assert args[4] == "op@landing.com"
+
+    async def test_raises_without_dsn(self, ms_config, monkeypatch):
+        async def no_pool():
+            return None
+        monkeypatch.setattr(eval_store, "_get_pool", no_pool)
+        with pytest.raises(RuntimeError, match="no DATABASE_URL"):
+            await eval_store.stamp_and_finalize(1, ms_config, "x@y.com")

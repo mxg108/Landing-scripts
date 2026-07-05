@@ -2,7 +2,7 @@
  * QA Automation — Config (auto-generated)
  *
  * Team: Member Support (member_support)
- * Rubric version: 2.0
+ * Rubric version: member_support_v2
  *
  * AUTO-GENERATED — DO NOT EDIT.
  * Run: python qa-automation/scripts/build_config.py member_support
@@ -19,7 +19,7 @@ CONFIG.MAILS_SHEET_NAME   = "Mails";
 // ── Derived row layout (from HistoryLayout(N)) ───────────────
 CONFIG.HISTORY_LAYOUT = {
   N_SECTIONS:         10,
-  TOTAL_WIDTH:        42,
+  TOTAL_WIDTH:        43,
   COL_AGENT_NAME:     0,
   COL_AGENT_EMAIL:    1,
   COL_TIMESTAMP:      2,
@@ -45,35 +45,35 @@ CONFIG.HISTORY_LAYOUT = {
 // `historyIdx` is the position in the derived layout's score range.
 CONFIG.NUMERIC_CATEGORIES = [
   { key: "greeting", label: "Greeting", historyIdx: 0 },
-  { key: "purpose_of_call", label: "Purpose of the Call", historyIdx: 2 },
-  { key: "matching_the_moment", label: "Matching the Moment", historyIdx: 3 },
+  { key: "purpose", label: "Purpose of the Call", historyIdx: 2 },
+  { key: "matching", label: "Matching the Moment", historyIdx: 3 },
   { key: "process_adherence", label: "Process Adherence", historyIdx: 4 },
   { key: "call_resolution", label: "Call Resolution", historyIdx: 5 },
-  { key: "communication", label: "Communication", historyIdx: 6 },
-  { key: "efficiency_call_handling", label: "Efficiency & Call Handling", historyIdx: 7 },
-  { key: "documentation", label: "Documentation", historyIdx: 8 },
+  { key: "comms", label: "Communication", historyIdx: 6 },
+  { key: "efficiency", label: "Efficiency & Call Handling", historyIdx: 7 },
+  { key: "human_review_required", label: "Human Review Required", historyIdx: 8 },
 ];
 
 CONFIG.BINARY_CATEGORIES = [
-  { key: "caller_identity_validation", label: "Caller Identity Validation", historyIdx: 1 },
-  { key: "customer_resolution_indicator", label: "Customer Resolution Indicator", historyIdx: 9 },
+  { key: "caller_id", label: "Caller ID", historyIdx: 1 },
+  { key: "cri", label: "Customer Resolution Indicator", historyIdx: 9 },
 ];
 
 CONFIG.MANUAL_CATEGORIES = [
-  { key: "documentation", label: "Documentation", historyIdx: 8 },
+  { key: "human_review_required", label: "Human Review Required", historyIdx: 8 },
 ];
 
 // ── Section labels + rubric prompts ──────────────────────────
 CONFIG.SECTION_LABELS = {
   "greeting": "Greeting",
-  "identity_validation": "Caller Identity Validation",
+  "identity_validation": "Caller ID",
   "purpose_of_call": "Purpose of the Call",
   "matching_the_moment": "Matching the Moment",
   "process_adherence": "Process Adherence",
   "call_resolution": "Call Resolution",
   "communication": "Communication",
   "efficiency": "Efficiency & Call Handling",
-  "documentation": "Documentation",
+  "human_review_required": "Human Review Required",
   "customer_resolution_indicator": "Customer Resolution Indicator",
 };
 
@@ -86,6 +86,6 @@ CONFIG.RUBRIC_QUESTIONS = {
   "call_resolution": "Was the issue fully resolved or clear resolution path provided?",
   "communication": "Clear, concise, helpful information?",
   "efficiency": "Handled efficiently without unnecessary delays?",
-  "documentation": "",
+  "human_review_required": "",
   "customer_resolution_indicator": "Did agent summarize result/actions AND ask if there is anything else they can do?",
 };

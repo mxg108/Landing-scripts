@@ -150,6 +150,8 @@
       font-size: 0.7rem; color: var(--muted); display: inline-block; margin-left: 6px;
     }
     .score-status.complete { color: #137333; }
+    .score-status.flagged { color: #c5221f; font-weight: 600; }
+    .score-status.flagged a.editor-flagged { color: #c5221f; text-decoration: underline; }
     .score-status.error { color: var(--red); }
 
     /* Team-pick modal */
@@ -725,6 +727,14 @@ async function scoreCall(btn, callId) {
   pollScoreJob(targetTeam, jobId, statusEl, btn);
 }
 
+function openFlaggedEditor(url) {
+  // CutoverDesign §5: warn the operator before entering the editor.
+  alert('This call cannot be automatically scored until you review it.\n\n' +
+        'A section score triggered the human-review gate. Review the call, ' +
+        'score the Human Review section, and approve to finalize.');
+  window.open(url, '_blank');
+}
+
 function pollScoreJob(targetTeam, jobId, statusEl, btn) {
   const interval = setInterval(async () => {
     try {
@@ -733,8 +743,20 @@ function pollScoreJob(targetTeam, jobId, statusEl, btn) {
       const status = data.status || '?';
       statusEl.textContent = status;
       if (['complete', 'approved'].includes(status)) {
-        statusEl.className = 'score-status complete';
-        statusEl.innerHTML = `complete · <a href="/scorecard/${esc(targetTeam)}/${esc(jobId)}" target="_blank">Open editor</a>`;
+        const url = `/scorecard/${esc(targetTeam)}/${esc(jobId)}`;
+        if (data.scoring_status === 'flagged_human_review') {
+          // Post-cutover (CutoverDesign §5): the §3.14 trigger fired — the
+          // call cannot auto-finalize until a human reviews it.
+          statusEl.className = 'score-status flagged';
+          statusEl.innerHTML = `flagged · <a class="editor-flagged" href="#" onclick="openFlaggedEditor('${url}'); return false;">Open Editor</a>`;
+        } else if (data.state === 'finalized') {
+          // Engine-scored and finalized — the scorecard opens read-only.
+          statusEl.className = 'score-status complete';
+          statusEl.innerHTML = `scored ${data.overall_score ?? ''} · <a href="${url}" target="_blank">Open Editor</a>`;
+        } else {
+          statusEl.className = 'score-status complete';
+          statusEl.innerHTML = `complete · <a href="${url}" target="_blank">Open editor</a>`;
+        }
         clearInterval(interval);
       } else if (status === 'error') {
         statusEl.className = 'score-status error';
