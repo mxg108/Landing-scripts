@@ -217,6 +217,204 @@ async def _upsert_draft(conn: Any, row: dict[str, Any], sections: list[Evaluatio
 
 
 # ---------------------------------------------------------------------------
+# Stages 1.5 + 2 + 3 + 4 — the approve transition (Wave 2 Phase 4b)
+# ---------------------------------------------------------------------------
+#
+# The /approve endpoint runs Stage 1.5 (analyst edits) through Stage 4
+# (Analyst_History) in one request, so Postgres records the combined
+# transition once, after Stage 4 succeeds:
+#
+#   - sections replaced with the analyst-approved payload; a section whose
+#     value changed vs. the Stage-1 draft becomes score_source='manual'
+#     (no ai_provider/confidence — §3.5 says those are AI-only); unchanged
+#     sections keep their AI provenance.
+#   - evaluations: evaluator_email, approved_at, key_strengths/opportunities,
+#     agent_email when known, source ai→ai_reviewed if anything changed
+#     (§3.2 Stage 1.5), overall_score from the Stage-3 ARRAYFORMULA readback
+#     (pre-cutover truth), state='finalized' — or 'approved' when the
+#     readback produced no number (the §3.4.3 CHECK requires a score to
+#     finalize).
+#   - formula_version/rubric_version stay NULL: the readback value is the
+#     sheet's, not the engine's — stamping starts at cutover (§3.6).
+
+def build_approval_sections(
+    approved: list[Any],
+    draft_sections: list[dict[str, Any]],
+    config: "TeamConfig",
+    model: str,
+) -> tuple[list[EvaluationSection], bool]:
+    """Approved payload -> section rows + whether anything changed vs draft.
+
+    `approved` is the ApprovalRequest.sections list; `draft_sections` is the
+    Stage-1 scorecard dump (job['scorecard']['sections'])."""
+    approved_by_id = {s.id: s for s in approved}
+    draft_by_id = {s["id"]: s for s in draft_sections}
+    rows: list[EvaluationSection] = []
+    any_changed = False
+
+    for sec in config.sections_by_number:
+        if sec.auto_value is not None:
+            rows.append(EvaluationSection(
+                section_id=sec.id,
+                section_number=sec.section_number,
+                score_type="auto_value",
+                binary_value=_AUTO_VALUE_BINARY.get(sec.auto_value, "Y"),
+                score_source="auto_value",
+            ))
+            continue
+
+        section = approved_by_id.get(sec.id)
+        if section is None:
+            continue  # not in the payload -> nothing to record
+
+        is_manual = sec.score_type in ("manual", "manual_yn")
+        is_binary = sec.score_type in ("yn", "manual_yn")
+        is_na = section.yn_value == "NA"
+
+        if is_manual and is_na:
+            # untouched na_default section — the Stage-1 draft never carries
+            # manual sections, and NA is their default state, not an edit.
+            rows.append(EvaluationSection(
+                section_id=sec.id,
+                section_number=sec.section_number,
+                score_type="manual_numeric" if sec.score_type == "manual" else "manual_binary",
+                binary_value="NA",
+                score_source="manual_default",
+            ))
+            continue
+
+        if is_manual:
+            changed = True  # analyst actively scored a manual section
+        else:
+            draft = draft_by_id.get(sec.id)
+            changed = draft is None or (
+                (draft.get("score"), draft.get("yn_value") or None)
+                != (section.score, section.yn_value or None)
+            )
+        any_changed = any_changed or changed
+
+        if is_manual or changed:
+            rows.append(EvaluationSection(
+                section_id=sec.id,
+                section_number=sec.section_number,
+                score_type=(
+                    ("manual_binary" if is_manual else "binary") if is_binary
+                    else ("manual_numeric" if is_manual else "numeric")
+                ),
+                numeric_score=None if is_na else (None if is_binary else section.score),
+                binary_value=(section.yn_value if is_binary or is_na else None),
+                score_source="manual",
+                reasoning=section.reasoning or None,
+            ))
+        else:
+            rows.append(EvaluationSection(
+                section_id=sec.id,
+                section_number=sec.section_number,
+                score_type="binary" if is_binary else "numeric",
+                numeric_score=None if is_na else (None if is_binary else section.score),
+                binary_value=(section.yn_value if is_binary or is_na else None),
+                score_source="ai",
+                ai_provider="gemini",
+                model=model,
+                confidence=_CONFIDENCE_MAP.get((section.confidence or "").lower()),
+                reasoning=section.reasoning or None,
+            ))
+
+    return rows, any_changed
+
+
+def _parse_overall(raw: Any):
+    try:
+        value = float(str(raw).strip().replace("%", ""))
+    except (TypeError, ValueError):
+        return None
+    return round(value, 1)
+
+
+async def record_approval(
+    config: "TeamConfig",
+    *,
+    evaluation_id: Optional[int],
+    dialpad_link: Optional[str],
+    evaluator_email: str,
+    approved_sections: list[Any],
+    draft_sections: list[dict[str, Any]],
+    key_strengths: str,
+    opportunities: str,
+    overall_score_raw: Any,
+    agent_email: Optional[str] = None,
+    model: str = "gemini-2.5-flash",
+) -> Optional[int]:
+    """Record the approve transition. Never raises (§7.3 Phase A)."""
+    try:
+        pool = await _get_pool()
+        if pool is None:
+            return None
+        sections, any_changed = build_approval_sections(
+            approved_sections, draft_sections, config, model
+        )
+        overall = _parse_overall(overall_score_raw)
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                if evaluation_id is None and dialpad_link:
+                    evaluation_id = await conn.fetchval(
+                        "SELECT id FROM qa.evaluations WHERE team_id = $1 AND dialpad_link = $2",
+                        config.team_id, dialpad_link,
+                    )
+                if evaluation_id is None:
+                    logger.warning(
+                        "eval_store: approve for team=%s link=%s has no draft row — "
+                        "Stage 1 dual-write missed it; skipping",
+                        config.team_id, dialpad_link,
+                    )
+                    return None
+                await conn.execute(
+                    "UPDATE qa.evaluations SET "
+                    "  evaluator_email = $2, "
+                    "  agent_email = COALESCE($3, agent_email), "
+                    "  key_strengths = $4, "
+                    "  opportunities = $5, "
+                    "  overall_score = $6, "
+                    "  source = $7, "
+                    "  state = $8, "
+                    "  approved_at = NOW(), "
+                    "  finalized_at = CASE WHEN $8 = 'finalized' THEN NOW() ELSE finalized_at END "
+                    "WHERE id = $1",
+                    evaluation_id,
+                    evaluator_email,
+                    agent_email,
+                    key_strengths or None,
+                    opportunities or None,
+                    overall,
+                    "ai_reviewed" if any_changed else "ai",
+                    "finalized" if overall is not None else "approved",
+                )
+                await conn.execute(
+                    "DELETE FROM qa.evaluation_sections WHERE evaluation_id = $1",
+                    evaluation_id,
+                )
+                for section in sections:
+                    await conn.execute(
+                        "INSERT INTO qa.evaluation_sections "
+                        "(evaluation_id, section_id, section_number, score_type, "
+                        " numeric_score, binary_value, score_source, ai_provider, "
+                        " model, confidence, reasoning) "
+                        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+                        evaluation_id, section.section_id, section.section_number,
+                        section.score_type, section.numeric_score, section.binary_value,
+                        section.score_source, section.ai_provider, section.model,
+                        section.confidence, section.reasoning,
+                    )
+        return evaluation_id
+    except Exception:
+        logger.exception(
+            "eval_store: approve dual-write failed for team=%s — swallowed per §7.3 Phase A",
+            config.team_id,
+        )
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Pool lifecycle
 # ---------------------------------------------------------------------------
 
@@ -246,7 +444,9 @@ async def close_pool() -> None:
 
 __all__ = [
     "record_draft_evaluation",
+    "record_approval",
     "build_draft_row",
     "build_draft_sections",
+    "build_approval_sections",
     "close_pool",
 ]

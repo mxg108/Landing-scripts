@@ -16,6 +16,7 @@ import pytest
 from backend.models.scorecard import ScorecardSection, ScorecardWithMeta
 from backend.services import eval_store
 from backend.services.eval_store import (
+    build_approval_sections,
     build_draft_row,
     build_draft_sections,
     record_draft_evaluation,
@@ -281,3 +282,179 @@ class TestPoolDisabled:
         monkeypatch.delenv("DATABASE_URL", raising=False)
         monkeypatch.setattr(eval_store, "_pool", None)
         assert await record_draft_evaluation(_scorecard(ms_config), ms_config) is None
+
+
+# ---------------------------------------------------------------------------
+# record_approval — Stages 1.5+2+3+4 (Phase 4b)
+# ---------------------------------------------------------------------------
+
+def _approval_sections(ms_config, **edits):
+    """Approval payload mirroring the Stage-1 draft, with optional edits."""
+    base = {
+        "greeting": _ai_section("greeting", "Greeting", score=5),
+        "caller_id": _ai_section("caller_id", "Caller ID", yn="Y", score_type="yn", confidence="medium"),
+        "purpose": _ai_section("purpose", "Purpose", score=4),
+        "matching": _ai_section("matching", "Matching", score=4, confidence="low"),
+        "process_adherence": _ai_section("process_adherence", "Process", score=5),
+        "call_resolution": _ai_section("call_resolution", "Resolution", score=3),
+        "comms": _ai_section("comms", "Communication", score=4),
+        "efficiency": _ai_section("efficiency", "Efficiency", score=2),
+        "human_review_required": ScorecardSection(
+            id="human_review_required", name="HRR", score=None, yn_value="NA",
+            score_type="manual", confidence="high", reasoning="",
+        ),
+        # cri deliberately absent — the Stage-1 draft fixture has no AI
+        # output for it, and the payload mirrors the draft.
+    }
+    base.update(edits)
+    return list(base.values())
+
+
+class TestBuildApprovalSections:
+
+    def test_unchanged_sections_keep_ai_provenance(self, ms_config):
+        draft = [s.model_dump() for s in _scorecard(ms_config).sections]
+        rows, changed = build_approval_sections(
+            _approval_sections(ms_config), draft, ms_config, "gemini-2.5-flash"
+        )
+        assert not changed
+        greeting = next(r for r in rows if r.section_id == "greeting")
+        assert greeting.score_source == "ai"
+        assert greeting.ai_provider == "gemini"
+
+    def test_edited_section_becomes_manual_without_ai_fields(self, ms_config):
+        draft = [s.model_dump() for s in _scorecard(ms_config).sections]
+        rows, changed = build_approval_sections(
+            _approval_sections(ms_config, comms=_ai_section("comms", "Communication", score=2)),
+            draft, ms_config, "gemini-2.5-flash",
+        )
+        assert changed
+        comms = next(r for r in rows if r.section_id == "comms")
+        assert comms.score_source == "manual"
+        assert comms.numeric_score == 2
+        assert comms.ai_provider is None
+        assert comms.confidence is None
+        # only the edited section flips; the rest keep AI provenance
+        assert next(r for r in rows if r.section_id == "purpose").score_source == "ai"
+
+    def test_untouched_hrr_keeps_manual_default_na(self, ms_config):
+        draft = [s.model_dump() for s in _scorecard(ms_config).sections]
+        rows, _ = build_approval_sections(
+            _approval_sections(ms_config), draft, ms_config, "gemini-2.5-flash"
+        )
+        hrr = next(r for r in rows if r.section_id == "human_review_required")
+        assert hrr.score_source == "manual_default"
+        assert hrr.binary_value == "NA"
+
+    def test_value_without_ai_draft_counts_as_analyst_edit(self, ms_config):
+        """A section that appears at approval without a Stage-1 AI value was
+        supplied by the analyst — manual provenance, source flips."""
+        draft = [s.model_dump() for s in _scorecard(ms_config).sections]  # no cri
+        rows, changed = build_approval_sections(
+            _approval_sections(ms_config) + [_ai_section("cri", "CRI", yn="Y", score_type="yn")],
+            draft, ms_config, "gemini-2.5-flash",
+        )
+        assert changed
+        cri = next(r for r in rows if r.section_id == "cri")
+        assert cri.score_source == "manual"
+        assert cri.ai_provider is None
+
+    def test_supervisor_scored_hrr_becomes_manual(self, ms_config):
+        draft = [s.model_dump() for s in _scorecard(ms_config).sections]
+        rows, changed = build_approval_sections(
+            _approval_sections(ms_config, human_review_required=ScorecardSection(
+                id="human_review_required", name="HRR", score=1, yn_value=None,
+                score_type="manual", confidence="high", reasoning="agreed with flag",
+            )),
+            draft, ms_config, "gemini-2.5-flash",
+        )
+        assert changed
+        hrr = next(r for r in rows if r.section_id == "human_review_required")
+        assert hrr.score_type == "manual_numeric"
+        assert hrr.numeric_score == 1
+        assert hrr.score_source == "manual"
+
+
+class ApprovalFakeConn(FakeConn):
+    def __init__(self, existing_id=None):
+        super().__init__(existing_id)
+        self.eval_updates: list[tuple] = []
+
+    async def execute(self, query, *args):
+        if query.startswith("UPDATE qa.evaluations"):
+            self.eval_updates.append(args)
+        elif query.startswith("DELETE"):
+            self.deletes.append(args)
+        else:
+            self.inserts.append(("sections", args))
+
+
+class TestRecordApproval:
+    pytestmark = pytest.mark.asyncio
+
+    @pytest.fixture(autouse=True)
+    def _no_real_pool(self, monkeypatch):
+        self.conn = ApprovalFakeConn()
+
+        async def fake_get_pool():
+            return FakePool(self.conn)
+
+        monkeypatch.setattr(eval_store, "_get_pool", fake_get_pool)
+
+    async def _approve(self, ms_config, overall="87", evaluation_id=101, **kwargs):
+        draft = [s.model_dump() for s in _scorecard(ms_config).sections]
+        return await eval_store.record_approval(
+            ms_config,
+            evaluation_id=evaluation_id,
+            dialpad_link="https://dialpad.test/call/DP123",
+            evaluator_email="lead@landing.com",
+            approved_sections=kwargs.pop("sections", _approval_sections(ms_config)),
+            draft_sections=draft,
+            key_strengths="Good tone",
+            opportunities="Faster holds",
+            overall_score_raw=overall,
+            **kwargs,
+        )
+
+    async def test_finalizes_with_readback_score(self, ms_config):
+        assert await self._approve(ms_config) == 101
+        (args,) = self.conn.eval_updates
+        # (id, evaluator, agent_email, ks, opp, overall, source, state)
+        assert args[0] == 101
+        assert args[1] == "lead@landing.com"
+        assert args[5] == 87.0
+        assert args[6] == "ai"          # nothing edited
+        assert args[7] == "finalized"
+        assert self.conn.deletes == [(101,)]
+        # 8 AI sections + human_review_required (cri absent from payload)
+        assert len([i for i in self.conn.inserts if i[0] == "sections"]) == 9
+
+    async def test_blank_readback_lands_as_approved_not_finalized(self, ms_config):
+        """§3.4.3: finalized requires overall_score — a failed ARRAYFORMULA
+        readback leaves the row 'approved' with NULL score."""
+        await self._approve(ms_config, overall="")
+        (args,) = self.conn.eval_updates
+        assert args[5] is None
+        assert args[7] == "approved"
+
+    async def test_edited_sections_flip_source_to_ai_reviewed(self, ms_config):
+        await self._approve(
+            ms_config,
+            sections=_approval_sections(
+                ms_config, comms=_ai_section("comms", "Communication", score=2)
+            ),
+        )
+        (args,) = self.conn.eval_updates
+        assert args[6] == "ai_reviewed"
+
+    async def test_missing_draft_row_is_skipped(self, ms_config):
+        self.conn.existing_id = None
+        assert await self._approve(ms_config, evaluation_id=None) is None
+        assert self.conn.eval_updates == []
+
+    async def test_db_failure_is_swallowed(self, ms_config, monkeypatch):
+        async def exploding_pool():
+            raise ConnectionError("pg down")
+
+        monkeypatch.setattr(eval_store, "_get_pool", exploding_pool)
+        assert await self._approve(ms_config) is None
