@@ -458,3 +458,122 @@ class TestRecordApproval:
 
         monkeypatch.setattr(eval_store, "_get_pool", exploding_pool)
         assert await self._approve(ms_config) is None
+
+
+# ---------------------------------------------------------------------------
+# §3.14 human-review trigger + shadow logging (cutover slice 1)
+# ---------------------------------------------------------------------------
+
+class TestHumanReviewTrigger:
+
+    @pytest.fixture(scope="class")
+    def ms_formula(self):
+        return eval_store._active_formula("member_support")
+
+    def test_v3_thresholds(self, ms_formula):
+        """member_support_v3: process/resolution rating <= 2 fires; 3 does
+        not (tightened at the sign-off close)."""
+        base = _scorecard(None)
+        assert not eval_store.human_review_trigger_fired(ms_formula, base.sections)  # process 5 / resolution 3
+        low = _scorecard(None, sections=[
+            _ai_section("process_adherence", "Process", score=2),
+        ])
+        assert eval_store.human_review_trigger_fired(ms_formula, low.sections)
+        exactly_three = _scorecard(None, sections=[
+            _ai_section("process_adherence", "Process", score=3),
+            _ai_section("call_resolution", "Resolution", score=3),
+        ])
+        assert not eval_store.human_review_trigger_fired(ms_formula, exactly_three.sections)
+
+    def test_no_formula_never_fires(self):
+        assert eval_store._active_formula("sales") is None  # pre-sales_v2
+        assert not eval_store.human_review_trigger_fired(None, _scorecard(None).sections)
+
+    def test_non_numeric_sections_never_trigger(self, ms_formula):
+        na_only = _scorecard(None, sections=[
+            _ai_section("process_adherence", "Process", score=None, yn=None,
+                        score_type="numeric"),
+        ])
+        assert not eval_store.human_review_trigger_fired(ms_formula, na_only.sections)
+
+
+class TestDraftFlagging:
+
+    def test_flagged_draft_row(self, ms_config):
+        sc = _scorecard(ms_config)
+        sc.sections[4] = _ai_section("process_adherence", "Process", score=1)
+        row = build_draft_row(sc, ms_config)
+        assert row["scoring_status"] == "flagged_human_review"
+        assert row["human_review_required_at"] is not None
+
+    def test_human_review_beats_long_call_flag(self, ms_config):
+        sc = _scorecard(ms_config, flagged_long_call=True)
+        sc.sections[5] = _ai_section("call_resolution", "Resolution", score=2)
+        row = build_draft_row(sc, ms_config)
+        assert row["scoring_status"] == "flagged_human_review"
+
+    def test_clean_draft_unchanged(self, ms_config):
+        row = build_draft_row(_scorecard(ms_config), ms_config)
+        assert row["scoring_status"] == "complete"
+        assert row["human_review_required_at"] is None
+
+
+class TestApprovalRecomputeAndShadow:
+    pytestmark = pytest.mark.asyncio
+
+    @pytest.fixture(autouse=True)
+    def _no_real_pool(self, monkeypatch):
+        self.conn = ApprovalFakeConn()
+
+        async def fake_get_pool():
+            return FakePool(self.conn)
+
+        monkeypatch.setattr(eval_store, "_get_pool", fake_get_pool)
+
+    async def _approve(self, ms_config, sections):
+        draft = [s.model_dump() for s in _scorecard(ms_config).sections]
+        return await eval_store.record_approval(
+            ms_config, evaluation_id=101, dialpad_link=None,
+            evaluator_email="lead@landing.com", approved_sections=sections,
+            draft_sections=draft, key_strengths="", opportunities="",
+            overall_score_raw="87",
+        )
+
+    async def test_analyst_lowering_score_fires_flag(self, ms_config):
+        """§3.14: the trigger is recomputed at approval, not just Stage 1."""
+        sections = _approval_sections(
+            ms_config,
+            process_adherence=_ai_section("process_adherence", "Process", score=2),
+        )
+        await self._approve(ms_config, sections)
+        (args,) = self.conn.eval_updates
+        assert args[8] == "flagged_human_review"
+        assert args[9] is not None
+
+    async def test_clean_approval_clears_flag(self, ms_config):
+        await self._approve(ms_config, _approval_sections(ms_config))
+        (args,) = self.conn.eval_updates
+        assert args[8] == "complete"
+        assert args[9] is None
+
+    async def test_shadow_log_emitted(self, ms_config, caplog):
+        import logging
+        full_payload = _approval_sections(ms_config) + [
+            _ai_section("cri", "CRI", yn="Y", score_type="yn"),
+        ]
+        with caplog.at_level(logging.INFO, logger="backend.services.eval_store"):
+            await self._approve(ms_config, full_payload)
+        shadow = [m for m in (r.getMessage() for r in caplog.records)
+                  if m.startswith("shadow: team=member_support")]
+        assert len(shadow) == 1
+        assert "engine=" in shadow[0] and "sheet=87" in shadow[0]
+        assert "formula=member_support_v3" in shadow[0]
+        assert "trigger_fired=False" in shadow[0]
+
+    async def test_shadow_skips_incomplete_payload(self, ms_config, caplog):
+        """A payload missing a formula section (cri here) must abort the
+        shadow quietly — the engine's strict validation is not a user error."""
+        import logging
+        with caplog.at_level(logging.INFO, logger="backend.services.eval_store"):
+            await self._approve(ms_config, _approval_sections(ms_config))
+        assert not [r for r in caplog.records if r.getMessage().startswith("shadow: team=")]

@@ -36,9 +36,12 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime, timezone
+from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-from backend.models.formula import EvaluationSection, ModelInfo, ModelsUsed
+from backend.models.formula import EvaluationSection, Formula, ModelInfo, ModelsUsed
 
 if TYPE_CHECKING:
     from backend.config.team_config import TeamConfig
@@ -46,11 +49,43 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_SCORING_CONFIG_DIR = Path(__file__).resolve().parent.parent / "config" / "scoring"
+
 _CONFIDENCE_MAP = {"high": "HIGH", "medium": "MED", "low": "LOW"}
 _AUTO_VALUE_BINARY = {"Yes": "Y", "Y": "Y", "No": "N", "N": "N"}
 
 _pool = None
 _pool_lock: Optional[asyncio.Lock] = None
+
+
+# ---------------------------------------------------------------------------
+# §3.14 human-review trigger (Wave 2 Phase 4e / CutoverDesign slice 1)
+# ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=8)
+def _active_formula(team_id: str) -> Optional[Formula]:
+    """The team's file-shipped formula (policy source for the trigger —
+    §3.14: schema records the outcome, the formula records the policy).
+    None when the team has no formula file yet (Sales pre-sales_v2)."""
+    path = _SCORING_CONFIG_DIR / team_id / "overall_formula.json"
+    if not path.exists():
+        return None
+    return Formula.model_validate(json.loads(path.read_text(encoding="utf-8")))
+
+
+def human_review_trigger_fired(formula: Optional[Formula], sections: list[Any]) -> bool:
+    """§3.14: any configured section's numeric score ≤ max_score_to_trigger.
+    `sections` is any list with .id and .score (scorecard or approval
+    payload). Sections without a numeric score (Y/N, NA, unscored) never
+    trigger — the thresholds are rating-based by definition."""
+    if formula is None or not formula.human_review_triggers:
+        return False
+    scores = {s.id: s.score for s in sections}
+    return any(
+        scores.get(t.section_id) is not None
+        and scores[t.section_id] <= t.max_score_to_trigger
+        for t in formula.human_review_triggers
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +98,17 @@ def build_draft_row(scorecard: "ScorecardWithMeta", config: "TeamConfig") -> dic
         text=ModelInfo(provider="gemini", model=scorecard.model)
     )
     duration_ms = int(scorecard.duration_ms) if scorecard.duration_ms else None
+    # §3.14 gate beats long-call telemetry when both apply — the human-review
+    # pause is load-bearing post-flip; flagged_long_call is informational.
+    flagged_review = human_review_trigger_fired(
+        _active_formula(config.team_id), scorecard.sections
+    )
+    if flagged_review:
+        scoring_status = "flagged_human_review"
+    elif scorecard.flagged_long_call:
+        scoring_status = "flagged_long_call"
+    else:
+        scoring_status = "complete"
     return {
         "team_id": config.team_id,
         "agent_name_raw": scorecard.agent_name or "",
@@ -81,7 +127,8 @@ def build_draft_row(scorecard: "ScorecardWithMeta", config: "TeamConfig") -> dic
         "opportunities": scorecard.opportunities or None,
         "models_used": json.dumps(models_used.model_dump(exclude_none=True)),
         "ai_provider_primary": "gemini",
-        "scoring_status": "flagged_long_call" if scorecard.flagged_long_call else "complete",
+        "scoring_status": scoring_status,
+        "human_review_required_at": datetime.now(timezone.utc) if flagged_review else None,
         "dialpad_call_metadata": json.dumps({
             "sop_used": scorecard.sop_used,
             "stage1_flags": sorted({f for s in scorecard.sections for f in s.flags}),
@@ -331,6 +378,45 @@ def _parse_overall(raw: Any):
     return round(value, 1)
 
 
+def _shadow_engine_compare(
+    formula: Optional[Formula],
+    approved: list[Any],
+    sheet_overall: Any,
+    trigger_fired: bool,
+    team_id: str,
+) -> None:
+    """Cutover shadow week (CutoverDesign §7): compute the engine score
+    alongside the sheet readback and log both. Verifies compute + version
+    resolution + trigger checks on live traffic — NOT that the numbers
+    match (the sheet still runs the legacy formula; deltas are by design).
+    Never raises, never persists."""
+    if formula is None:
+        return
+    try:
+        from backend.services.rule_engine import evaluate_formula
+
+        by_id = {s.id: s for s in approved}
+        answers: dict[str, Any] = {}
+        for section in formula.sections:
+            payload = by_id.get(section.key)
+            if payload is None:
+                logger.debug("shadow: no payload for %r — skipping compare", section.key)
+                return
+            if payload.yn_value:
+                answers[section.key] = payload.yn_value
+            elif payload.score is not None:
+                answers[section.key] = payload.score
+            else:
+                return  # unscored slot — engine would rightly refuse
+        result = evaluate_formula(formula, answers)
+        logger.info(
+            "shadow: team=%s engine=%.1f sheet=%s formula=%s trigger_fired=%s",
+            team_id, result.final_score, sheet_overall, formula.formula_id, trigger_fired,
+        )
+    except Exception:
+        logger.exception("shadow: engine compare failed for team=%s", team_id)
+
+
 async def record_approval(
     config: "TeamConfig",
     *,
@@ -354,6 +440,12 @@ async def record_approval(
             approved_sections, draft_sections, config, model
         )
         overall = _parse_overall(overall_score_raw)
+        # §3.14 recompute at approval: analyst edits can fire or clear the flag.
+        formula = _active_formula(config.team_id)
+        flagged_review = human_review_trigger_fired(formula, approved_sections)
+        _shadow_engine_compare(
+            formula, approved_sections, overall_score_raw, flagged_review, config.team_id
+        )
         async with pool.acquire() as conn:
             async with conn.transaction():
                 if evaluation_id is None and dialpad_link:
@@ -377,6 +469,8 @@ async def record_approval(
                     "  overall_score = $6, "
                     "  source = $7, "
                     "  state = $8, "
+                    "  scoring_status = $9, "
+                    "  human_review_required_at = $10, "
                     "  approved_at = NOW(), "
                     "  finalized_at = CASE WHEN $8 = 'finalized' THEN NOW() ELSE finalized_at END "
                     "WHERE id = $1",
@@ -388,6 +482,8 @@ async def record_approval(
                     overall,
                     "ai_reviewed" if any_changed else "ai",
                     "finalized" if overall is not None else "approved",
+                    "flagged_human_review" if flagged_review else "complete",
+                    datetime.now(timezone.utc) if flagged_review else None,
                 )
                 await conn.execute(
                     "DELETE FROM qa.evaluation_sections WHERE evaluation_id = $1",
@@ -448,5 +544,6 @@ __all__ = [
     "build_draft_row",
     "build_draft_sections",
     "build_approval_sections",
+    "human_review_trigger_fired",
     "close_pool",
 ]
