@@ -1,18 +1,18 @@
 # Member Support — QA Scoring Migration Spec
 
-> Canonical specification for the `member_support_v1` scoring formula.
+> Canonical specification for the Member Support scoring formula (current: `member_support_v3`).
 > **Purpose:** decouple the QA scoring pipeline from Google Sheets-as-database and make the
 > **PostgreSQL engine the single owner of score production**. Scope is deliberately limited to the
 > agreed rubric sections, their initial weights, the scoring formula/rules, and triggers.
 
 | | |
 |---|---|
-| **Status** | Finalized (Ops VP sign-off) |
-| **Formula ID** | `member_support_v1` |
-| **Rubric version** | `v1` |
+| **Status** | Finalized (Ops VP sign-off; §10 open items **closed 2026-07-04** — see Section10SignoffBriefs.md) |
+| **Formula ID** | `member_support_v3` *(v1 = original sign-off; v2 = Ops-signed keys, archived; v3 = §10-close threshold tightening)* |
+| **Rubric version** | `member_support_v2` |
 | **Score scale** | 0–100 |
 | **System of record** | this spec → PostgreSQL scoring engine (replaces Sheets) |
-| **Last updated** | 2026-06-30 |
+| **Last updated** | 2026-07-04 |
 
 ---
 
@@ -40,8 +40,8 @@ at most, a read-only mirror.
 
 | Field | Value |
 |---|---|
-| `formula_id` | `member_support_v1` |
-| `rubric_version` | `v1` |
+| `formula_id` | `member_support_v3` |
+| `rubric_version` | `member_support_v2` |
 | `scale` | 0–100 |
 | weight basis | percentage points summing to 100 |
 | team rule set | Member Support (scale ×0.5; hard-zero disabled) |
@@ -85,7 +85,7 @@ sections that remain active).
 
 ## 5. Formula Rules (Rule Library)
 
-Rules belong to a shared engine and are gated per team. For `member_support_v1`:
+Rules belong to a shared engine and are gated per team. For `member_support_v3`:
 
 | id | type | enabled | Condition | Effect |
 |---|---|---|---|---|
@@ -94,7 +94,7 @@ Rules belong to a shared engine and are gated per team. For `member_support_v1`:
 | `frequent_caller_shift` | weight_transfer | true | `frequent_caller` signal | Move a configurable share (**default 0.5**) of `call_resolution` weight → `process_adherence` (target selectable). Also biases `caller_id` scoring toward NA (prompt-level). |
 | `hrr_na_spread` | weight_redistribution | true | `human_review_required = NA` | Split its weight **equally (additive)** across the active scored sections: `+weight / N` each. |
 | `caller_id_scale_half` | score_scale | true | `caller_id = N` | Multiply final score × **0.5**. (Section also contributes 0 on its own slot.) |
-| `escalation_flag` | flag | true | `process_adherence` frac ≤ 0.5 **OR** `call_resolution` frac ≤ 0.5 | Emit `human_review_required` event; route to supervisor review. |
+| `escalation_flag` | flag | true | `process_adherence` frac ≤ 0.25 **OR** `call_resolution` frac ≤ 0.25 | Emit `human_review_required` event; route to supervisor review. *(Tightened from ≤ 0.5 at §10 close — ratings 1–2 only.)* |
 
 **Notes**
 - `cri = N` needs **no rule**: binary normalization already gives it `0`, so it simply forfeits its weight. *(The former ×0.9 score-wide multiplier is deprecated.)*
@@ -122,9 +122,13 @@ flag (7) reads raw ratings, so redistribution never changes whether a call escal
 
 ## 7. Triggers
 
-- **Threshold:** a trigger section scoring **1–3** (`frac ≤ 0.50`, inclusive) escalates the call.
+- **Threshold:** a trigger section scoring **1–2** (`frac ≤ 0.25`, inclusive) escalates the call.
+  *(Tightened from 1–3 at §10 close: over the 1,678-eval history the 1–3 threshold escalated
+  26.1% of calls; 1–2 escalates 12.0% — intervention where it's most effective.)*
 - **Active triggers:** `process_adherence`, `call_resolution`.
 - **Candidate triggers** (under review, **not live**): `matching`, `efficiency`.
+  *(§10 close: stay candidates — activating them at the old threshold would have escalated 52.4%
+  of all calls.)*
 - **Routes to:** `human_review_required` — the supervisor scores that section on review.
 
 ---
@@ -133,8 +137,9 @@ flag (7) reads raw ratings, so redistribution never changes whether a call escal
 
 ```json
 {
-  "formula_id": "member_support_v1",
-  "rubric_version": "v1",
+  "formula_id": "member_support_v3",
+  "rubric_version": "member_support_v2",
+  "supersedes": "member_support_v2",
   "scale": { "min": 0, "max": 100 },
   "normalization": {
     "rating_1_5": { "type": "linear", "input_min": 1, "input_max": 5, "output": [0.0, 1.0] },
@@ -150,16 +155,16 @@ flag (7) reads raw ratings, so redistribution never changes whether a call escal
     { "key": "call_resolution",       "label": "Call Resolution",               "score_type": "rating_1_5",    "weight": 20.0, "trigger": "active" },
     { "key": "comms",                 "label": "Communication",                 "score_type": "rating_1_5",    "weight": 10.0, "trigger": null },
     { "key": "efficiency",            "label": "Efficiency",                    "score_type": "rating_1_5",    "weight": 10.0, "trigger": "candidate" },
-    { "key": "human_review_required", "label": "Human Review Required",         "score_type": "rating_1_5_na", "weight": 10.0, "trigger": null, "default": "NA" },
+    { "key": "human_review_required", "label": "Human Review Required",         "score_type": "rating_1_5_na", "weight": 10.0, "trigger": null, "na_default": true },
     { "key": "cri",                   "label": "Customer Resolution Indicator", "score_type": "binary_yn",     "weight": 5.0,  "trigger": null }
   ],
   "rules": [
-    { "id": "hard_zero",             "type": "score_override",        "enabled": false, "when": { "section": "caller_id", "equals": "N" },  "effect": { "set_score": 0 }, "note": "retained for collections/billing/legal; off for member_support_v1" },
+    { "id": "hard_zero",             "type": "score_override",        "enabled": false, "when": { "section": "caller_id", "equals": "N" },  "effect": { "set_score": 0 }, "note": "retained for collections/billing/legal; disabled for member_support_v2" },
     { "id": "caller_id_na_transfer", "type": "weight_transfer",       "enabled": true,  "when": { "section": "caller_id", "equals": "NA" }, "effect": { "from": "caller_id", "to": "call_resolution", "amount": "all" } },
-    { "id": "frequent_caller_shift", "type": "weight_transfer",       "enabled": true,  "when": { "signal": "frequent_caller" },            "effect": { "from": "call_resolution", "to": "process_adherence", "fraction": 0.5, "target_configurable": true } },
+    { "id": "frequent_caller_shift", "type": "weight_transfer",       "enabled": true,  "when": { "signal": "frequent_caller" },            "effect": { "from": "call_resolution", "to": "process_adherence", "fraction": 0.5, "target_configurable": true }, "note": "signal wired false-by-default until command_center ships (Wave 3)" },
     { "id": "hrr_na_spread",         "type": "weight_redistribution", "enabled": true,  "when": { "section": "human_review_required", "equals": "NA" }, "effect": { "method": "equal_additive", "from": "human_review_required", "to": "active_sections" } },
     { "id": "caller_id_scale_half",  "type": "score_scale",           "enabled": true,  "when": { "section": "caller_id", "equals": "N" },  "effect": { "multiply": 0.5 } },
-    { "id": "escalation_flag",       "type": "flag",                  "enabled": true,  "when": { "any": [ { "section": "process_adherence", "frac_lte": 0.5 }, { "section": "call_resolution", "frac_lte": 0.5 } ] }, "effect": { "emit_event": "human_review_required", "route": "supervisor_review" } }
+    { "id": "escalation_flag",       "type": "flag",                  "enabled": true,  "when": { "any": [ { "section": "process_adherence", "frac_lte": 0.25 }, { "section": "call_resolution", "frac_lte": 0.25 } ] }, "effect": { "emit_event": "human_review_required", "route": "supervisor_review" }, "note": "threshold tightened 1-3 -> 1-2 per Ops VP sign-off 2026-07-04 (Section10SignoffBriefs A1)" }
   ],
   "evaluation_order": [
     "hard_zero",
@@ -171,14 +176,18 @@ flag (7) reads raw ratings, so redistribution never changes whether a call escal
     "escalation_flag"
   ],
   "triggers": {
-    "threshold": { "op": "lte", "frac": 0.5, "ratings": [1, 2, 3] },
+    "threshold": { "op": "lte", "frac": 0.25, "ratings": [1, 2] },
     "active": ["process_adherence", "call_resolution"],
     "candidates": ["matching", "efficiency"],
     "routes_to": "human_review_required"
   },
   "external_signals": {
     "frequent_caller": { "source": "looker_snapshot", "via": "command_center" }
-  }
+  },
+  "human_review_triggers": [
+    { "section_id": "process_adherence", "max_score_to_trigger": 2 },
+    { "section_id": "call_resolution",   "max_score_to_trigger": 2 }
+  ]
 }
 ```
 
@@ -196,7 +205,12 @@ flag (7) reads raw ratings, so redistribution never changes whether a call escal
 
 ## 10. Open Decisions
 
-- [ ] Confirm whether `matching` / `efficiency` become **active** triggers or stay candidates.
-- [ ] Confirm `frequent_caller_shift` default fraction (0.5) and default target (`process_adherence`).
-- [ ] Confirm hard-zero stays globally available (enabled per team) vs. removed outright for Member Support.
-- [ ] Confirm the NA-spread behavior when **multiple** sections are NA (current: recompute equal-additive over remaining active sections).
+All items **closed 2026-07-04** (Ops VP, via Section10SignoffBriefs.md Part A):
+
+- [x] `matching` / `efficiency` **stay candidates**. Additionally, the active-trigger threshold was
+      tightened from ratings 1–3 to **1–2** (frac ≤ 0.25) — shipped as `member_support_v3`.
+      Historic incidence: 26.1% → 12.0% of calls escalate.
+- [x] `frequent_caller_shift` defaults confirmed as-is (fraction 0.5, target `process_adherence`).
+- [x] Hard-zero **stays globally available, disabled for Member Support**.
+- [x] Multiple-NA spread confirmed as shipped: recompute equal-additive over remaining active
+      sections, order per §6; NA weight is never silently lost (engine hard-fails otherwise).

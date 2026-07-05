@@ -14,12 +14,12 @@
 
 | | |
 |---|---|
-| **Status** | Rubric finalized (Sales QA — Revised 15-Point Matrix); spec **populated from source PDF**, pending confirmation on the §10 flagged items |
-| **Formula ID** | `sales_v1` *(proposed — confirm)* |
-| **Rubric version** | `v1` *(proposed)* |
+| **Status** | Finalized — §10 items **closed 2026-07-04** by Sales management (see Section10SignoffBriefs.md Part B) |
+| **Formula ID** | `sales_v2` *(the seeded `sales_v1` id belongs to the legacy 19-section rubric; archive ids are immutable)* |
+| **Rubric version** | `sales_v2` |
 | **Score scale** | 0–100 (15 questions, 100 points) |
 | **System of record** | this spec → PostgreSQL scoring engine (replaces Sheets) |
-| **Last updated** | 2026-06-30 |
+| **Last updated** | 2026-07-04 |
 
 ---
 
@@ -51,9 +51,9 @@ PostgreSQL engine to own score production end-to-end; retire Sheets-as-DB.
 
 | Field | Value |
 |---|---|
-| `formula_id` | `sales_v1` &nbsp; *(proposed — confirm)* |
-| `rubric_version` | `v1` &nbsp; *(proposed)* |
-| `supersedes` | `null` &nbsp; *(confirm — see §10)* |
+| `formula_id` | `sales_v2` |
+| `rubric_version` | `sales_v2` *(closes the seeded legacy `sales_v1` rubric when shipped)* |
+| `supersedes` | `null` *(first engine-owned Sales formula)* |
 | `scale` | 0–100 (15 questions, 100 points) |
 | weight basis | points ≡ percentage points; sum = 100 |
 | **NA policy** | **full credit on-slot** (frac 1.0, **no redistribution**) — differs from Member Support |
@@ -96,15 +96,16 @@ Score-type display: `0/1/NA` = binary (`binary_yn_na`), `1–5/NA` = rating (`ra
 
 ### 3a. Deprecated sections (removed vs. the prior Sales version)
 
-**Blocked — requires the prior Sales rubric.** The PDF is the *revised* matrix (new state) only; the
-section add/deprecate diff cannot be derived from it. Provide the previous rubric to populate this.
-*(If `sales_v1` is the first engine-owned version, this section is empty.)*
+**Unblocked at §10 close:** the prior rubric **exists in the archive** — `qa.rubric_versions`
+row `sales_v1` (the 19-section rubric seeded by migration 010). The add/deprecate diff below is
+populated against it once the section-semantics mapping (e.g. is `move_reason` new, or
+`situation_match` renamed?) is confirmed against `QA_Scoring_Guide.pdf`.
 
-- `<old_section_key>` — *reason / replaced by* &nbsp; **TODO (needs prior rubric)**
+- *diff pending semantics mapping* &nbsp; **TODO (mapping confirmation, not a missing document)**
 
 ### 3b. New sections (added vs. the prior Sales version)
 
-**Blocked — same reason as §3a.**
+**Same status as §3a — populatable from the archived `sales_v1` rubric once the mapping is confirmed.**
 
 - `<new_section_key>` — *definition* &nbsp; **TODO (needs prior rubric)**
 
@@ -168,8 +169,8 @@ No pre-sum weight moves and no post-sum scaling exist in this version. NA is res
 
 ```json
 {
-  "formula_id": "sales_v1",
-  "rubric_version": "v1",
+  "formula_id": "sales_v2",
+  "rubric_version": "sales_v2",
   "supersedes": null,
   "scale": { "min": 0, "max": 100 },
   "normalization": {
@@ -232,25 +233,24 @@ No pre-sum weight moves and no post-sum scaling exist in this version. NA is res
 
 ---
 
-## 10. Open Items — confirm before locking `sales_v1`
+## 10. Open Items — closed 2026-07-04 (Sales management)
 
-- [ ] **Scaled 1–5 → points curve.** Assumed `(rating − 1) / 4` (worst = 0, best = full; consistent with
-      the binary "0 or full points" anchors). Confirm vs. `rating / 5`. *Materially changes every scaled
-      section's score.*
-- [ ] **NA = full credit.** Confirm the PDF footer ("N/A = full points when not applicable") applies to
-      **all 15 sections** and means full-credit-on-slot with **no redistribution** (opposite of Member
-      Support).
-- [ ] **Version number & lineage.** Confirm `formula_id = sales_v1` and whether it supersedes a prior
-      engine-owned version. If so, **provide the prior rubric** so §3a / §3b can be populated — the diff
-      can't be produced from the new PDF alone.
-- [ ] **Section keys.** Proposed keys are mine; confirm/rename to match existing column names in the
-      codebase.
-- [ ] **`category` field.** Confirm you want the PDF's category grouping persisted on `qa.formula_section`
-      (engine can ignore it; useful for reporting).
-- [ ] **`client_experience` placement.** The PDF files it under *Post-Call & Documentation*; confirm
-      that's intended (it reads as a call-wide measure).
-- [ ] **No rules / no triggers.** Confirmed absent in the PDF. Confirm none are planned for v1 before
-      engineering builds against an empty rule set.
+- [x] **Scaled 1–5 → points curve: `(rating − 1) / 4` confirmed.** Requirement attached to the
+      decision: the curve must be reconfigurable in the same manager UI that ships a new scoring
+      version (formula or rubric). Architecturally satisfied today — the curve lives in the
+      formula JSON (`normalization.rating_1_5.output`), so any version-ship surface can change it;
+      the requirement binds the future rubric-editor UI (§3.19.2 editor write path).
+- [x] **NA = full credit confirmed as written**, all 15 sections, no redistribution. No other NA
+      behaviors in this version.
+- [x] **Version id: `sales_v2`** (formula AND rubric — the seeded `sales_v1` rubric id is
+      immutable and stays with the legacy 19-section rubric). `supersedes: null` for the formula;
+      the `sales_v2` rubric row closes `sales_v1` when shipped. Historic Analyst_History export
+      incoming for the backfill seed.
+- [x] **Section keys adopted as proposed** — no renames. Legacy 19-section ids remain valid
+      forever on historic rows via rubric pinning.
+- [x] **`category` persisted** on formula sections (reporting).
+- [x] **`client_experience` stays under *Post-Call & Documentation*.**
+- [x] **No rules / no triggers for `sales_v2`** — `evaluation_order: ["weighted_sum"]`.
 
 ---
 
