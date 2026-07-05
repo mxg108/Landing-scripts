@@ -27,7 +27,7 @@ from backend.services.history_service import (
     agent_name_for_email,
     email_in_team_mails,
 )
-from backend.services.eval_store import record_draft_evaluation
+from backend.services.eval_store import record_approval, record_draft_evaluation
 from backend.services.event_bus import get_event_bus
 from backend.services.scoring_service import score_call
 from backend.services.sheets_service import (
@@ -528,6 +528,22 @@ async def approve_scorecard(
             config=config,
         )
         print(f"[approve] Stage 4 complete. Analyst_History row: {history_row}")
+
+        # Postgres dual-write for the whole approve transition (Stages
+        # 1.5+2+3+4 — Wave 2 Phase 4b). §7.3 Phase A: never raises.
+        job["evaluation_id"] = await record_approval(
+            config,
+            evaluation_id=job.get("evaluation_id"),
+            dialpad_link=sc.get("dialpad_link"),
+            evaluator_email=evaluator_email,
+            approved_sections=approval.sections,
+            draft_sections=sc.get("sections", []),
+            key_strengths=approval.key_strengths,
+            opportunities=approval.opportunities,
+            overall_score_raw=overall_score,
+            agent_email=job.get("agent_email") or None,
+            model=sc.get("model", "gemini-2.5-flash"),
+        )
 
         # Audit the approval BEFORE Stage 5 so a downstream Apps Script
         # failure doesn't lose the record. Identity comes from the API key
