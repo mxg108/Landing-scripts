@@ -29,6 +29,17 @@ from backend.services.rule_engine import evaluate_formula
 _AI_SCORING = Path(__file__).resolve().parent.parent
 _V0_FORMULA = _AI_SCORING / "backend" / "config" / "scoring" / "member_support" / "v0_sheet.json"
 _FIXTURES = _AI_SCORING / "tests" / "fixtures" / "overall_formula" / "member_support.json"
+_SALES_V0_FORMULA = _AI_SCORING / "backend" / "config" / "scoring" / "sales" / "v0_sheet.json"
+_SALES_FIXTURES = _AI_SCORING / "tests" / "fixtures" / "overall_formula" / "sales.json"
+_MIGRATION_010 = _AI_SCORING.parent.parent / "database" / "migrations" / "010_rubric_versioning.sql"
+
+
+def _archived_rubric(marker: str) -> Rubric:
+    """Parse a seeded rubric straight out of the migration-010 SQL, so
+    repo-formula vs shipped-archive drift fails here, not in production."""
+    sql = _MIGRATION_010.read_text(encoding="utf-8")
+    start = sql.index(marker) + len(marker)
+    return Rubric.model_validate(json.loads(sql[start: sql.index(marker, start)].strip()))
 
 
 @pytest.fixture(scope="module")
@@ -39,6 +50,16 @@ def v0_formula() -> Formula:
 @pytest.fixture(scope="module")
 def fixture_doc() -> dict:
     return json.loads(_FIXTURES.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def sales_v0_formula() -> Formula:
+    return Formula.model_validate(json.loads(_SALES_V0_FORMULA.read_text(encoding="utf-8")))
+
+
+@pytest.fixture(scope="module")
+def sales_fixture_doc() -> dict:
+    return json.loads(_SALES_FIXTURES.read_text(encoding="utf-8"))
 
 
 def _sheet_round(score: float) -> int:
@@ -64,14 +85,8 @@ class TestV0SheetFormula:
         """v0_sheet pins rubric_version=member_support_v1 — the migration-010
         seed already live in qa.rubric_versions. The §3.19.3 check must hold
         for that exact content or compute_overall_score() rejects every
-        backfilled row. Parses the rubric out of the migration SQL so drift
-        between repo formula and shipped seed fails here, not in production."""
-        sql = (_AI_SCORING.parent.parent / "database" / "migrations"
-               / "010_rubric_versioning.sql").read_text(encoding="utf-8")
-        marker = "$rubric_ms_v1$"
-        start = sql.index(marker) + len(marker)
-        rubric_json = sql[start: sql.index(marker, start)].strip()
-        rubric = Rubric.model_validate(json.loads(rubric_json))
+        backfilled row."""
+        rubric = _archived_rubric("$rubric_ms_v1$")
         assert rubric.rubric_version == v0_formula.rubric_version
         validate_formula_against_rubric(v0_formula, rubric)  # raises on drift
 
@@ -138,3 +153,76 @@ class TestGoldenFixtures:
             assert result.effective_weights["customer_resolution_indicator"] == 0.0
             assert sum(result.effective_weights.values()) == pytest.approx(100.0)
             assert _sheet_round(result.final_score) == f["sheet_overall"]
+
+
+class TestSalesV0SheetFormula:
+    """The reverse-engineered legacy Sales formula (BackfillPlan.md §2a):
+    r/5 curve, uniform weight 5 with situation_match at 10, NA/blank
+    excluded-and-rescaled. 320/333 exact at extraction time."""
+
+    def test_validates_and_weights(self, sales_v0_formula):
+        assert sales_v0_formula.formula_id == "sales_v0_sheet"
+        w = {s.key: s.weight for s in sales_v0_formula.sections}
+        assert w["situation_match"] == 10.0
+        assert all(v == 5.0 for k, v in w.items() if k != "situation_match")
+        assert sum(w.values()) == pytest.approx(100.0)
+
+    def test_r_over_5_curve_and_na_rescale(self, sales_v0_formula):
+        """Proof point for sign-off B1: the LEGACY sheet used r/5 and
+        NA-redistribute — sales_v2's (r-1)/4 + full-credit is a deliberate
+        double behavior change, not continuity."""
+        assert sales_v0_formula.normalization.rating_1_5.output == [0.2, 1.0]
+        assert sales_v0_formula.normalization.na == "redistribute_per_rules"
+        assert [r.id for r in sales_v0_formula.rules] == ["na_rescale"]
+
+    def test_cross_validates_against_the_archived_sales_v1_rubric(self, sales_v0_formula):
+        rubric = _archived_rubric("$rubric_sales_v1$")
+        assert rubric.rubric_version == sales_v0_formula.rubric_version
+        validate_formula_against_rubric(sales_v0_formula, rubric)
+
+
+class TestSalesGoldenFixtures:
+
+    def test_fixture_inventory(self, sales_fixture_doc):
+        fixtures = sales_fixture_doc["fixtures"]
+        exact = [f for f in fixtures if f["expect_exact"]]
+        anomalies = [f for f in fixtures if not f["expect_exact"]]
+        assert len(exact) == 40
+        assert len(anomalies) == 13
+        assert {f["era"] for f in exact} == {"ai", "manual"}
+        assert any("NA" in f["answers"].values() for f in exact), \
+            "sample must exercise the NA-rescale path (blank-heavy data)"
+
+    def test_exact_parity_with_sheet(self, sales_v0_formula, sales_fixture_doc):
+        failures = []
+        for f in sales_fixture_doc["fixtures"]:
+            if not f["expect_exact"]:
+                continue
+            result = evaluate_formula(sales_v0_formula, f["answers"])
+            got = _sheet_round(result.final_score)
+            if got != f["sheet_overall"]:
+                failures.append(f"{f['label']}: engine {got} != sheet {f['sheet_overall']}")
+        assert not failures, "\n".join(failures)
+
+    def test_hand_edited_rows_stay_anomalous(self, sales_v0_formula, sales_fixture_doc):
+        for f in sales_fixture_doc["fixtures"]:
+            if f["expect_exact"]:
+                continue
+            result = evaluate_formula(sales_v0_formula, f["answers"])
+            assert _sheet_round(result.final_score) != f["sheet_overall"], f["label"]
+            assert _sheet_round(result.final_score) == f["engine_overall"], f["label"]
+
+    def test_na_rows_rescale_to_100(self, sales_v0_formula, sales_fixture_doc):
+        """NA/blank sections lose their weight; the rest rescale to 100 —
+        never full credit (that's sales_v2's NEW behavior, not legacy)."""
+        na_fixtures = [
+            f for f in sales_fixture_doc["fixtures"]
+            if f["expect_exact"] and "NA" in f["answers"].values()
+        ]
+        assert na_fixtures
+        for f in na_fixtures:
+            result = evaluate_formula(sales_v0_formula, f["answers"])
+            for key, answer in f["answers"].items():
+                if answer == "NA":
+                    assert result.effective_weights[key] == 0.0
+            assert sum(result.effective_weights.values()) == pytest.approx(100.0)
