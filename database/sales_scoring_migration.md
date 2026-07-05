@@ -118,6 +118,10 @@ populated against it once the section-semantics mapping (e.g. is `move_reason` n
   consistent with the binary **"0 or full points"** anchors (worst rating = 0 pts, best = full pts).
   **Confirm before locking** — the alternative `rating / 5` would give rating 1 = 20% instead of 0%,
   changing every scaled section's score.
+  **Confirmed `(rating − 1) / 4` at §10 close (2026-07-04), with evidence recorded:** the *legacy*
+  Sales sheet measurably used `rating / 5` with NA/blank excluded-and-rescaled (96.1% exact
+  reconstruction — BackfillPlan.md §2a). `sales_v2` therefore changes both the curve **and** the
+  NA behavior relative to historic scores — a deliberate decision, to be socialized with agents.
 - **Binary (0/1):** met (`1`) = `1.0`, not-met (`0`) = `0.0`. Identical to the shared `binary_yn`
   normalization (`Y = 1.0 / N = 0.0`); Sales just labels the two branches `0` / `1`.
 - **N/A = full credit (frac = 1.0).** ⚠️ **Opposite of Member Support.** Per the source PDF footer, when a

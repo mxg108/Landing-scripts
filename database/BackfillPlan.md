@@ -12,7 +12,7 @@
 | | |
 |---|---|
 | **Status** | Decisions locked 2026-07-01 (§8) — ready to implement |
-| **Seed rows** | 1,678 evaluations (2,794 CSV lines — multiline reasoning cells) |
+| **Seed rows** | MS: 1,678 evaluations · Sales: 334 (§2a) |
 | **Coverage** | Member Support, 2025-02 → 2026-06-29 (16 rows with broken timestamps) |
 | **Last updated** | 2026-07-01 |
 
@@ -84,6 +84,35 @@ Two consequences:
    Caller ID, Matching the Moment, and **Process Adherence** — the section the Ops-signed v2
    formula weights at 25%. Historic-compliance deltas will be large and *by design* (SQLMigration
    §3.6: acceptance, not iteration). QA leadership should see §2 before seeing the sweep output.
+
+
+### 2a. Sales seed (arrived 2026-07-04): `analyst_history_sales.csv`
+
+Same canonical column shape, 19 legacy sections matching the archived `sales_v1` rubric ids
+exactly. **334 rows** (82 AI-era / 252 manual, 2025-02 → 2026-06), 5 broken timestamps, 2
+duplicate-link groups, **no approval-clock column** (D1 falls back to Timestamp for every Sales
+row). Data quirks beyond MS: heavy *blank* cells (e.g. FLEX Pitch blank on 129 rows) — the sheet
+treated blank exactly like "Not Applicable" (excluded + rescaled); one corrupted stray-value row
+(excluded); one row missing Overall Score (excluded).
+
+**Legacy Sales formula, reverse-engineered** (`sales_v0_sheet`, archived like MS's):
+
+```
+overall = 100 × Σ w_i·frac_i / Σ w_i(scored)     rating: r/5 · binary Yes=1/No=0
+weights: uniform 5, situation_match 10           NA/blank → excluded, rest rescaled
+```
+
+**320/333 scoreable rows match exactly (96.1%)**; the 13 non-matching are small-residual
+hand-edits (median |Δ| 1.5) — imported verbatim + `backfill_anomaly` annotation, same treatment
+as MS's 3. Consequences:
+
+1. Backfilled Sales rows stamp `formula_version='sales_v0_sheet'` / `rubric_version='sales_v1'`
+   and are exactly reproducible; golden fixtures assert it (40 exact + 13 anomalies).
+2. **Sign-off B1/B2 evidence:** the legacy sheet used `r/5` and NA-*redistribute* — `sales_v2`'s
+   `(rating−1)/4` + NA-full-credit is a deliberate **double** behavior change vs. what agents
+   historically experienced, decided knowingly at the §10 close. Also `situation_match` was the
+   only double-weighted section; the new 15-point matrix reshapes weights entirely
+   (`move_reason` 15%, etc.).
 
 ---
 

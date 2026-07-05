@@ -61,46 +61,98 @@ MS_BINARY = {"caller_identity_validation", "customer_resolution_indicator"}
 
 BINARY_VOCAB = {"Y": "Y", "Yes": "Y", "N": "N", "No": "N", "Not Applicable": "NA", "NA": "NA"}
 
+# Sales: CSV column -> archived sales_v1 rubric ids (migration 010 seed).
+SALES_SECTIONS = {
+    "Greeting & Lead Name": "greeting",
+    "PB Created": "pb_creation",
+    "MC Call Notes": "mc_call_notes",
+    "Situation Match (First 2 Min)": "situation_match",
+    "Reason as Sales Argument": "reason_for_move_pitch",
+    "Landing Value Uplift": "value_uplift",
+    "Membership Explanation": "membership_explanation",
+    "FLEX Pitch (60+ Nights)": "flex_long_stay_pitch",
+    "Landing Guarantee Explanation": "landing_guarantee",
+    "Pricing Breakdown": "pricing_explanation",
+    "Asked to Book on Call": "book_attempt",
+    "Objection Handling": "objection_handling",
+    "Pricing/Inventory Urgency": "urgency_disclosure",
+    "Follow-up Set": "followup_setup",
+    "Tonality & Pace": "tonality_pace",
+    "Hold Usage / Dead Air": "hold_usage",
+    "Audio Quality": "audio_quality",
+    "Screen Recording (Inbound Only)": "screen_recording",
+    "Pre-Send Intro": "pre_send_intro",
+}
+SALES_BINARY = set(SALES_SECTIONS.values()) - {
+    "situation_match", "value_uplift", "landing_guarantee", "objection_handling"
+}
+
 TEAMS = {
     "member_support": {
         "csv": _REPO_ROOT / "database" / "analyst_history_member_support.csv",
         "formula": _AI_SCORING / "backend" / "config" / "scoring" / "member_support" / "v0_sheet.json",
         "sections": MS_SECTIONS,
         "binary": MS_BINARY,
+        "blank_is_na": False,  # MS blanks don't occur; a blank means a broken row
+    },
+    "sales": {
+        "csv": _REPO_ROOT / "database" / "analyst_history_sales.csv",
+        "formula": _AI_SCORING / "backend" / "config" / "scoring" / "sales" / "v0_sheet.json",
+        "sections": SALES_SECTIONS,
+        "binary": SALES_BINARY,
+        # Sales analysts left unscored sections blank; the sheet excluded
+        # them exactly like "Not Applicable" (rescale over the rest).
+        "blank_is_na": True,
     },
 }
+
+
+def _parse_value(raw: str, is_binary: bool, blank_is_na: bool):
+    """Cell -> engine answer, or None when the cell is unusable (stray
+    cross-type values, out-of-range ratings, unexpected blanks)."""
+    if raw.lower() in ("", "nan"):
+        return "NA" if blank_is_na else None
+    if is_binary:
+        return BINARY_VOCAB.get(raw)
+    if raw in ("Not Applicable", "NA"):
+        return "NA"
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    if value.is_integer() and 1 <= int(value) <= 5:
+        return int(value)
+    return None
 
 
 def load_rows(cfg) -> list[dict]:
     df = pd.read_csv(cfg["csv"])
     df.columns = [c.strip() for c in df.columns]
-    rows = []
+    rows, dropped = [], 0
     for idx, r in df.iterrows():
-        answers: dict = {}
-        ok = True
-        for col, sid in cfg["sections"].items():
-            raw = str(r[col]).strip()
-            if sid in cfg["binary"]:
-                val = BINARY_VOCAB.get(raw)
-                if val is None:
-                    ok = False
-                    break
-                answers[sid] = val
-            else:
-                if not raw.isdigit() or not (1 <= int(raw) <= 5):
-                    ok = False  # '0' rows are the test artifacts
-                    break
-                answers[sid] = int(raw)
-        if not ok:
+        overall = pd.to_numeric(pd.Series([r["Overall Score"]]), errors="coerce").iloc[0]
+        if pd.isna(overall):
+            dropped += 1
             continue
-        ts = pd.to_datetime(r["Timestamp"], errors="coerce")
-        rows.append({
-            "row": int(idx) + 2,  # 1-based + header, for traceability against the sheet
-            "answers": answers,
-            "sheet_overall": int(r["Overall Score"]),
-            "era": "ai" if str(r.get("Source", "")).strip() == "ai" else "manual",
-            "year_month": ts.strftime("%Y-%m") if pd.notna(ts) else None,
-        })
+        answers: dict = {}
+        for col, sid in cfg["sections"].items():
+            value = _parse_value(str(r[col]).strip(), sid in cfg["binary"], cfg["blank_is_na"])
+            if value is None:
+                break
+            answers[sid] = value
+        else:
+            ts = pd.to_datetime(r["Timestamp"], errors="coerce")
+            rows.append({
+                "row": int(idx) + 2,  # 1-based + header, for sheet traceability
+                "answers": answers,
+                "sheet_overall": int(overall),
+                "era": "ai" if str(r.get("Source", "")).strip() == "ai" else "manual",
+                "year_month": ts.strftime("%Y-%m") if pd.notna(ts) else None,
+            })
+            continue
+        dropped += 1
+    if dropped:
+        print(f"dropped {dropped} unusable rows (missing overall / stray values / broken cells)")
     return rows
 
 
@@ -120,9 +172,13 @@ def main() -> None:
     rows = load_rows(cfg)
     print(f"loaded {len(rows)} scoreable rows (test artifacts already dropped)")
 
-    matched, hard_zero, hand_edit = [], [], []
+    matched, hard_zero, hand_edit, unscoreable = [], [], [], 0
     for row in rows:
-        row["engine_overall"] = engine_score(formula, row["answers"])
+        try:
+            row["engine_overall"] = engine_score(formula, row["answers"])
+        except Exception:
+            unscoreable += 1  # e.g. every section NA — nothing to rescale over
+            continue
         delta = abs(row["engine_overall"] - row["sheet_overall"])
         if delta == 0:
             matched.append(row)
@@ -134,7 +190,8 @@ def main() -> None:
     total = len(rows)
     print(f"exact parity under {formula.formula_id}: {len(matched)}/{total} "
           f"({len(matched) / total:.1%}) | hard-zero excluded: {len(hard_zero)} "
-          f"| hand-edits kept as expected-mismatch: {len(hand_edit)}")
+          f"| hand-edits kept as expected-mismatch: {len(hand_edit)}"
+          + (f" | engine-unscoreable: {unscoreable}" if unscoreable else ""))
 
     # Stratified sample: era x score band x NA presence, deterministic.
     rng = random.Random(42)

@@ -1,0 +1,65 @@
+{
+  "formula_id": "sales_v0_sheet",
+  "rubric_version": "sales_v1",
+  "supersedes": null,
+  "scale": { "min": 0, "max": 100 },
+  "normalization": {
+    "rating_1_5": { "type": "linear", "input_min": 1, "input_max": 5, "output": [0.2, 1.0] },
+    "binary_yn": { "Y": 1.0, "N": 0.0 },
+    "na": "redistribute_per_rules"
+  },
+  "sections": [
+    { "key": "greeting",              "label": "Greeting & Lead Name",            "score_type": "binary_yn_na",  "weight": 5.0,  "trigger": null },
+    { "key": "pb_creation",           "label": "PB Created",                      "score_type": "manual_yn",     "weight": 5.0,  "trigger": null },
+    { "key": "mc_call_notes",         "label": "MC Call Notes",                   "score_type": "manual_yn",     "weight": 5.0,  "trigger": null },
+    { "key": "situation_match",       "label": "Situation Match (First 2 Min)",   "score_type": "rating_1_5_na", "weight": 10.0, "trigger": null },
+    { "key": "reason_for_move_pitch", "label": "Reason as Sales Argument",        "score_type": "binary_yn_na",  "weight": 5.0,  "trigger": null },
+    { "key": "value_uplift",          "label": "Landing Value Uplift",            "score_type": "rating_1_5_na", "weight": 5.0,  "trigger": null },
+    { "key": "membership_explanation","label": "Membership Explanation",          "score_type": "binary_yn_na",  "weight": 5.0,  "trigger": null },
+    { "key": "flex_long_stay_pitch",  "label": "FLEX Pitch (60+ Nights)",         "score_type": "binary_yn_na",  "weight": 5.0,  "trigger": null },
+    { "key": "landing_guarantee",     "label": "Landing Guarantee Explanation",   "score_type": "rating_1_5_na", "weight": 5.0,  "trigger": null },
+    { "key": "pricing_explanation",   "label": "Pricing Breakdown",               "score_type": "binary_yn_na",  "weight": 5.0,  "trigger": null },
+    { "key": "book_attempt",          "label": "Asked to Book on Call",           "score_type": "binary_yn_na",  "weight": 5.0,  "trigger": null },
+    { "key": "objection_handling",    "label": "Objection Handling",              "score_type": "rating_1_5_na", "weight": 5.0,  "trigger": null },
+    { "key": "urgency_disclosure",    "label": "Pricing/Inventory Urgency",       "score_type": "binary_yn_na",  "weight": 5.0,  "trigger": null },
+    { "key": "followup_setup",        "label": "Follow-up Set",                   "score_type": "binary_yn_na",  "weight": 5.0,  "trigger": null },
+    { "key": "tonality_pace",         "label": "Tonality & Pace",                 "score_type": "binary_yn_na",  "weight": 5.0,  "trigger": null },
+    { "key": "hold_usage",            "label": "Hold Usage / Dead Air",           "score_type": "binary_yn_na",  "weight": 5.0,  "trigger": null },
+    { "key": "audio_quality",         "label": "Audio Quality",                   "score_type": "binary_yn_na",  "weight": 5.0,  "trigger": null },
+    { "key": "screen_recording",      "label": "Screen Recording (Inbound Only)", "score_type": "binary_yn_na",  "weight": 5.0,  "trigger": null },
+    { "key": "pre_send_intro",        "label": "Pre-Send Intro",                  "score_type": "manual_yn",     "weight": 5.0,  "trigger": null }
+  ],
+  "rules": [
+    { "id": "na_rescale", "type": "na_redistribution", "enabled": true,
+      "when": { "any": [
+        { "section": "greeting", "equals": "NA" },
+        { "section": "pb_creation", "equals": "NA" },
+        { "section": "mc_call_notes", "equals": "NA" },
+        { "section": "situation_match", "equals": "NA" },
+        { "section": "reason_for_move_pitch", "equals": "NA" },
+        { "section": "value_uplift", "equals": "NA" },
+        { "section": "membership_explanation", "equals": "NA" },
+        { "section": "flex_long_stay_pitch", "equals": "NA" },
+        { "section": "landing_guarantee", "equals": "NA" },
+        { "section": "pricing_explanation", "equals": "NA" },
+        { "section": "book_attempt", "equals": "NA" },
+        { "section": "objection_handling", "equals": "NA" },
+        { "section": "urgency_disclosure", "equals": "NA" },
+        { "section": "followup_setup", "equals": "NA" },
+        { "section": "tonality_pace", "equals": "NA" },
+        { "section": "hold_usage", "equals": "NA" },
+        { "section": "audio_quality", "equals": "NA" },
+        { "section": "screen_recording", "equals": "NA" },
+        { "section": "pre_send_intro", "equals": "NA" }
+      ] },
+      "mode": "proportional", "targets": "remaining",
+      "note": "legacy sheet excluded NA/blank sections and rescaled the rest to 100 — one rule covers every NA-able section; the engine redistributes all NA'd sources proportionally in one pass" }
+  ],
+  "evaluation_order": [
+    "na_rescale",
+    "weighted_sum"
+  ],
+  "triggers": {},
+  "external_signals": {},
+  "deprecated_sections": []
+}
