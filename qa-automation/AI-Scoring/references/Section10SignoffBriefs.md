@@ -1,5 +1,15 @@
 # §10 Sign-off Briefs — Member Support (Ops VP) + Sales (Sales Management)
 
+> **CLOSED 2026-07-04.** All 11 items decided; both specs updated same day. Outcomes:
+> **A1** candidates stay + active-trigger threshold tightened to ratings 1–2 (frac ≤ 0.25) →
+> shipped as `member_support_v3` (escalation incidence 26.1% → 12.0%). **A2** defaults as-is.
+> **A3** hard-zero stays global, disabled for MS. **A4** shipped multi-NA behavior confirmed.
+> **B1** `(rating−1)/4`, with the requirement that the curve be reconfigurable in the future
+> manager version-ship UI (satisfied: it lives in formula JSON). **B2** NA full-credit as written.
+> **B3** ids = `sales_v2` / `sales_v2` (not `sales_v1_ops`); Sales Analyst_History export incoming.
+> **B4** 15 keys adopted as-is. **B5** category persisted. **B6** placement kept. **B7** no rules.
+> The sections below are preserved as the decision record's supporting analysis.
+
 > Decision prep for Wave2Plan Phases **3b** and **3c**. Each open item below quotes the spec,
 > states what the shipped engine does *today*, adds the real-history numbers where the backfill
 > seed can speak (1,678 MS evaluations — see [BackfillPlan.md §1](../../../database/BackfillPlan.md)),

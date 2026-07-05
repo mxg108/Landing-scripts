@@ -61,8 +61,8 @@ def ms_answers(**overrides):
 def sales_formula() -> Formula:
     """Sales §8 canonical config (inline until §10 sign-off ships the file)."""
     return Formula.model_validate({
-        "formula_id": "sales_v1",
-        "rubric_version": "sales_v1",
+        "formula_id": "sales_v2",
+        "rubric_version": "sales_v2",
         "supersedes": None,
         "scale": {"min": 0, "max": 100},
         "normalization": {
@@ -246,8 +246,10 @@ class TestMemberSupportEngine:
         shift = next(t for t in result.trace if t.rule_id == "frequent_caller_shift")
         assert not shift.fired
 
-    def test_escalation_flag_fires_at_rating_3_and_below(self, ms_formula):
-        for rating, should_fire in [(1, True), (2, True), (3, True), (4, False), (5, False)]:
+    def test_escalation_flag_fires_at_rating_2_and_below(self, ms_formula):
+        """Threshold tightened 1-3 -> 1-2 per Ops VP sign-off 2026-07-04
+        (member_support_v3): rating 3 no longer escalates."""
+        for rating, should_fire in [(1, True), (2, True), (3, False), (4, False), (5, False)]:
             result = evaluate_formula(ms_formula, ms_answers(process_adherence=rating))
             fired = any(e.rule_id == "escalation_flag" for e in result.events)
             assert fired is should_fire, f"rating {rating}"

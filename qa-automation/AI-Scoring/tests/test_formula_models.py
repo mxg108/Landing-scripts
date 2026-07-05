@@ -61,7 +61,8 @@ class TestMemberSupportShippedConfig:
     """The MS files in the repo must load. If these break, downstream is blocked."""
 
     def test_formula_loads(self, ms_formula):
-        assert ms_formula.formula_id == "member_support_v2"
+        assert ms_formula.formula_id == "member_support_v3"
+        assert ms_formula.supersedes == "member_support_v2"
         assert len(ms_formula.sections) == 10
         assert len(ms_formula.rules) == 6
 
@@ -99,8 +100,8 @@ class TestSalesCanonicalConfig:
     @pytest.fixture(scope="class")
     def sales_formula(self) -> Formula:
         return Formula.model_validate({
-            "formula_id": "sales_v1",
-            "rubric_version": "sales_v1",
+            "formula_id": "sales_v2",
+            "rubric_version": "sales_v2",
             "supersedes": None,
             "scale": {"min": 0, "max": 100},
             "normalization": {

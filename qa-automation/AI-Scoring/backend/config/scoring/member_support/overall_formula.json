@@ -1,7 +1,7 @@
 {
-  "formula_id": "member_support_v2",
+  "formula_id": "member_support_v3",
   "rubric_version": "member_support_v2",
-  "supersedes": "member_support_v1",
+  "supersedes": "member_support_v2",
   "scale": { "min": 0, "max": 100 },
   "normalization": {
     "rating_1_5": { "type": "linear", "input_min": 1, "input_max": 5, "output": [0.0, 1.0] },
@@ -26,7 +26,7 @@
     { "id": "frequent_caller_shift", "type": "weight_transfer",       "enabled": true,  "when": { "signal": "frequent_caller" },            "effect": { "from": "call_resolution", "to": "process_adherence", "fraction": 0.5, "target_configurable": true }, "note": "signal wired false-by-default until command_center ships (Wave 3)" },
     { "id": "hrr_na_spread",         "type": "weight_redistribution", "enabled": true,  "when": { "section": "human_review_required", "equals": "NA" }, "effect": { "method": "equal_additive", "from": "human_review_required", "to": "active_sections" } },
     { "id": "caller_id_scale_half",  "type": "score_scale",           "enabled": true,  "when": { "section": "caller_id", "equals": "N" },  "effect": { "multiply": 0.5 } },
-    { "id": "escalation_flag",       "type": "flag",                  "enabled": true,  "when": { "any": [ { "section": "process_adherence", "frac_lte": 0.5 }, { "section": "call_resolution", "frac_lte": 0.5 } ] }, "effect": { "emit_event": "human_review_required", "route": "supervisor_review" } }
+    { "id": "escalation_flag",       "type": "flag",                  "enabled": true,  "when": { "any": [ { "section": "process_adherence", "frac_lte": 0.25 }, { "section": "call_resolution", "frac_lte": 0.25 } ] }, "effect": { "emit_event": "human_review_required", "route": "supervisor_review" }, "note": "threshold tightened 1-3 -> 1-2 per Ops VP sign-off 2026-07-04 (Section10SignoffBriefs A1)" }
   ],
   "evaluation_order": [
     "hard_zero",
@@ -38,7 +38,7 @@
     "escalation_flag"
   ],
   "triggers": {
-    "threshold": { "op": "lte", "frac": 0.5, "ratings": [1, 2, 3] },
+    "threshold": { "op": "lte", "frac": 0.25, "ratings": [1, 2] },
     "active": ["process_adherence", "call_resolution"],
     "candidates": ["matching", "efficiency"],
     "routes_to": "human_review_required"
@@ -47,7 +47,7 @@
     "frequent_caller": { "source": "looker_snapshot", "via": "command_center" }
   },
   "human_review_triggers": [
-    { "section_id": "process_adherence", "max_score_to_trigger": 3 },
-    { "section_id": "call_resolution",   "max_score_to_trigger": 3 }
+    { "section_id": "process_adherence", "max_score_to_trigger": 2 },
+    { "section_id": "call_resolution",   "max_score_to_trigger": 2 }
   ]
 }
