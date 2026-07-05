@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -13,6 +14,16 @@ import os
 # Load .env from the AI-Scoring directory regardless of where uvicorn is launched
 _env_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(_env_path)
+
+# Uvicorn only configures its own `uvicorn.*` loggers; without this, every
+# INFO line from backend.* (version-ship outcomes, cutover shadow compares,
+# eval_store finalizations) falls through to an unconfigured root logger and
+# is dropped. basicConfig is a no-op when a root handler already exists
+# (e.g. under pytest), so this never double-logs.
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+)
 
 from backend.services.version_ship import run_startup_ship
 from backend.routes.scoring import router as scoring_router
