@@ -27,7 +27,9 @@ from backend.services.history_service import (
     agent_name_for_email,
     email_in_team_mails,
 )
+from backend.services import eval_store
 from backend.services.eval_store import record_approval, record_draft_evaluation
+from backend.services.sheets_projection import project_evaluation
 from backend.services.event_bus import get_event_bus
 from backend.services.scoring_service import score_call
 from backend.services.sheets_service import (
@@ -78,6 +80,42 @@ def _job_key(team_id: str, job_id: str) -> str:
 
 def _make_job_id(call_id: str, agent_name: str) -> str:
     return f"{call_id}_{agent_name}".replace(" ", "_")
+
+
+async def _postgres_post_stage1(job, evaluation_id, scorecard, config, team_id):
+    """Post-flip auto-flow (CutoverDesign §2): after the Stage-1 draft row
+    lands, decide auto-finalize vs. human-review pause.
+
+    CLEAN → engine computes + stamps versions, row finalizes, Analyst_History
+    is projected from the DB row, the GAS email fires — zero analyst touch.
+    FLAGGED → the row stays draft with scoring_status='flagged_human_review';
+    the operator resolves it via the (red) editor + approve.
+
+    Job payload gains state/scoring_status/overall_score so the lookup UI can
+    color the button (CutoverDesign §5)."""
+    flagged = eval_store.human_review_trigger_fired(
+        eval_store._active_formula(team_id), scorecard.sections
+    )
+    if flagged:
+        job["state"] = "draft"
+        job["scoring_status"] = "flagged_human_review"
+        return
+
+    detail = await eval_store.stamp_and_finalize(
+        evaluation_id, config, evaluator_email=scorecard.manager_email or ""
+    )
+    pool = await eval_store.get_pool()
+    history_row = await project_evaluation(
+        pool, evaluation_id, config, include_history=True
+    )
+    if history_row is not None and history_row > 0:
+        try:
+            trigger_apps_script(history_row, team_id)
+        except Exception as e:
+            print(f"[auto-flow] Apps Script dispatch failed (retryable): {e}")
+    job["state"] = "finalized"
+    job["scoring_status"] = "complete"
+    job["overall_score"] = float(detail.overall_score)
 
 
 @router.get("/calls")
@@ -302,13 +340,21 @@ async def score_single_call(
                     call_details=call_details,
                 )
             row_num = write_draft_to_fr_ai(scorecard, config)
-            # Stage 1 dual-write (Wave 2 Phase 4a) — §7.3 Phase A: never
-            # raises; Postgres failures are logged and swallowed.
-            evaluation_id = await record_draft_evaluation(scorecard, config)
-            _jobs[key]["status"] = "complete"
+            # Stage 1 dual-write. Pre-flip (§7.3 Phase A): never raises.
+            # Post-flip (scoring_owner='postgres', Phase C): DB errors raise
+            # and the whole job errors — the DB row is truth.
+            owner = await eval_store.get_scoring_owner(team_id)
+            evaluation_id = await record_draft_evaluation(
+                scorecard, config, strict=(owner == "postgres")
+            )
             _jobs[key]["sheets_row"] = row_num
             _jobs[key]["evaluation_id"] = evaluation_id
             _jobs[key]["scorecard"] = scorecard.model_dump()
+            if owner == "postgres" and evaluation_id is not None:
+                await _postgres_post_stage1(
+                    _jobs[key], evaluation_id, scorecard, config, team_id
+                )
+            _jobs[key]["status"] = "complete"
         except Exception as e:
             _jobs[key]["status"] = "error"
             _jobs[key]["error"] = str(e)
@@ -419,11 +465,18 @@ async def score_batch(
                         duration_ms=dur,
                     )
                 row_num = write_draft_to_fr_ai(scorecard, config)
-                evaluation_id = await record_draft_evaluation(scorecard, config)
-                _jobs[k]["status"] = "complete"
+                owner = await eval_store.get_scoring_owner(team_id)
+                evaluation_id = await record_draft_evaluation(
+                    scorecard, config, strict=(owner == "postgres")
+                )
                 _jobs[k]["sheets_row"] = row_num
                 _jobs[k]["evaluation_id"] = evaluation_id
                 _jobs[k]["scorecard"] = scorecard.model_dump()
+                if owner == "postgres" and evaluation_id is not None:
+                    await _postgres_post_stage1(
+                        _jobs[k], evaluation_id, scorecard, config, team_id
+                    )
+                _jobs[k]["status"] = "complete"
             except Exception as e:
                 _jobs[k]["status"] = "error"
                 _jobs[k]["error"] = str(e)
@@ -483,6 +536,78 @@ async def approve_scorecard(
         )
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Approval payload invalid: {e}")
+
+    # Post-flip: finalized evaluations are immutable from the UI.
+    if job.get("state") == "finalized":
+        job["status"] = "complete"
+        raise HTTPException(status_code=409, detail="Evaluation is finalized (engine-scored) — read-only")
+
+    owner = await eval_store.get_scoring_owner(team_id)
+    if owner == "postgres":
+        # Flagged-call resolution path (CutoverDesign §2/§5): DB transition +
+        # engine compute + projections. No destination tab, no readback —
+        # DB errors are hard errors (§7.3 Phase C).
+        sc = job["scorecard"]
+        evaluator_email = sc.get("manager_email", "")
+        try:
+            evaluation_id = await record_approval(
+                config,
+                evaluation_id=job.get("evaluation_id"),
+                dialpad_link=sc.get("dialpad_link"),
+                evaluator_email=evaluator_email,
+                approved_sections=approval.sections,
+                draft_sections=sc.get("sections", []),
+                key_strengths=approval.key_strengths,
+                opportunities=approval.opportunities,
+                overall_score_raw=None,  # the engine produces the number
+                agent_email=job.get("agent_email") or None,
+                model=sc.get("model", "gemini-2.5-flash"),
+                strict=True,
+                resolving_review=job.get("scoring_status") == "flagged_human_review",
+            )
+            if evaluation_id is None:
+                raise HTTPException(status_code=500, detail="No draft evaluation row to approve")
+            detail = await eval_store.stamp_and_finalize(
+                evaluation_id, config, evaluator_email=evaluator_email
+            )
+            pool = await eval_store.get_pool()
+            history_row = await project_evaluation(
+                pool, evaluation_id, config, include_history=True
+            )
+            if history_row is not None and history_row > 0:
+                try:
+                    trigger_apps_script(history_row, team_id)
+                except Exception as e:
+                    print(f"[approve] Apps Script dispatch failed (retryable): {e}")
+            append_score_audit_row(
+                api_key_role=identity.role,
+                evaluator_email=evaluator_email,
+                agent_email=job.get("agent_email", ""),
+                agent_name=job.get("agent_name") or sc.get("agent_name") or "",
+                call_id=job.get("call_id", ""),
+                target_team=team_id,
+                action=audit_cfg.ACTION_APPROVED,
+                result_row=history_row,
+                notes="engine-scored",
+            )
+            job["status"] = "approved"
+            job["state"] = "finalized"
+            job["scoring_status"] = "complete"
+            job["overall_score"] = float(detail.overall_score)
+            job["evaluation_id"] = evaluation_id
+            return {
+                "status": "approved",
+                "state": "finalized",
+                "overall_score": float(detail.overall_score),
+                "history_row": history_row,
+            }
+        except HTTPException:
+            job["status"] = "complete"
+            raise
+        except Exception as e:
+            job["status"] = "error"
+            job["error"] = str(e)
+            raise HTTPException(status_code=500, detail=f"Engine approval failed: {e}")
 
     try:
         sections_dicts = [s.model_dump() for s in approval.sections]

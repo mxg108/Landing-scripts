@@ -367,6 +367,21 @@ function renderPanel(data) {
     const statusEl = document.getElementById(`approve-status-${JOB_ID}`);
     if (statusEl) statusEl.textContent = 'Approved — evaluation email already dispatched.';
   }
+
+  // Post-cutover (CutoverDesign §5): an engine-finalized evaluation is
+  // immutable — render everything, then lock it down completely.
+  if (data.state === 'finalized') {
+    panel.querySelectorAll('select, textarea, input, button').forEach(el => el.disabled = true);
+    const btn = document.getElementById(`approve-btn-${JOB_ID}`);
+    if (btn) { btn.textContent = 'Finalized'; btn.style.background = '#065f46'; }
+    const statusEl = document.getElementById(`approve-status-${JOB_ID}`);
+    if (statusEl) {
+      const score = data.overall_score != null ? ` — overall score ${data.overall_score}` : '';
+      statusEl.textContent = `Finalized by the scoring engine${score}. This evaluation is read-only.`;
+    }
+    document.getElementById('scHeaderMeta').textContent =
+      `Job ${JOB_ID} — ${TEAM_ID} — finalized (read-only)`;
+  }
 }
 
 // --------------------------------------------------------------------
