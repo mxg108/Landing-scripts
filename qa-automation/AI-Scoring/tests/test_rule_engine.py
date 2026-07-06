@@ -531,3 +531,27 @@ class TestAnswerValidation:
         (int 1 would be ambiguous with rating 1)."""
         with pytest.raises(AnswerValidationError):
             evaluate_formula(ms_formula, ms_answers(cri=bad))
+
+
+class TestCriNaSpread:
+    """member_support_v4 regression (production 2026-07-05): the rubric
+    always allowed cri = NA (outbound/property calls), the v3 formula said
+    binary_yn and the engine rejected real AI output at compute time."""
+
+    def test_cri_na_is_accepted_and_spread(self, ms_formula):
+        result = evaluate_formula(ms_formula, ms_answers(cri="NA"))
+        assert result.final_score == pytest.approx(100.0)
+        assert result.effective_weights["cri"] == 0.0
+        # hrr (10) and cri (5) each spread equally over the 8 remaining active
+        assert result.effective_weights["greeting"] == pytest.approx(5 + 10 / 8 + 5 / 8)
+        assert sorted(result.na_sections) == ["cri", "human_review_required"]
+
+    def test_cri_na_with_imperfect_scores(self, ms_formula):
+        result = evaluate_formula(ms_formula, ms_answers(cri="NA", greeting=1))
+        # greeting weight 5 + 10/8 + 5/8 = 6.875; frac 0 loses exactly that
+        assert result.final_score == pytest.approx(100 - 6.875)
+
+    def test_triple_na_still_never_loses_weight(self, ms_formula):
+        result = evaluate_formula(ms_formula, ms_answers(cri="NA", caller_id="NA"))
+        assert result.final_score == pytest.approx(100.0)
+        assert sum(result.effective_weights.values()) == pytest.approx(100.0)

@@ -61,10 +61,10 @@ class TestMemberSupportShippedConfig:
     """The MS files in the repo must load. If these break, downstream is blocked."""
 
     def test_formula_loads(self, ms_formula):
-        assert ms_formula.formula_id == "member_support_v3"
-        assert ms_formula.supersedes == "member_support_v2"
+        assert ms_formula.formula_id == "member_support_v4"
+        assert ms_formula.supersedes == "member_support_v3"
         assert len(ms_formula.sections) == 10
-        assert len(ms_formula.rules) == 6
+        assert len(ms_formula.rules) == 7
 
     def test_rubric_loads(self, ms_rubric):
         assert ms_rubric.rubric_version == "member_support_v2"

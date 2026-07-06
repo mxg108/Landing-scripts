@@ -30,7 +30,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _MS_FORMULA_JSON = _REPO_ROOT / "backend" / "config" / "scoring" / "member_support" / "overall_formula.json"
 _MS_TEAM_JSON = _REPO_ROOT / "backend" / "config" / "teams" / "member_support.json"
 
-MS_FORMULA_VERSION = "member_support_v3"
+MS_FORMULA_VERSION = "member_support_v4"
 MS_RUBRIC_VERSION = "member_support_v2"
 
 
