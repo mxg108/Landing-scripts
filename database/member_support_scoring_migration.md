@@ -1,6 +1,6 @@
 # Member Support — QA Scoring Migration Spec
 
-> Canonical specification for the Member Support scoring formula (current: `member_support_v4`).
+> Canonical specification for the Member Support scoring formula (current: `member_support_v5` — July rollout).
 > **Purpose:** decouple the QA scoring pipeline from Google Sheets-as-database and make the
 > **PostgreSQL engine the single owner of score production**. Scope is deliberately limited to the
 > agreed rubric sections, their initial weights, the scoring formula/rules, and triggers.
@@ -8,11 +8,11 @@
 | | |
 |---|---|
 | **Status** | Finalized (Ops VP sign-off; §10 open items **closed 2026-07-04** — see Section10SignoffBriefs.md) |
-| **Formula ID** | `member_support_v4` *(v1 = original sign-off; v2 = Ops-signed keys; v3 = §10-close threshold tightening; v4 = cri NA handling, 2026-07-05)* |
+| **Formula ID** | `member_support_v5` *(v3 = §10 thresholds; v4 = cri NA fix; **v5 = July-rollout plain sum**, Director sign-off 2026-07-06 — the v4 rule library returns ~August)* |
 | **Rubric version** | `member_support_v2` |
 | **Score scale** | 0–100 |
 | **System of record** | this spec → PostgreSQL scoring engine (replaces Sheets) |
-| **Last updated** | 2026-07-05 |
+| **Last updated** | 2026-07-06 |
 
 ---
 
@@ -40,7 +40,7 @@ at most, a read-only mirror.
 
 | Field | Value |
 |---|---|
-| `formula_id` | `member_support_v4` |
+| `formula_id` | `member_support_v5` |
 | `rubric_version` | `member_support_v2` |
 | `scale` | 0–100 |
 | weight basis | percentage points summing to 100 |
@@ -85,7 +85,16 @@ sections that remain active).
 
 ## 5. Formula Rules (Rule Library)
 
-Rules belong to a shared engine and are gated per team. For `member_support_v4`:
+**July 2026 rollout (`member_support_v5`, Director sign-off 2026-07-06):** plain weighted sum
+only. Every behavioral rule below is **disabled for July** — no hard-zero, no caller_id transfer
+(replaced by a uniform equal-additive NA spread), no frequent-caller shift, no ×0.5 scale, no
+escalation flag, and `human_review_triggers` is empty (every scored call auto-finalizes). The only
+v5 rules are the three NA bookkeeping spreads (`caller_id_na_spread`, `hrr_na_spread`,
+`cri_na_spread`). The archived `member_support_v4` file is preserved at
+`config/scoring/member_support/v4_full_rules.json` and returns (as v6+) with the August
+full-feature rollout.
+
+Rules belong to a shared engine and are gated per team. The **full rule library** (August target, archived as `member_support_v4`):
 
 | id | type | enabled | Condition | Effect |
 |---|---|---|---|---|
@@ -138,9 +147,9 @@ flag (7) reads raw ratings, so redistribution never changes whether a call escal
 
 ```json
 {
-  "formula_id": "member_support_v4",
+  "formula_id": "member_support_v5",
   "rubric_version": "member_support_v2",
-  "supersedes": "member_support_v3",
+  "supersedes": "member_support_v4",
   "scale": { "min": 0, "max": 100 },
   "normalization": {
     "rating_1_5": { "type": "linear", "input_min": 1, "input_max": 5, "output": [0.0, 1.0] },
@@ -151,46 +160,29 @@ flag (7) reads raw ratings, so redistribution never changes whether a call escal
     { "key": "greeting",              "label": "Greeting",                      "score_type": "rating_1_5",    "weight": 5.0,  "trigger": null },
     { "key": "caller_id",             "label": "Caller ID",                     "score_type": "binary_yn_na",  "weight": 5.0,  "trigger": null },
     { "key": "purpose",               "label": "Purpose of Call",               "score_type": "rating_1_5",    "weight": 5.0,  "trigger": null },
-    { "key": "matching",              "label": "Matching the Moment",           "score_type": "rating_1_5",    "weight": 5.0,  "trigger": "candidate" },
-    { "key": "process_adherence",     "label": "Process Adherence",             "score_type": "rating_1_5",    "weight": 25.0, "trigger": "active" },
-    { "key": "call_resolution",       "label": "Call Resolution",               "score_type": "rating_1_5",    "weight": 20.0, "trigger": "active" },
+    { "key": "matching",              "label": "Matching the Moment",           "score_type": "rating_1_5",    "weight": 5.0,  "trigger": null },
+    { "key": "process_adherence",     "label": "Process Adherence",             "score_type": "rating_1_5",    "weight": 25.0, "trigger": null },
+    { "key": "call_resolution",       "label": "Call Resolution",               "score_type": "rating_1_5",    "weight": 20.0, "trigger": null },
     { "key": "comms",                 "label": "Communication",                 "score_type": "rating_1_5",    "weight": 10.0, "trigger": null },
-    { "key": "efficiency",            "label": "Efficiency",                    "score_type": "rating_1_5",    "weight": 10.0, "trigger": "candidate" },
+    { "key": "efficiency",            "label": "Efficiency",                    "score_type": "rating_1_5",    "weight": 10.0, "trigger": null },
     { "key": "human_review_required", "label": "Human Review Required",         "score_type": "rating_1_5_na", "weight": 10.0, "trigger": null, "na_default": true },
     { "key": "cri",                   "label": "Customer Resolution Indicator", "score_type": "binary_yn_na",  "weight": 5.0,  "trigger": null }
   ],
   "rules": [
-    { "id": "hard_zero",             "type": "score_override",        "enabled": false, "when": { "section": "caller_id", "equals": "N" },  "effect": { "set_score": 0 }, "note": "retained for collections/billing/legal; disabled for member_support_v2" },
-    { "id": "caller_id_na_transfer", "type": "weight_transfer",       "enabled": true,  "when": { "section": "caller_id", "equals": "NA" }, "effect": { "from": "caller_id", "to": "call_resolution", "amount": "all" } },
-    { "id": "frequent_caller_shift", "type": "weight_transfer",       "enabled": true,  "when": { "signal": "frequent_caller" },            "effect": { "from": "call_resolution", "to": "process_adherence", "fraction": 0.5, "target_configurable": true }, "note": "signal wired false-by-default until command_center ships (Wave 3)" },
-    { "id": "hrr_na_spread",         "type": "weight_redistribution", "enabled": true,  "when": { "section": "human_review_required", "equals": "NA" }, "effect": { "method": "equal_additive", "from": "human_review_required", "to": "active_sections" } },
-    { "id": "cri_na_spread",         "type": "weight_redistribution", "enabled": true,  "when": { "section": "cri", "equals": "NA" }, "effect": { "method": "equal_additive", "from": "cri", "to": "active_sections" }, "note": "v4 (2026-07-05): rubric declares cri na_applicable (outbound/property calls have no member resolution); the v3 formula said binary_yn and the engine rejected real NA output at compute time. Same equal-additive house style as hrr_na_spread per the A4 sign-off." },
-    { "id": "caller_id_scale_half",  "type": "score_scale",           "enabled": true,  "when": { "section": "caller_id", "equals": "N" },  "effect": { "multiply": 0.5 } },
-    { "id": "escalation_flag",       "type": "flag",                  "enabled": true,  "when": { "any": [ { "section": "process_adherence", "frac_lte": 0.25 }, { "section": "call_resolution", "frac_lte": 0.25 } ] }, "effect": { "emit_event": "human_review_required", "route": "supervisor_review" }, "note": "threshold tightened 1-3 -> 1-2 per Ops VP sign-off 2026-07-04 (Section10SignoffBriefs A1)" }
+    { "id": "caller_id_na_spread", "type": "weight_redistribution", "enabled": true, "when": { "section": "caller_id", "equals": "NA" },             "effect": { "method": "equal_additive", "from": "caller_id", "to": "active_sections" }, "note": "July rollout: pure NA bookkeeping replaces the v4 transfer-to-resolution (a behavioral choice). Uniform equal-additive spreads per the A4 house style." },
+    { "id": "hrr_na_spread",       "type": "weight_redistribution", "enabled": true, "when": { "section": "human_review_required", "equals": "NA" }, "effect": { "method": "equal_additive", "from": "human_review_required", "to": "active_sections" } },
+    { "id": "cri_na_spread",       "type": "weight_redistribution", "enabled": true, "when": { "section": "cri", "equals": "NA" },                   "effect": { "method": "equal_additive", "from": "cri", "to": "active_sections" } }
   ],
   "evaluation_order": [
-    "hard_zero",
-    "caller_id_na_transfer",
-    "frequent_caller_shift",
+    "caller_id_na_spread",
     "hrr_na_spread",
     "cri_na_spread",
-    "weighted_sum",
-    "caller_id_scale_half",
-    "escalation_flag"
+    "weighted_sum"
   ],
-  "triggers": {
-    "threshold": { "op": "lte", "frac": 0.25, "ratings": [1, 2] },
-    "active": ["process_adherence", "call_resolution"],
-    "candidates": ["matching", "efficiency"],
-    "routes_to": "human_review_required"
-  },
-  "external_signals": {
-    "frequent_caller": { "source": "looker_snapshot", "via": "command_center" }
-  },
-  "human_review_triggers": [
-    { "section_id": "process_adherence", "max_score_to_trigger": 2 },
-    { "section_id": "call_resolution",   "max_score_to_trigger": 2 }
-  ]
+  "triggers": {},
+  "external_signals": {},
+  "deprecated_sections": [],
+  "human_review_triggers": []
 }
 ```
 

@@ -30,7 +30,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _MS_FORMULA_JSON = _REPO_ROOT / "backend" / "config" / "scoring" / "member_support" / "overall_formula.json"
 _MS_TEAM_JSON = _REPO_ROOT / "backend" / "config" / "teams" / "member_support.json"
 
-MS_FORMULA_VERSION = "member_support_v4"
+MS_FORMULA_VERSION = "member_support_v5"
 MS_RUBRIC_VERSION = "member_support_v2"
 
 
@@ -157,10 +157,10 @@ class TestComputeOverallScore:
         score = await compute_overall_score(_conn(answers), 1)
         assert score == Decimal("78.1")
 
-    async def test_caller_id_n_halves_score(self):
-        """(100 − (5 + 10/9)) × 0.5 = 46.944… → 46.9."""
+    async def test_caller_id_n_costs_only_its_slot_under_v5(self):
+        """July plain sum: no ×0.5 — 100 − (5 + 10/9) = 93.888… → 93.9."""
         score = await compute_overall_score(_conn(_perfect_answers(caller_id="N")), 1)
-        assert score == Decimal("46.9")
+        assert score == Decimal("93.9")
 
     async def test_hrr_na_numeric_row_shape_converts(self):
         """The migration-012 shape (numeric section, numeric_score NULL,
@@ -171,23 +171,23 @@ class TestComputeOverallScore:
         detail = await compute_score_detail(_conn(), 1)
         assert detail.result.na_sections == ["human_review_required"]
 
-    async def test_signals_reach_the_engine(self):
-        """frequent_caller moves resolution weight before its frac-0 loss:
-        without signal 100 − (20+10/9) → 78.9; with it 100 − (10+10/9) → 88.9."""
+    async def test_signals_are_inert_under_v5(self):
+        """July plain sum has no signal-gated rules — the signals parameter
+        must be a pure no-op (it returns with the v4 library in August)."""
         answers = _perfect_answers(call_resolution=1)
         without = await compute_overall_score(_conn(answers), 1)
         with_signal = await compute_overall_score(
             _conn(answers), 1, signals={"frequent_caller": True}
         )
-        assert without == Decimal("78.9")
-        assert with_signal == Decimal("88.9")
+        assert without == with_signal == Decimal("78.9")
 
     async def test_detail_carries_versions_and_trace(self):
         detail = await compute_score_detail(_conn(_perfect_answers(process_adherence=1)), 1)
         assert detail.team_id == "member_support"
         assert detail.formula_version == MS_FORMULA_VERSION
         assert detail.rubric_version == MS_RUBRIC_VERSION
-        assert any(e.rule_id == "escalation_flag" for e in detail.result.events)
+        assert detail.result.events == []  # July v5: no flag rules
+        assert any(t.rule_id == "hrr_na_spread" and t.fired for t in detail.result.trace)
         assert detail.overall_score == Decimal(str(detail.result.final_score)).quantize(Decimal("0.1"))
 
     async def test_jsonb_returned_as_str_is_decoded(self):
