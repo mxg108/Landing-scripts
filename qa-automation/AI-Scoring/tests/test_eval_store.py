@@ -379,10 +379,12 @@ class ApprovalFakeConn(FakeConn):
     def __init__(self, existing_id=None):
         super().__init__(existing_id)
         self.eval_updates: list[tuple] = []
+        self.eval_update_queries: list[str] = []
 
     async def execute(self, query, *args):
         if query.startswith("UPDATE qa.evaluations"):
             self.eval_updates.append(args)
+            self.eval_update_queries.append(query)
         elif query.startswith("DELETE"):
             self.deletes.append(args)
         else:
@@ -548,13 +550,14 @@ class TestApprovalRecomputeAndShadow:
         await self._approve(ms_config, sections)
         (args,) = self.conn.eval_updates
         assert args[8] == "flagged_human_review"
-        assert args[9] is not None
+        assert args[9] is True      # flagged -> required_at kept/set (SQL CASE)
 
     async def test_clean_approval_clears_flag(self, ms_config):
         await self._approve(ms_config, _approval_sections(ms_config))
         (args,) = self.conn.eval_updates
         assert args[8] == "complete"
-        assert args[9] is None
+        assert args[9] is False
+        assert args[10] is False    # not a resolution -> completed_at untouched
 
     async def test_shadow_log_emitted(self, ms_config, caplog):
         import logging
@@ -671,9 +674,15 @@ class TestResolvingReview:
             overall_score_raw=None, resolving_review=True,
         )
         (args,) = self.conn.eval_updates
-        assert args[8] == "complete"          # flag cleared
-        assert args[9] is None                # required_at cleared
-        assert args[10] is not None           # completed_at stamped
+        assert args[8] == "complete"          # status back to complete
+        assert args[9] is False               # NOT the recompute-fire branch
+        assert args[10] is True               # resolution branch
+        # Regression (production 2026-07-05, evaluations_human_review_pair_check):
+        # the SQL must PRESERVE required_at on resolution — completed_at
+        # without required_at violates the 009 pair CHECK.
+        query = self.conn.eval_update_queries[0]
+        assert "WHEN $11::boolean THEN human_review_required_at" in query
+        assert "WHEN $11::boolean THEN NOW() ELSE human_review_completed_at" in query
 
 
 class FinalizeFakeConn:

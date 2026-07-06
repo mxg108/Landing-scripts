@@ -29,6 +29,24 @@ if str(_REPO_ROOT) not in sys.path:
 
 from backend.config import history_layout  # noqa: E402
 from backend.config.team_config import TeamConfig, _assemble_rubric_block  # noqa: E402
+from backend.services import eval_store  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_real_database(monkeypatch):
+    """The unit suite must NEVER reach a real Postgres.
+
+    backend.main's load_dotenv puts the production DATABASE_URL into the
+    environment at import time; with the cutover's per-request
+    scoring_owner lookup, an unguarded route test would silently read the
+    LIVE Railway flag and branch on production state (observed 2026-07-05:
+    test_approve_writes_audit_row took the postgres path after the MS
+    flip). Every test starts with no DSN and no cached pool; tests that
+    want a DB monkeypatch eval_store._get_pool with a fake.
+    """
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(eval_store, "_pool", None)
+
 
 _FIXTURE_DIR = Path(__file__).parent / "fixtures" / "teams"
 _PROD_CONFIG_DIR = _REPO_ROOT / "backend" / "config" / "teams"

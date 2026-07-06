@@ -504,6 +504,12 @@ async def record_approval(
                         config.team_id, dialpad_link,
                     )
                     return None
+                # human-review timestamps must respect the 009 pair CHECK
+                # (completed_at requires required_at): a §3.14 resolution
+                # PRESERVES required_at (the record of when it flagged) and
+                # stamps completed_at; a recompute-fire keeps/sets
+                # required_at; only a recompute-clear (edits lifted the
+                # scores, never reviewed) NULLs it.
                 await conn.execute(
                     "UPDATE qa.evaluations SET "
                     "  evaluator_email = $2, "
@@ -514,8 +520,12 @@ async def record_approval(
                     "  source = $7, "
                     "  state = $8, "
                     "  scoring_status = $9, "
-                    "  human_review_required_at = $10, "
-                    "  human_review_completed_at = COALESCE($11, human_review_completed_at), "
+                    "  human_review_required_at = CASE "
+                    "    WHEN $10::boolean THEN COALESCE(human_review_required_at, NOW()) "
+                    "    WHEN $11::boolean THEN human_review_required_at "
+                    "    ELSE NULL END, "
+                    "  human_review_completed_at = CASE "
+                    "    WHEN $11::boolean THEN NOW() ELSE human_review_completed_at END, "
                     "  approved_at = NOW(), "
                     "  finalized_at = CASE WHEN $8 = 'finalized' THEN NOW() ELSE finalized_at END "
                     "WHERE id = $1",
@@ -528,8 +538,8 @@ async def record_approval(
                     "ai_reviewed" if any_changed else "ai",
                     "finalized" if overall is not None else "approved",
                     "flagged_human_review" if flagged_review else "complete",
-                    datetime.now(timezone.utc) if flagged_review else None,
-                    datetime.now(timezone.utc) if resolving_review else None,
+                    flagged_review,
+                    resolving_review,
                 )
                 await conn.execute(
                     "DELETE FROM qa.evaluation_sections WHERE evaluation_id = $1",

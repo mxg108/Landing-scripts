@@ -605,7 +605,10 @@ async def approve_scorecard(
             job["status"] = "complete"
             raise
         except Exception as e:
-            job["status"] = "error"
+            # Roll back to 'complete' so the manager can retry — the failed
+            # DB transaction rolled back too, so the row is still consistent.
+            # (Mirrors the legacy path's retry semantics.)
+            job["status"] = "complete"
             job["error"] = str(e)
             raise HTTPException(status_code=500, detail=f"Engine approval failed: {e}")
 
