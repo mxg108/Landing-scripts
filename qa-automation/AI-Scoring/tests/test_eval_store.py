@@ -570,7 +570,7 @@ class TestApprovalRecomputeAndShadow:
                   if m.startswith("shadow: team=member_support")]
         assert len(shadow) == 1
         assert "engine=" in shadow[0] and "sheet=87" in shadow[0]
-        assert "formula=member_support_v3" in shadow[0]
+        assert "formula=member_support_v4" in shadow[0]
         assert "trigger_fired=False" in shadow[0]
 
     async def test_shadow_skips_incomplete_payload(self, ms_config, caplog):
