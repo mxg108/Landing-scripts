@@ -8,6 +8,7 @@ Registered twice in main.py:
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -82,6 +83,44 @@ def _make_job_id(call_id: str, agent_name: str) -> str:
     return f"{call_id}_{agent_name}".replace(" ", "_")
 
 
+def _sse_eval_id_from_link(link: str) -> str:
+    """Trailing path segment of dialpad_link — the /datapoint route key
+    (mirrors team_stats._parse_row; see the legacy approve path)."""
+    if not link:
+        return ""
+    clean = link.split("[")[0].strip().split("?")[0].strip()
+    return clean.rstrip("/").split("/")[-1]
+
+
+async def _publish_finalized_event(
+    team_id, job, *, agent_name, evaluator_email, overall_score,
+    history_row, dialpad_link, call_summary, key_strengths, opportunities,
+):
+    """SSE 'eval_approved' for the postgres paths (auto-finalize + flagged
+    resolution) — same payload the legacy approve publishes, so dashboards
+    toast identically. Never breaks the flow."""
+    def _truncate(s: str, n: int = 280) -> str:
+        s = s or ""
+        return s if len(s) <= n else s[: n - 1] + "…"
+
+    try:
+        await get_event_bus().publish(team_id, "eval_approved", {
+            "call_id": job.get("call_id", ""),
+            "eval_id": _sse_eval_id_from_link(dialpad_link) or job.get("call_id", ""),
+            "history_row": history_row,
+            "agent": agent_name or "",
+            "evaluator_email": evaluator_email,
+            "overall_score": overall_score,
+            "summary": _truncate(call_summary),
+            "strengths": _truncate(key_strengths),
+            "opportunities": _truncate(opportunities),
+            "dialpad_link": dialpad_link or "",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        print(f"[sse] eval_approved publish failed (non-fatal): {e}")
+
+
 async def _postgres_post_stage1(job, evaluation_id, scorecard, config, team_id):
     """Post-flip auto-flow (CutoverDesign §2): after the Stage-1 draft row
     lands, decide auto-finalize vs. human-review pause.
@@ -108,14 +147,36 @@ async def _postgres_post_stage1(job, evaluation_id, scorecard, config, team_id):
     history_row = await project_evaluation(
         pool, evaluation_id, config, include_history=True
     )
-    if history_row is not None and history_row > 0:
-        try:
-            trigger_apps_script(history_row, team_id)
-        except Exception as e:
-            print(f"[auto-flow] Apps Script dispatch failed (retryable): {e}")
     job["state"] = "finalized"
     job["scoring_status"] = "complete"
     job["overall_score"] = float(detail.overall_score)
+    job["history_row"] = history_row
+    await _publish_finalized_event(
+        team_id, job,
+        agent_name=scorecard.agent_name,
+        evaluator_email=scorecard.manager_email or "",
+        overall_score=float(detail.overall_score),
+        history_row=history_row,
+        dialpad_link=scorecard.dialpad_link,
+        call_summary=scorecard.call_summary,
+        key_strengths=scorecard.key_strengths,
+        opportunities=scorecard.opportunities,
+    )
+    if history_row is not None and history_row > 0:
+        try:
+            script_response = trigger_apps_script(history_row, team_id)
+            job["email_dispatch"] = script_response
+            print(f"[auto-flow] Apps Script response: {script_response}")
+        except Exception as e:
+            # Visible, not swallowed-into-print-limbo: the job payload
+            # carries the failure so operators see it in the UI/logs.
+            job["email_dispatch"] = {"status": "error", "message": str(e)}
+            logging.getLogger(__name__).exception(
+                "auto-flow: Apps Script dispatch failed for eval %s (retryable)",
+                evaluation_id,
+            )
+    else:
+        job["email_dispatch"] = {"status": "skipped", "message": "no Analyst_History row projected"}
 
 
 @router.get("/calls")
@@ -576,9 +637,25 @@ async def approve_scorecard(
             )
             if history_row is not None and history_row > 0:
                 try:
-                    trigger_apps_script(history_row, team_id)
+                    script_response = trigger_apps_script(history_row, team_id)
+                    job["email_dispatch"] = script_response
                 except Exception as e:
-                    print(f"[approve] Apps Script dispatch failed (retryable): {e}")
+                    job["email_dispatch"] = {"status": "error", "message": str(e)}
+                    logging.getLogger(__name__).exception(
+                        "approve: Apps Script dispatch failed for eval %s (retryable)",
+                        evaluation_id,
+                    )
+            await _publish_finalized_event(
+                team_id, job,
+                agent_name=job.get("agent_name") or sc.get("agent_name"),
+                evaluator_email=evaluator_email,
+                overall_score=float(detail.overall_score),
+                history_row=history_row,
+                dialpad_link=sc.get("dialpad_link"),
+                call_summary=sc.get("call_summary", ""),
+                key_strengths=approval.key_strengths,
+                opportunities=approval.opportunities,
+            )
             append_score_audit_row(
                 api_key_role=identity.role,
                 evaluator_email=evaluator_email,
