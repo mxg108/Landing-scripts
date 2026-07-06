@@ -607,6 +607,20 @@ async def stamp_and_finalize(
             rubric_version=versions.rubric_version,
         )
         async with conn.transaction():
+            # Identity from qa.agents (never the Mails tab — CutoverDesign §2):
+            # fills agent_id + agent_email so the Analyst_History projection
+            # carries a recipient for the GAS email pipeline. No-op while the
+            # agent is missing from qa.agents (importer: scripts/import_agents.py).
+            await conn.execute(
+                "UPDATE qa.evaluations e SET "
+                "  agent_id = a.id, "
+                "  agent_email = COALESCE(e.agent_email, a.email) "
+                "FROM qa.agents a "
+                "WHERE e.id = $1 AND a.team_id = e.team_id AND a.active "
+                "  AND (LOWER(a.name) = LOWER(e.agent_name_raw) "
+                "       OR LOWER(a.canonical_name) = LOWER(e.agent_name_raw))",
+                evaluation_id,
+            )
             await conn.execute(
                 "UPDATE qa.evaluations SET "
                 "  overall_score = $2, "

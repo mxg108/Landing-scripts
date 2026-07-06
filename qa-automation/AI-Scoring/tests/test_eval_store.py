@@ -688,6 +688,7 @@ class TestResolvingReview:
 class FinalizeFakeConn:
     def __init__(self):
         self.executed: list[tuple] = []
+        self.queries: list[str] = []
 
     @asynccontextmanager
     async def transaction(self):
@@ -696,6 +697,7 @@ class FinalizeFakeConn:
     async def execute(self, query, *args):
         assert query.startswith("UPDATE qa.evaluations")
         self.executed.append(args)
+        self.queries.append(query)
 
 
 class FinalizePool:
@@ -739,7 +741,13 @@ class TestStampAndFinalize:
 
         detail = await eval_store.stamp_and_finalize(55, ms_config, "op@landing.com")
         assert detail.overall_score == Decimal("91.7")
-        (args,) = conn.executed
+        # Two statements, one transaction: qa.agents identity resolution
+        # (slice 3.5 — fills agent_email for the GAS email recipient), then
+        # the finalize UPDATE.
+        resolve_args, args = conn.executed
+        assert resolve_args == (55,)
+        assert "FROM qa.agents" in conn.queries[0]
+        assert "agent_email = COALESCE(e.agent_email, a.email)" in conn.queries[0]
         # (id, overall, formula_version, rubric_version, evaluator)
         assert args[0] == 55
         assert args[1] == Decimal("91.7")
