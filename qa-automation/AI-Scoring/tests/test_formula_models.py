@@ -94,47 +94,19 @@ class TestMemberSupportShippedConfig:
         Formula.model_validate(dumped)
 
 
-class TestSalesCanonicalConfig:
-    """Sales §8 canonical config parses cleanly even though the JSON file
-    hasn't been regenerated yet (blocked on §10 sign-off)."""
+class TestSalesShippedConfig:
+    """The shipped sales_v2 formula file (config/scoring/sales/) — the
+    signed §8 shape. Ships via the startup ceremony once the sales_v2
+    RUBRIC is archived."""
 
     @pytest.fixture(scope="class")
     def sales_formula(self) -> Formula:
-        return Formula.model_validate({
-            "formula_id": "sales_v2",
-            "rubric_version": "sales_v2",
-            "supersedes": None,
-            "scale": {"min": 0, "max": 100},
-            "normalization": {
-                "rating_1_5": {"type": "linear", "input_min": 1, "input_max": 5, "output": [0.0, 1.0]},
-                "binary_yn": {"Y": 1.0, "N": 0.0},
-                "na": "full_credit",
-            },
-            "sections": [
-                {"key": "greeting",           "label": "Greeting",              "category": "Opening",     "score_type": "binary_yn_na",  "weight": 5.0},
-                {"key": "stay_type",          "label": "Personal or COHO Stay", "category": "Opening",     "score_type": "binary_yn_na",  "weight": 4.0},
-                {"key": "move_reason",        "label": "Move Reason",           "category": "Discovery",   "score_type": "rating_1_5_na", "weight": 15.0},
-                {"key": "landing_intro",      "label": "Landing Intro",         "category": "Discovery",   "score_type": "binary_yn_na",  "weight": 6.0},
-                {"key": "timeline_housing",   "label": "Timeline & Housing",    "category": "Discovery",   "score_type": "rating_1_5_na", "weight": 8.0},
-                {"key": "landing_guarantee",  "label": "Landing Guarantee",     "category": "Pitch",       "score_type": "rating_1_5_na", "weight": 6.0},
-                {"key": "pricing",            "label": "Pricing Breakdown",     "category": "Pitch",       "score_type": "rating_1_5_na", "weight": 8.0},
-                {"key": "fit_confirmation",   "label": "Confirmation of Fit",   "category": "Pitch",       "score_type": "rating_1_5_na", "weight": 5.0},
-                {"key": "objection_handling", "label": "Objection Handling",    "category": "Objections",  "score_type": "rating_1_5_na", "weight": 8.0},
-                {"key": "urgency",            "label": "Urgency",               "category": "Objections",  "score_type": "binary_yn_na",  "weight": 5.0},
-                {"key": "follow_up",          "label": "Follow-up",             "category": "Objections",  "score_type": "binary_yn_na",  "weight": 6.0},
-                {"key": "potential_booking",  "label": "Potential Booking",     "category": "Post-Call",   "score_type": "binary_yn_na",  "weight": 4.0},
-                {"key": "notes_mc",           "label": "Detailed Notes in MC",  "category": "Post-Call",   "score_type": "binary_yn_na",  "weight": 5.0},
-                {"key": "contact_shared",     "label": "Contact Shared",        "category": "Post-Call",   "score_type": "binary_yn_na",  "weight": 5.0},
-                {"key": "client_experience",  "label": "Client Experience",     "category": "Post-Call",   "score_type": "rating_1_5_na", "weight": 10.0},
-            ],
-            "rules": [],
-            "evaluation_order": [WEIGHTED_SUM],
-            "triggers": {},
-            "external_signals": {},
-            "deprecated_sections": [],
-        })
+        path = _REPO_ROOT / "backend" / "config" / "scoring" / "sales" / "overall_formula.json"
+        return Formula.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
     def test_loads_fifteen_sections(self, sales_formula):
+        assert sales_formula.formula_id == "sales_v2"
+        assert sales_formula.rubric_version == "sales_v2"
         assert len(sales_formula.sections) == 15
 
     def test_full_credit_na_policy(self, sales_formula):
@@ -149,6 +121,10 @@ class TestSalesCanonicalConfig:
 
     def test_weights_sum_to_hundred(self, sales_formula):
         assert sum(s.weight for s in sales_formula.sections) == pytest.approx(100.0)
+
+    def test_categories_persisted(self, sales_formula):
+        """B5 sign-off: category kept for reporting."""
+        assert all(s.category for s in sales_formula.sections)
 
 
 # ---------------------------------------------------------------------------
@@ -575,3 +551,62 @@ class TestRecordingUrls:
             "screen": ["https://x/s.mp4"],
         })
         assert r.audio[0].endswith("a.mp3")
+
+
+class TestSalesV2Rubric:
+    """The staged sales_v2 rubric (config/scoring/sales/rubric_v2.json) —
+    built 2026-07-06 from the QA_Scoring_Guide-derived scorer prose. Ships
+    via `ship_rubric --team sales --file ...` ahead of the pipeline flip."""
+
+    @pytest.fixture(scope="class")
+    def sales_rubric(self) -> Rubric:
+        path = _REPO_ROOT / "backend" / "config" / "scoring" / "sales" / "rubric_v2.json"
+        return Rubric.model_validate(json.loads(path.read_text(encoding="utf-8")))
+
+    @pytest.fixture(scope="class")
+    def sales_formula(self) -> Formula:
+        path = _REPO_ROOT / "backend" / "config" / "scoring" / "sales" / "overall_formula.json"
+        return Formula.model_validate(json.loads(path.read_text(encoding="utf-8")))
+
+    def test_fifteen_sections_with_na_policy_prose(self, sales_rubric):
+        assert sales_rubric.rubric_version == "sales_v2"
+        assert len(sales_rubric.sections) == 15
+        # every section carries the strict-NA policy text (new field)
+        assert all(s.na_applies_when for s in sales_rubric.sections)
+        assert all(s.na_applicable for s in sales_rubric.sections)
+        assert all(s.category for s in sales_rubric.sections)
+
+    def test_cross_validates_against_sales_v2_formula(self, sales_formula, sales_rubric):
+        """§3.19.3 — the pairing compute_overall_score() will load."""
+        assert sales_formula.rubric_version == sales_rubric.rubric_version
+        validate_formula_against_rubric(sales_formula, sales_rubric)
+
+    def test_post_call_sections_are_analyst_filled(self, sales_rubric):
+        """Decision 2026-07-06: potential_booking + notes_mc are post-call
+        artifacts the AI cannot observe — manual_yn, excluded from the AI
+        prompt; contact_shared stays AI-scored (verbally observable)."""
+        by_id = {s.id: s for s in sales_rubric.sections}
+        assert by_id["potential_booking"].score_type == "manual_yn"
+        assert by_id["notes_mc"].score_type == "manual_yn"
+        assert by_id["contact_shared"].score_type == "yn"
+
+    def test_prompt_config_decisions(self, sales_rubric):
+        prompt = sales_rubric.scoring_prompt
+        assert prompt.audio_dependent_sections == ["move_reason", "client_experience"]
+        assert prompt.sop_sections == ["landing_guarantee", "pricing"]
+        # audio-dependent sections carry the medium confidence cap like MS
+        by_id = {s.id: s for s in sales_rubric.sections}
+        assert by_id["move_reason"].confidence_cap == "medium"
+        assert by_id["client_experience"].confidence_cap == "medium"
+
+    def test_strict_na_guards_on_source_implied_sections(self, sales_rubric):
+        """landing_guarantee / objection_handling: poorly-handled is a 1,
+        never NA — the anti-gaming guard for full-credit NA."""
+        by_id = {s.id: s for s in sales_rubric.sections}
+        for key in ("landing_guarantee", "objection_handling"):
+            assert "NOT NA" in by_id[key].special_reasoning_instructions
+
+    def test_new_rubric_section_fields_round_trip(self, sales_rubric):
+        dumped = sales_rubric.model_dump(by_alias=True)
+        again = Rubric.model_validate(dumped)
+        assert again == sales_rubric

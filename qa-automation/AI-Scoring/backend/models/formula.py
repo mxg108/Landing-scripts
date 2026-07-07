@@ -455,6 +455,12 @@ class RubricSection(BaseModel):
     rubric_question: Optional[str] = None
     score_descriptions: Optional[dict[str, str]] = None
     na_applicable: bool = False
+    na_applies_when: Optional[str] = None
+    """Scorer-facing policy: when NA is legitimately earned (sales_v2 rubric
+    introduced this — NA grants full credit downstream, so it must be strict).
+    Additive per §3.8 point 5; absent on older archived rubrics."""
+    category: Optional[str] = None
+    """Reporting group (Sales carries the PDF's category; B5 sign-off)."""
     confidence_cap: Optional[str] = None
     special_reasoning_instructions: Optional[str] = None
     auto_value: Optional[str] = None

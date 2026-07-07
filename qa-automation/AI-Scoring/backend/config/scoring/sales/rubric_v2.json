@@ -1,0 +1,310 @@
+{
+  "rubric_version": "sales_v2",
+  "sections": [
+    {
+      "id": "greeting",
+      "history_id": "greeting",
+      "name": "Greeting",
+      "section_number": 1,
+      "score_type": "yn",
+      "category": "Opening & Professionalism",
+      "audio_dependent": false,
+      "rubric_question": "Did the agent say their name, mention 'Landing', and use or confirm the lead's name during the opening?",
+      "score_descriptions": {
+        "0": "The agent did not say their name, did not mention \"Landing,\" or failed to use or confirm the lead's name.",
+        "1": "The agent said their name, mentioned \"Landing,\" and used or confirmed the lead's name at some point during the opening."
+      },
+      "na_applicable": true,
+      "na_applies_when": "Applies to every call that has an opening. NA only if the agent had no opening segment to evaluate (e.g., a mid-stream transfer continuation). Default: score 0 or 1.",
+      "confidence_cap": null,
+      "special_reasoning_instructions": "Award 1 only if ALL three conditions are satisfied; if any single condition is missing, award 0."
+    },
+    {
+      "id": "stay_type",
+      "history_id": "stay_type",
+      "name": "Personal or COHO Stay",
+      "section_number": 2,
+      "score_type": "yn",
+      "category": "Opening & Professionalism",
+      "audio_dependent": false,
+      "rubric_question": "Did the agent ask whether this would be a personal or COHO stay at any point during the call?",
+      "score_descriptions": {
+        "0": "The agent did not ask whether this would be a personal or COHO stay at any point during the call.",
+        "1": "The agent asked whether the stay would be personal or COHO at some point during the call."
+      },
+      "na_applicable": true,
+      "na_applies_when": "Applies to essentially all sales calls. NA only if stay type was already firmly established outside this call. Default: score 0 or 1.",
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "move_reason",
+      "history_id": "move_reason",
+      "name": "Discover & Personalize the Move Reason",
+      "section_number": 3,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "category": "Discovery",
+      "audio_dependent": true,
+      "rubric_question": "Did the agent discover the reason for the move, respond with empathy, and weave it through the call?",
+      "score_descriptions": {
+        "1": "The agent did not ask about the reason for the move, or asked but showed no empathy and never referenced it again.",
+        "2": "The agent asked about the move reason and acknowledged it briefly, but never used it again during the call.",
+        "3": "The agent asked, showed some empathy, and referenced the move reason once during the pitch, but the connection felt generic or forced.",
+        "4": "The agent asked, reacted with empathy, and tied the move reason into the pitch or objection handling in a natural way. Could have been more personalized.",
+        "5": "The agent asked about the move reason, responded with genuine empathy, and wove it meaningfully throughout the call — making the lead feel truly heard and understood."
+      },
+      "na_applicable": true,
+      "na_applies_when": "Core discovery; applies to all sales calls. NA is not expected. Default: score 1-5.",
+      "confidence_cap": "medium",
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "landing_intro",
+      "history_id": "landing_intro",
+      "name": "First Time Hearing About Landing",
+      "section_number": 4,
+      "score_type": "yn",
+      "category": "Discovery",
+      "audio_dependent": false,
+      "rubric_question": "Did the agent ask if this was the lead's first time hearing about Landing and explain what Landing does?",
+      "score_descriptions": {
+        "0": "The agent did not ask if this was the lead's first time hearing about Landing and did not explain what Landing does.",
+        "1": "The agent asked if it was the lead's first time hearing about Landing and provided an explanation to educate and uplift Landing's value."
+      },
+      "na_applicable": true,
+      "na_applies_when": "Applies to most calls. NA only if the lead is a known/returning contact for whom a Landing introduction is clearly unnecessary. Default: score 0 or 1.",
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "timeline_housing",
+      "history_id": "timeline_housing",
+      "name": "Timeline & Housing Needs",
+      "section_number": 5,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "category": "Discovery",
+      "audio_dependent": false,
+      "rubric_question": "Did the agent explore timeline and housing needs, probe for flexibility, and use it to recommend the right product?",
+      "score_descriptions": {
+        "1": "The agent did not ask about the lead's timeline or housing needs at any point.",
+        "2": "The agent asked about dates but did not probe housing needs or explore whether the timeline could be flexible.",
+        "3": "The agent asked about both timeline and housing needs but accepted the first answer without exploring flexibility or trying to maximize the stay length.",
+        "4": "The agent asked about timeline and housing needs and made a reasonable attempt to understand whether the stay could be extended, using it to recommend the right product.",
+        "5": "The agent thoroughly explored timeline and housing needs, probed for flexibility, and used that insight to recommend the best product while naturally maximizing the length of stay."
+      },
+      "na_applicable": true,
+      "na_applies_when": "Core discovery; applies to all sales calls. NA is not expected. Default: score 1-5.",
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "landing_guarantee",
+      "history_id": "landing_guarantee",
+      "name": "Landing Guarantee (Tour Objection)",
+      "section_number": 6,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "category": "Pitch & Value Selling",
+      "audio_dependent": false,
+      "rubric_question": "After a tour request, did the agent explain the Landing Guarantee correctly, step-by-step, using the correct name?",
+      "score_descriptions": {
+        "1": "The lead asked for a tour and the agent did not mention the Landing Guarantee or failed to explain why tours are not offered.",
+        "2": "The agent mentioned the Landing Guarantee but the explanation was incomplete or used the wrong name.",
+        "3": "The agent explained the Landing Guarantee correctly but the delivery felt scripted and did not fully reassure the lead.",
+        "4": "The agent explained the Landing Guarantee correctly and step-by-step, addressing the tour objection clearly. Could have been more confident or reassuring.",
+        "5": "The agent handled the tour objection confidently, explained the Landing Guarantee step-by-step using the correct name, and left the lead feeling reassured about booking without a tour."
+      },
+      "na_applicable": true,
+      "na_applies_when": "NA when the lead never requests a tour and no tour objection arises.",
+      "confidence_cap": null,
+      "special_reasoning_instructions": "IMPORTANT: if a tour WAS requested but handled poorly, that is a low score (1), NOT NA."
+    },
+    {
+      "id": "pricing",
+      "history_id": "pricing",
+      "name": "Pricing Breakdown",
+      "section_number": 7,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "category": "Pitch & Value Selling",
+      "audio_dependent": false,
+      "rubric_question": "Did the agent deliver a clear, confident pricing breakdown tailored to the lead's situation?",
+      "score_descriptions": {
+        "1": "The agent did not offer a pricing breakdown or provided confusing, inaccurate pricing information.",
+        "2": "The agent gave a basic price but did not tailor the breakdown to the lead's situation or explain the components clearly.",
+        "3": "The agent provided a reasonable pricing breakdown but it felt generic and did not fully account for the lead's specific situation or needs.",
+        "4": "The agent offered a clear pricing breakdown tailored to the lead's situation. Could have been more confident or added more context to justify the value.",
+        "5": "The agent delivered a clear, confident, and well-tailored pricing breakdown that matched the lead's situation and made the value easy to understand."
+      },
+      "na_applicable": true,
+      "na_applies_when": "Applies whenever the call reaches a pitch. NA only if the call ended before pricing was appropriate (e.g., the lead was disqualified during discovery). Default: score 1-5.",
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "fit_confirmation",
+      "history_id": "fit_confirmation",
+      "name": "Confirmation of Fit",
+      "section_number": 8,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "category": "Pitch & Value Selling",
+      "audio_dependent": false,
+      "rubric_question": "Did the agent ask whether the options presented felt like a good fit and use the answer to guide next steps?",
+      "score_descriptions": {
+        "1": "The agent never asked whether the options presented felt like a good fit for the lead.",
+        "2": "The agent asked a vague or indirect confirmation question that did not clearly gauge the lead's interest or fit.",
+        "3": "The agent asked a confirmation-of-fit question but it felt like a formality rather than a genuine check-in with the lead.",
+        "4": "The agent asked a clear confirmation-of-fit question and used the response to guide the next steps of the conversation.",
+        "5": "The agent asked a natural, well-timed confirmation-of-fit question that felt conversational, and used the lead's response to strengthen the pitch or move toward closing."
+      },
+      "na_applicable": true,
+      "na_applies_when": "Applies when options/products were presented. NA only if the call ended before any options were presented. Default: score 1-5.",
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "objection_handling",
+      "history_id": "objection_handling",
+      "name": "Objection Handling",
+      "section_number": 9,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "category": "Objections & Closing",
+      "audio_dependent": false,
+      "rubric_question": "Did the agent distinguish real concerns from smokescreens, resolve them with Landing's benefits, and confirm next steps?",
+      "score_descriptions": {
+        "1": "The agent failed to address objections or gave up too easily without attempting to resolve concerns.",
+        "2": "The agent attempted to handle objections but could not distinguish real concerns from smokescreens, and the responses felt weak or scripted.",
+        "3": "The agent handled objections adequately but relied on generic responses rather than tailoring them to the lead's specific situation.",
+        "4": "The agent handled objections well, distinguished real concerns from smokescreens, and resolved most of them using Landing's benefits. Could have confirmed next steps more clearly.",
+        "5": "The agent confidently handled all objections, identified real concerns vs. smokescreens, resolved them with Landing's benefits, and confirmed clear next steps with the lead."
+      },
+      "na_applicable": true,
+      "na_applies_when": "NA when the lead raises no objections at all.",
+      "confidence_cap": null,
+      "special_reasoning_instructions": "IMPORTANT: if objections arose but were handled poorly, that is a low score (1), NOT NA."
+    },
+    {
+      "id": "urgency",
+      "history_id": "urgency",
+      "name": "Urgency",
+      "section_number": 10,
+      "score_type": "yn",
+      "category": "Objections & Closing",
+      "audio_dependent": false,
+      "rubric_question": "Did the agent mention that prices can change and/or that the apartment could be taken online?",
+      "score_descriptions": {
+        "0": "The agent did not mention that prices can change or that the apartment could be taken by someone else.",
+        "1": "The agent mentioned at some point that prices can change and/or that the apartment could be taken online."
+      },
+      "na_applicable": true,
+      "na_applies_when": "Applies whenever the call reaches a pitch/close. NA only if the call ended before any close attempt was appropriate. Default: score 0 or 1.",
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "follow_up",
+      "history_id": "follow_up",
+      "name": "Follow-up",
+      "section_number": 11,
+      "score_type": "yn",
+      "category": "Objections & Closing",
+      "audio_dependent": false,
+      "rubric_question": "Did the agent set up a follow-up with a specific medium and a specific time before ending the call?",
+      "score_descriptions": {
+        "0": "The agent did not set up a follow-up with a specific medium and time before ending the call.",
+        "1": "The agent set up a follow-up with a specific medium and a specific time before ending the call."
+      },
+      "na_applicable": true,
+      "na_applies_when": "NA when a follow-up is genuinely unnecessary (e.g., the lead booked on the call, or gave a definitive no). Otherwise score 0 or 1. (Proposed — confirm with Sales Management.)",
+      "confidence_cap": null,
+      "special_reasoning_instructions": null
+    },
+    {
+      "id": "potential_booking",
+      "history_id": "potential_booking",
+      "name": "Potential Booking (PB)",
+      "section_number": 12,
+      "score_type": "manual_yn",
+      "category": "Post-Call & Documentation",
+      "audio_dependent": false,
+      "rubric_question": null,
+      "score_descriptions": {
+        "0": "No PB with a name was created after the call.",
+        "1": "A PB with a name was created after the call."
+      },
+      "na_applicable": true,
+      "na_applies_when": "NA when there is no viable lead to create a PB for (e.g., wrong number, spam, non-prospect). Otherwise score 0 or 1. (Proposed — confirm with Sales Management.)",
+      "confidence_cap": null,
+      "special_reasoning_instructions": "Post-call artifact in the PB system — NOT observable from the recording; analyst-filled (decision 2026-07-06, integrations may automate in Aug-Sept)."
+    },
+    {
+      "id": "notes_mc",
+      "history_id": "notes_mc",
+      "name": "Detailed Notes in MC",
+      "section_number": 13,
+      "score_type": "manual_yn",
+      "category": "Post-Call & Documentation",
+      "audio_dependent": false,
+      "rubric_question": null,
+      "score_descriptions": {
+        "0": "The agent did not leave notes in MC or the notes lacked sufficient context to be useful for follow-up.",
+        "1": "The agent left detailed notes in MC with enough context to understand the call and support the next interaction."
+      },
+      "na_applicable": true,
+      "na_applies_when": "Applies to every genuine call. NA is not expected. Default: score 0 or 1.",
+      "confidence_cap": null,
+      "special_reasoning_instructions": "Post-call artifact in MC — NOT observable from the recording; analyst-filled (decision 2026-07-06)."
+    },
+    {
+      "id": "contact_shared",
+      "history_id": "contact_shared",
+      "name": "Contact Information Shared",
+      "section_number": 14,
+      "score_type": "yn",
+      "category": "Post-Call & Documentation",
+      "audio_dependent": false,
+      "rubric_question": "Did the agent send their contact information to the lead at some point during the interaction?",
+      "score_descriptions": {
+        "0": "The agent did not send their contact information to the lead during the call.",
+        "1": "The agent sent their contact information to the lead at some point during the interaction."
+      },
+      "na_applicable": true,
+      "na_applies_when": "Applies to most calls. NA only if the interaction was not a real lead or ended immediately (e.g., wrong number). Default: score 0 or 1.",
+      "confidence_cap": null,
+      "special_reasoning_instructions": "Judge from verbal evidence in the call (e.g., the agent saying they are sending/texting their info)."
+    },
+    {
+      "id": "client_experience",
+      "history_id": "client_experience",
+      "name": "Client Experience",
+      "section_number": 15,
+      "score_type": "numeric",
+      "score_range": [1, 5],
+      "category": "Post-Call & Documentation",
+      "audio_dependent": true,
+      "rubric_question": "Across the whole call, did the lead feel genuinely heard and cared for rather than processed through a script?",
+      "score_descriptions": {
+        "1": "The call felt cold and transactional. The agent followed a script without showing genuine interest in the lead's situation.",
+        "2": "The agent showed occasional warmth but the overall experience felt scripted and the lead's concerns did not feel genuinely acknowledged.",
+        "3": "The agent was polite and professional but the interaction still felt like a sales call rather than a genuine conversation. Some moments of connection but inconsistent.",
+        "4": "The agent made the lead feel heard for most of the call, maintained a warm and helpful tone, and the experience felt more like a conversation than a pitch.",
+        "5": "The lead felt genuinely heard and cared for throughout the entire call. The agent was warm, attentive, and natural — the interaction never felt scripted or transactional."
+      },
+      "na_applicable": true,
+      "na_applies_when": "Call-wide measure; applies to every real conversation. NA is not expected. Default: score 1-5.",
+      "confidence_cap": "medium",
+      "special_reasoning_instructions": null
+    }
+  ],
+  "scoring_prompt": {
+    "system_prompt_template": "You are a QA analyst for the Sales team at {company}.\nYou score a single recorded Sales call against a fixed rubric. You judge only what the agent actually did, based on evidence in the call transcript/recording, and you return a structured score for every section.\n\nSCORING PROTOCOL:\n- Score each section independently and only from evidence in the transcript/recording. Do not assume facts that were not said or done.\n- For each section, pick the single level whose description best matches what actually happened. If the call falls between two levels, choose the LOWER level unless every condition of the higher level is fully met.\n- Binary sections: award 1 (Yes) only if ALL conditions in the '1' description are satisfied. If any single condition is missing, award 0 (No).\n- Scaled sections: return an integer 1-5 matching the level descriptions.\n- NA means the criterion was genuinely NOT APPLICABLE to this call — each section states when NA applies. Downstream, NA awards FULL credit, so it is favorable to the agent. Apply NA strictly: never use it to avoid a hard judgment, and never use it when evidence is merely ambiguous or missing. If the criterion applied but the agent performed poorly or you cannot find evidence they did it, score it on the merits (usually the lowest level) — NOT NA.\n- Provide short supporting evidence (a brief quote or paraphrase with an approximate timestamp) inside the reasoning for every non-NA score. For an NA score, state why the criterion did not apply.\n\nCRITICAL OUTPUT RULES:\n- Return ONLY a valid JSON object. No markdown fences, no prose, no explanations outside the JSON.\n- All string values must have apostrophes and internal quotes escaped.\n- Never use raw newlines inside string values — use a space instead.\n- The JSON must be parseable by Python json.loads() without modification.\n- Use the Second person (\"you\") when referring to the rep in the reasoning AND feedback sections, as if you are directly addressing them with a personal tone, DO NOT use the Third person (\"they/them\") anywhere in your outputs.",
+    "confidence_levels_note": "- \"high\": Clear evidence in audio, no ambiguity\n- \"medium\": Reasonable inference, some ambiguity or audio-dependent nuance\n- \"low\": Insufficient signal, heavy guessing required",
+    "sop_sections": ["landing_guarantee", "pricing"],
+    "long_call_focus_sections": [],
+    "audio_dependent_sections": ["move_reason", "client_experience"]
+  }
+}
