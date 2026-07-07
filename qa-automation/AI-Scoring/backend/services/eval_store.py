@@ -95,6 +95,43 @@ def _active_formula(team_id: str) -> Optional[Formula]:
     return Formula.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
 
+def requires_analyst_review(config: "TeamConfig") -> bool:
+    """True when the team's rubric has manual sections whose formula entry
+    lacks `na_default` — those scores MUST come from an analyst, so the eval
+    can never auto-finalize (production find 2026-07-06: Sales'
+    potential_booking/notes_mc rode their NA-default draft rows into FULL
+    credit under the full_credit NA policy). MS is unaffected:
+    human_review_required declares na_default=true — NA is its designed
+    auto value."""
+    formula = _active_formula(config.team_id)
+    if formula is None:
+        return False
+    na_defaults = {s.key for s in formula.sections if s.na_default}
+    return any(s.id not in na_defaults for s in config.manual_sections)
+
+
+def missing_manual_scores(config: "TeamConfig", approved_sections: list[Any]) -> list[str]:
+    """Manual sections (without formula na_default) still unscored in an
+    approval payload — the backend guard behind the frontend's
+    'Score Required' gate. NA does not count as scored here: it would ride
+    into full credit exactly like the auto-flow bug this closes."""
+    formula = _active_formula(config.team_id)
+    na_defaults = (
+        {s.key for s in formula.sections if s.na_default} if formula else set()
+    )
+    by_id = {s.id: s for s in approved_sections}
+    missing = []
+    for section in config.manual_sections:
+        if section.id in na_defaults:
+            continue
+        payload = by_id.get(section.id)
+        if payload is None or (
+            payload.score is None and payload.yn_value in (None, "", "NA")
+        ):
+            missing.append(section.id)
+    return missing
+
+
 def human_review_trigger_fired(formula: Optional[Formula], sections: list[Any]) -> bool:
     """§3.14: any configured section's numeric score ≤ max_score_to_trigger.
     `sections` is any list with .id and .score (scorecard or approval
@@ -122,9 +159,11 @@ def build_draft_row(scorecard: "ScorecardWithMeta", config: "TeamConfig") -> dic
     duration_ms = int(scorecard.duration_ms) if scorecard.duration_ms else None
     # §3.14 gate beats long-call telemetry when both apply — the human-review
     # pause is load-bearing post-flip; flagged_long_call is informational.
+    # Manual-section teams (Sales) flag on EVERY call: analyst scores are
+    # required before the eval may finalize.
     flagged_review = human_review_trigger_fired(
         _active_formula(config.team_id), scorecard.sections
-    )
+    ) or requires_analyst_review(config)
     if flagged_review:
         scoring_status = "flagged_human_review"
     elif scorecard.flagged_long_call:
@@ -689,5 +728,7 @@ __all__ = [
     "build_draft_sections",
     "build_approval_sections",
     "human_review_trigger_fired",
+    "requires_analyst_review",
+    "missing_manual_scores",
     "close_pool",
 ]

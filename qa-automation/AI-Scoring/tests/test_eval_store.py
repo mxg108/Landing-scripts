@@ -808,3 +808,69 @@ class TestStampAndFinalize:
         monkeypatch.setattr(eval_store, "_get_pool", no_pool)
         with pytest.raises(RuntimeError, match="no DATABASE_URL"):
             await eval_store.stamp_and_finalize(1, ms_config, "x@y.com")
+
+
+# ---------------------------------------------------------------------------
+# Sales manual-review gate (production find 2026-07-06)
+# ---------------------------------------------------------------------------
+
+class TestSalesManualReviewGate:
+    """Sales' potential_booking/notes_mc are analyst-scored with NO formula
+    na_default — under full_credit NA their unscored draft rows rode into
+    9 free points and the call auto-finalized. Every Sales call now pauses
+    for review; approval refuses unscored manual sections."""
+
+    @pytest.fixture(scope="class")
+    def sales_config(self):
+        return load_test_config("sales")
+
+    def test_sales_requires_analyst_review(self, sales_config):
+        eval_store._active_formula.cache_clear()
+        assert eval_store.requires_analyst_review(sales_config) is True
+
+    def test_ms_does_not_require_analyst_review(self, ms_config):
+        """MS's only manual section (human_review_required) declares
+        na_default=true — NA is its designed auto value."""
+        eval_store._active_formula.cache_clear()
+        assert eval_store.requires_analyst_review(ms_config) is False
+
+    def test_sales_draft_row_flags_for_review(self, sales_config):
+        sc = ScorecardWithMeta(
+            sections=[], key_strengths="", opportunities="",
+            model="gemini-2.5-flash",
+        )
+        row = build_draft_row(sc, sales_config)
+        assert row["scoring_status"] == "flagged_human_review"
+        assert row["human_review_required_at"] is not None
+
+    def test_missing_manual_scores_lists_unscored(self, sales_config):
+        # AI payload never carries the manual sections
+        missing = eval_store.missing_manual_scores(sales_config, [])
+        assert missing == ["potential_booking", "notes_mc"]
+
+    def test_na_counts_as_unscored(self, sales_config):
+        payload = [
+            ScorecardSection(id="potential_booking", name="PB", score=None,
+                             yn_value="NA", score_type="manual_yn",
+                             confidence="high", reasoning=""),
+        ]
+        missing = eval_store.missing_manual_scores(sales_config, payload)
+        assert "potential_booking" in missing
+        assert "notes_mc" in missing
+
+    def test_scored_manual_sections_clear_the_guard(self, sales_config):
+        payload = [
+            ScorecardSection(id="potential_booking", name="PB", score=None,
+                             yn_value="Y", score_type="manual_yn",
+                             confidence="high", reasoning="PB created for Henry"),
+            ScorecardSection(id="notes_mc", name="Notes", score=None,
+                             yn_value="N", score_type="manual_yn",
+                             confidence="high", reasoning="no notes found"),
+        ]
+        assert eval_store.missing_manual_scores(sales_config, payload) == []
+
+    def test_ms_hrr_na_default_never_blocks(self, ms_config):
+        """MS approvals with hrr still at NA must NOT be blocked — NA is the
+        designed state (only reviewer-flagged calls score it)."""
+        eval_store._active_formula.cache_clear()
+        assert eval_store.missing_manual_scores(ms_config, []) == []
