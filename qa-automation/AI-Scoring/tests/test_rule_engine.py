@@ -62,40 +62,9 @@ def ms_answers(**overrides):
 
 @pytest.fixture(scope="module")
 def sales_formula() -> Formula:
-    """Sales §8 canonical config (inline until §10 sign-off ships the file)."""
-    return Formula.model_validate({
-        "formula_id": "sales_v2",
-        "rubric_version": "sales_v2",
-        "supersedes": None,
-        "scale": {"min": 0, "max": 100},
-        "normalization": {
-            "rating_1_5": {"type": "linear", "input_min": 1, "input_max": 5, "output": [0.0, 1.0]},
-            "binary_yn": {"Y": 1.0, "N": 0.0},
-            "na": "full_credit",
-        },
-        "sections": [
-            {"key": "greeting",           "label": "Greeting",              "score_type": "binary_yn_na",  "weight": 5.0},
-            {"key": "stay_type",          "label": "Personal or COHO Stay", "score_type": "binary_yn_na",  "weight": 4.0},
-            {"key": "move_reason",        "label": "Move Reason",           "score_type": "rating_1_5_na", "weight": 15.0},
-            {"key": "landing_intro",      "label": "Landing Intro",         "score_type": "binary_yn_na",  "weight": 6.0},
-            {"key": "timeline_housing",   "label": "Timeline & Housing",    "score_type": "rating_1_5_na", "weight": 8.0},
-            {"key": "landing_guarantee",  "label": "Landing Guarantee",     "score_type": "rating_1_5_na", "weight": 6.0},
-            {"key": "pricing",            "label": "Pricing Breakdown",     "score_type": "rating_1_5_na", "weight": 8.0},
-            {"key": "fit_confirmation",   "label": "Confirmation of Fit",   "score_type": "rating_1_5_na", "weight": 5.0},
-            {"key": "objection_handling", "label": "Objection Handling",    "score_type": "rating_1_5_na", "weight": 8.0},
-            {"key": "urgency",            "label": "Urgency",               "score_type": "binary_yn_na",  "weight": 5.0},
-            {"key": "follow_up",          "label": "Follow-up",             "score_type": "binary_yn_na",  "weight": 6.0},
-            {"key": "potential_booking",  "label": "Potential Booking",     "score_type": "binary_yn_na",  "weight": 4.0},
-            {"key": "notes_mc",           "label": "Detailed Notes in MC",  "score_type": "binary_yn_na",  "weight": 5.0},
-            {"key": "contact_shared",     "label": "Contact Shared",        "score_type": "binary_yn_na",  "weight": 5.0},
-            {"key": "client_experience",  "label": "Client Experience",     "score_type": "rating_1_5_na", "weight": 10.0},
-        ],
-        "rules": [],
-        "evaluation_order": [WEIGHTED_SUM],
-        "triggers": {},
-        "external_signals": {},
-        "deprecated_sections": [],
-    })
+    """The shipped sales_v2 formula (signed §8 shape, plain weighted sum)."""
+    path = _REPO_ROOT / "backend" / "config" / "scoring" / "sales" / "overall_formula.json"
+    return Formula.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
 
 def _formula(**overrides) -> Formula:

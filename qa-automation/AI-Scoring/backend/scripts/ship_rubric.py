@@ -29,12 +29,21 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 from backend.config.team_config import get_team_config  # noqa: E402
+from backend.models.formula import Rubric  # noqa: E402
 from backend.services.version_ship import ship_rubric  # noqa: E402
 
 
-async def _run(team_id: str, dry_run: bool) -> int:
-    config = get_team_config(team_id)  # validates the rubric shape on load
-    rubric = config.rubric
+async def _run(team_id: str, dry_run: bool, file: str | None = None) -> int:
+    if file:
+        # Ship a staged rubric file (e.g. config/scoring/sales/rubric_v2.json)
+        # BEFORE the runtime team config migrates to it — the sales_v2 flow:
+        # archive the rubric first, the formula ships at the next restart,
+        # the team-config/pipeline swap follows in the flip bundle.
+        import json as _json
+        rubric = Rubric.model_validate(_json.loads(Path(file).read_text(encoding="utf-8")))
+    else:
+        config = get_team_config(team_id)  # validates the rubric shape on load
+        rubric = config.rubric
     print(f"team={team_id} rubric_version={rubric.rubric_version} "
           f"sections={len(rubric.sections)}")
 
@@ -61,9 +70,10 @@ async def _run(team_id: str, dry_run: bool) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--team", required=True)
+    ap.add_argument("--file", help="Ship a staged rubric JSON file instead of the team config's rubric")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
-    raise SystemExit(asyncio.run(_run(args.team, args.dry_run)))
+    raise SystemExit(asyncio.run(_run(args.team, args.dry_run, args.file)))
 
 
 if __name__ == "__main__":

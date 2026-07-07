@@ -256,6 +256,25 @@ No pre-sum weight moves and no post-sum scaling exist in this version. NA is res
 - [x] **`client_experience` stays under *Post-Call & Documentation*.**
 - [x] **No rules / no triggers for `sales_v2`** — `evaluation_order: ["weighted_sum"]`.
 
+### 10a. Rubric build decisions (2026-07-06)
+
+The scorer-facing rubric prose (QA_Scoring_Guide-derived) was reviewed and staged as
+`config/scoring/sales/rubric_v2.json`. Decisions taken with the owner:
+
+- **`potential_booking` and `notes_mc` are analyst-filled (`manual_yn`)** — post-call artifacts in
+  the PB system / MC that the AI cannot observe from the recording; excluded from the AI prompt.
+  Aug–Sept integrations may automate them. `contact_shared` stays AI-scored (verbally observable).
+- **Per-section `confidence` (high/medium/low) added** to the scorer output, matching Member
+  Support — feeds the DB confidence column and the Plan-B routing signal.
+- **Prompt config:** `audio_dependent_sections = [move_reason, client_experience]` (tone/empathy
+  judgments, medium confidence cap); `sop_sections = [landing_guarantee, pricing]`.
+- **Version ids corrected to `sales_v2`** per B3 (the prose draft said `sales_v1`, which is
+  immutably occupied by the legacy 19-section rubric).
+- The rubric introduces **`na_applies_when`** per section (strict-NA policy text — NA grants full
+  credit downstream, so it must be earned). ⚠️ **Pre-flip checklist:** the `na_applies_when`
+  wording for 13 of 15 sections is an operational default — confirm with Sales Management before
+  go-live (only `landing_guarantee` and `objection_handling` are source-implied).
+
 ---
 
 ## 11. Worked Example (test vector)

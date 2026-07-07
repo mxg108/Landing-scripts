@@ -511,8 +511,16 @@ class TestHumanReviewTrigger:
         assert not eval_store.human_review_trigger_fired(ms_formula, exactly_three.sections)
 
     def test_no_formula_never_fires(self):
-        assert eval_store._active_formula("sales") is None  # pre-sales_v2
         assert not eval_store.human_review_trigger_fired(None, _scorecard(None).sections)
+
+    def test_sales_v2_has_no_triggers(self):
+        """The staged sales_v2 formula file exists but declares no
+        human_review_triggers (B7 sign-off) — the gate never fires."""
+        eval_store._active_formula.cache_clear()
+        sales = eval_store._active_formula("sales")
+        assert sales is not None and sales.formula_id == "sales_v2"
+        assert sales.human_review_triggers == []
+        assert not eval_store.human_review_trigger_fired(sales, _scorecard(None).sections)
 
     def test_non_numeric_sections_never_trigger(self, ms_formula):
         na_only = _scorecard(None, sections=[
