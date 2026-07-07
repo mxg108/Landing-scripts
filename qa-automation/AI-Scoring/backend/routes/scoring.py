@@ -134,7 +134,7 @@ async def _postgres_post_stage1(job, evaluation_id, scorecard, config, team_id):
     color the button (CutoverDesign §5)."""
     flagged = eval_store.human_review_trigger_fired(
         eval_store._active_formula(team_id), scorecard.sections
-    )
+    ) or eval_store.requires_analyst_review(config)
     if flagged:
         job["state"] = "draft"
         job["scoring_status"] = "flagged_human_review"
@@ -610,6 +610,16 @@ async def approve_scorecard(
         # DB errors are hard errors (§7.3 Phase C).
         sc = job["scorecard"]
         evaluator_email = sc.get("manager_email", "")
+        # Backend guard behind the frontend's "Score Required" gate: manual
+        # sections without a formula na_default must carry real scores —
+        # NA would ride into full credit (the 2026-07-06 Sales find).
+        unscored = eval_store.missing_manual_scores(config, approval.sections)
+        if unscored:
+            job["status"] = "complete"
+            raise HTTPException(
+                status_code=422,
+                detail=f"Manual sections require scores before approval: {unscored}",
+            )
         try:
             evaluation_id = await record_approval(
                 config,
