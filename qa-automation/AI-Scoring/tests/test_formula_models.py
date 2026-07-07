@@ -61,10 +61,10 @@ class TestMemberSupportShippedConfig:
     """The MS files in the repo must load. If these break, downstream is blocked."""
 
     def test_formula_loads(self, ms_formula):
-        assert ms_formula.formula_id == "member_support_v4"
-        assert ms_formula.supersedes == "member_support_v3"
+        assert ms_formula.formula_id == "member_support_v5"
+        assert ms_formula.supersedes == "member_support_v4"
         assert len(ms_formula.sections) == 10
-        assert len(ms_formula.rules) == 7
+        assert len(ms_formula.rules) == 3
 
     def test_rubric_loads(self, ms_rubric):
         assert ms_rubric.rubric_version == "member_support_v2"
@@ -83,9 +83,10 @@ class TestMemberSupportShippedConfig:
     def test_ms_na_policy_is_redistribute(self, ms_formula):
         assert ms_formula.normalization.na == "redistribute_per_rules"
 
-    def test_ms_has_human_review_triggers(self, ms_formula):
-        keys = {t.section_id for t in ms_formula.human_review_triggers}
-        assert keys == {"process_adherence", "call_resolution"}
+    def test_ms_july_v5_gate_is_off(self, ms_formula):
+        """July rollout (Director 2026-07-06): human_review_triggers empty —
+        every scored call auto-finalizes. The v4 gate returns ~August."""
+        assert ms_formula.human_review_triggers == []
 
     def test_ms_formula_round_trips(self, ms_formula_raw, ms_formula):
         # Preserve alias-keyed dict (`from` → `from_`) via by_alias=True.

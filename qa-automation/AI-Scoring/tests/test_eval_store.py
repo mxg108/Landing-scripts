@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
+from pathlib import Path
 from datetime import datetime, timezone
 
 import pytest
@@ -466,11 +467,33 @@ class TestRecordApproval:
 # §3.14 human-review trigger + shadow logging (cutover slice 1)
 # ---------------------------------------------------------------------------
 
+V4_FULL_RULES = (Path(__file__).resolve().parent.parent / "backend" / "config"
+                 / "scoring" / "member_support" / "v4_full_rules.json")
+
+
+def _v4_formula():
+    from backend.models.formula import Formula
+    return Formula.model_validate(json.loads(V4_FULL_RULES.read_text(encoding="utf-8")))
+
+
 class TestHumanReviewTrigger:
+    """Trigger MECHANICS against the archived v4 full-rule formula; the
+    shipped July v5 has human_review_triggers=[] (gate off, Director
+    2026-07-06) — asserted below."""
 
     @pytest.fixture(scope="class")
     def ms_formula(self):
-        return eval_store._active_formula("member_support")
+        return _v4_formula()
+
+    def test_shipped_v5_gate_is_off(self):
+        active = eval_store._active_formula("member_support")
+        assert active.formula_id == "member_support_v5"
+        assert active.human_review_triggers == []
+        assert not eval_store.human_review_trigger_fired(
+            active, _scorecard(None, sections=[
+                _ai_section("process_adherence", "Process", score=1),
+            ]).sections
+        )
 
     def test_v3_thresholds(self, ms_formula):
         """member_support_v3: process/resolution rating <= 2 fires; 3 does
@@ -500,6 +523,13 @@ class TestHumanReviewTrigger:
 
 
 class TestDraftFlagging:
+    """Mechanics under the v4 full-rule formula (monkeypatched in) — the
+    shipped July v5 never flags, which TestHumanReviewTrigger asserts."""
+
+    @pytest.fixture(autouse=True)
+    def _v4_policy(self, monkeypatch):
+        formula = _v4_formula()
+        monkeypatch.setattr(eval_store, "_active_formula", lambda team_id: formula)
 
     def test_flagged_draft_row(self, ms_config):
         sc = _scorecard(ms_config)
@@ -531,6 +561,10 @@ class TestApprovalRecomputeAndShadow:
             return FakePool(self.conn)
 
         monkeypatch.setattr(eval_store, "_get_pool", fake_get_pool)
+        # Recompute/shadow MECHANICS run against the archived v4 full-rule
+        # formula; the shipped v5 gate-off behavior is covered separately.
+        formula = _v4_formula()
+        monkeypatch.setattr(eval_store, "_active_formula", lambda team_id: formula)
 
     async def _approve(self, ms_config, sections):
         draft = [s.model_dump() for s in _scorecard(ms_config).sections]
@@ -570,7 +604,7 @@ class TestApprovalRecomputeAndShadow:
                   if m.startswith("shadow: team=member_support")]
         assert len(shadow) == 1
         assert "engine=" in shadow[0] and "sheet=87" in shadow[0]
-        assert "formula=member_support_v4" in shadow[0]
+        assert "formula=member_support_v4" in shadow[0]  # v4 monkeypatched in
         assert "trigger_fired=False" in shadow[0]
 
     async def test_shadow_skips_incomplete_payload(self, ms_config, caplog):

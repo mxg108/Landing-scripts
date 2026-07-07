@@ -27,7 +27,10 @@ from backend.services.rule_engine import (
 )
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_MS_FORMULA_JSON = _REPO_ROOT / "backend" / "config" / "scoring" / "member_support" / "overall_formula.json"
+# Rule-MECHANICS tests exercise the archived full-rule formula (v4) — the
+# richest real config; the shipped July file is plain-sum (see TestJulyV5).
+_MS_FORMULA_JSON = _REPO_ROOT / "backend" / "config" / "scoring" / "member_support" / "v4_full_rules.json"
+_MS_ACTIVE_JSON = _REPO_ROOT / "backend" / "config" / "scoring" / "member_support" / "overall_formula.json"
 
 
 # ---------------------------------------------------------------------------
@@ -555,3 +558,45 @@ class TestCriNaSpread:
         result = evaluate_formula(ms_formula, ms_answers(cri="NA", caller_id="NA"))
         assert result.final_score == pytest.approx(100.0)
         assert sum(result.effective_weights.values()) == pytest.approx(100.0)
+
+
+class TestJulyV5Shipped:
+    """The ACTIVE July-rollout formula: plain weighted sum + NA bookkeeping
+    only (Director sign-off 2026-07-06). Behavioral rules live on in the
+    archived v4 file above and return ~August."""
+
+    @pytest.fixture(scope="class")
+    def v5(self) -> Formula:
+        return Formula.model_validate(json.loads(_MS_ACTIVE_JSON.read_text(encoding="utf-8")))
+
+    def test_only_na_bookkeeping_rules(self, v5):
+        assert v5.formula_id == "member_support_v5"
+        assert v5.supersedes == "member_support_v4"
+        assert [r.id for r in v5.rules] == ["caller_id_na_spread", "hrr_na_spread", "cri_na_spread"]
+        assert all(r.type == "weight_redistribution" for r in v5.rules)
+        assert v5.human_review_triggers == []
+        assert v5.external_signals == {}
+
+    def test_caller_id_n_no_longer_halves(self, v5):
+        result = evaluate_formula(v5, ms_answers(caller_id="N"))
+        assert result.final_score == pytest.approx(100 - (5 + 10 / 9))
+        assert result.events == []
+
+    def test_caller_id_na_spreads_instead_of_transferring(self, v5):
+        result = evaluate_formula(v5, ms_answers(caller_id="NA"))
+        w = result.effective_weights
+        assert w["caller_id"] == 0.0
+        # 5 and 10 each spread equally over the 8 remaining active sections
+        assert w["call_resolution"] == pytest.approx(20 + 5 / 8 + 10 / 8)
+        assert result.final_score == pytest.approx(100.0)
+
+    def test_low_scores_emit_no_events(self, v5):
+        result = evaluate_formula(v5, ms_answers(process_adherence=1, call_resolution=1))
+        assert result.events == []
+        assert result.final_score == pytest.approx(100 - (25 + 10 / 9) - (20 + 10 / 9))
+
+    def test_signals_have_no_effect(self, v5):
+        base = evaluate_formula(v5, ms_answers())
+        with_signal = evaluate_formula(v5, ms_answers(), signals={"frequent_caller": True})
+        assert base.final_score == with_signal.final_score
+        assert base.effective_weights == with_signal.effective_weights
