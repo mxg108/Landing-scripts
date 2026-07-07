@@ -37,3 +37,5 @@ docs/git-for-the-recruit.md
 # PII (agent/caller names, phones, Dialpad links); only derived, anonymized
 # fixtures under tests/fixtures/ are committed.
 database/analyst_history_*.csv
+database/export_document_test_data.csv
+database/onepager_*.html
