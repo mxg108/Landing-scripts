@@ -154,9 +154,9 @@ def test_section_validator_rejects_na_when_team_config_disallows(sales: TeamConf
     """Defense-in-depth: future model providers may hallucinate NA on a section
     declared na_applicable=false. The context-aware validator rejects it."""
     sec_def = next(
-        s for s in sales.ai_scored_sections
-        if s.score_type == "numeric" and not s.na_applicable
+        s for s in sales.ai_scored_sections if s.score_type == "numeric"
     )
+    sec_def.na_applicable = False  # sales_v2 declares all sections NA-able
     data = _base_section_kwargs(id=sec_def.id, score_type="numeric", yn_value="NA")
     with pytest.raises(ValidationError, match="na_applicable=false"):
         ScorecardSection.model_validate(data, context={"section_def": sec_def})
@@ -265,10 +265,11 @@ def test_scorecard_validates_with_sections_by_id_context(sales: TeamConfig):
     """Scorecard-level model_validate must propagate sections_by_id context to
     each ScorecardSection child, so the team-config check fires at the parse
     site used by the scoring pipeline."""
-    bad_section_id = next(
-        s.id for s in sales.ai_scored_sections
-        if s.score_type == "numeric" and not s.na_applicable
+    bad_section = next(
+        s for s in sales.ai_scored_sections if s.score_type == "numeric"
     )
+    bad_section.na_applicable = False  # sales_v2 declares all sections NA-able
+    bad_section_id = bad_section.id
     raw = {
         "sections": [
             {

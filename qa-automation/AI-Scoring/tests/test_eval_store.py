@@ -180,15 +180,20 @@ class TestBuildDraftSections:
         assert eff.score_source == "ai"
 
     def test_auto_value_sections_write_auto_rows(self):
-        """Sales Q18 screen_recording: auto_value='Yes' → binary Y row."""
+        """auto_value sections write a binary row at draft time. sales_v2
+        dropped the legacy screen_recording auto section, so synthesize one
+        on a loaded config to keep the writer path covered."""
         sales = load_test_config("sales")
+        section = sales.sections[-1]
+        section.score_type = "auto_value"
+        section.auto_value = "Yes"
         sc = ScorecardWithMeta(
             sections=[], key_strengths="", opportunities="",
             model="gemini-2.5-flash",
         )
         rows = build_draft_sections(sc, sales)
         auto = [r for r in rows if r.score_source == "auto_value"]
-        assert auto, "sales config has an auto_value section"
+        assert [r.section_id for r in auto] == [section.id]
         assert all(r.binary_value == "Y" for r in auto)
 
 

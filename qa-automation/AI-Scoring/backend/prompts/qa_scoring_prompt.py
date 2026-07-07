@@ -75,19 +75,30 @@ def build_scoring_rubric(config: TeamConfig) -> str:
         if sec.rubric_question:
             lines.append(sec.rubric_question)
 
-        # Score descriptions (for numeric sections)
+        # Score descriptions. Sales' binary levels are keyed "0"/"1" in the
+        # source matrix; label them with the Y/N vocabulary the output
+        # schema demands so the model never emits digits for yn sections.
         if sec.score_descriptions:
             for key, desc in sec.score_descriptions.items():
-                lines.append(f"{key}: {desc}")
+                if sec.score_type == "yn" and key in ("0", "1"):
+                    label = "Y" if key == "1" else "N"
+                    lines.append(f"{label} ({key}): {desc}")
+                else:
+                    lines.append(f"{key}: {desc}")
 
         # NA note — applies to any section flagged na_applicable, including
         # numeric. For numeric NA, the model emits yn_value="NA" and leaves
-        # score null.
+        # score null. Per-section na_applies_when (sales_v2+) beats the
+        # generic fallback: NA grants full credit downstream, so the policy
+        # must be section-specific and strict.
         if sec.na_applicable and sec.score_type in ("yn", "numeric"):
-            lines.append(
-                "Mark NA if not applicable (e.g. internal call or "
-                "no sensitive info discussed)."
-            )
+            if sec.na_applies_when:
+                lines.append(f"NA policy: {sec.na_applies_when}")
+            else:
+                lines.append(
+                    "Mark NA if not applicable (e.g. internal call or "
+                    "no sensitive info discussed)."
+                )
 
         lines.append("")  # blank line between sections
 
@@ -184,11 +195,28 @@ def build_output_schema(config: TeamConfig) -> str:
 
 SOP_CONTEXT_BLOCK = """
 === SOP CONTEXT ({sop_title}) ===
-Use the following Standard Operating Procedure to evaluate Sections 5 (Process Adherence)
-and 6 (Call Resolution). Score these sections against this policy, not general knowledge.
+Use the following Standard Operating Procedure to evaluate {sop_section_refs}.
+Score these sections against this policy, not general knowledge.
 
 {sop_content}
 """
+
+
+def _sop_section_refs(config: TeamConfig) -> str:
+    """Render the SOP-scored sections from config — e.g.
+    'Sections 5 (Process Adherence) and 6 (Call Resolution)'. Previously
+    hardcoded to the MS pair; sales_v2 uses landing_guarantee + pricing."""
+    by_id = config.scoring_id_to_section
+    refs = [
+        f"Section {by_id[sid].section_number} ({by_id[sid].name})"
+        for sid in config.scoring_prompt.sop_sections
+        if sid in by_id
+    ]
+    if not refs:
+        return "the SOP-relevant sections"
+    if len(refs) == 1:
+        return refs[0]
+    return ", ".join(refs[:-1]) + " and " + refs[-1]
 
 TRANSCRIPT_CONTEXT_BLOCK = """
 === DIALPAD TRANSCRIPT ===
@@ -226,7 +254,11 @@ def build_prompt(
 
     if sop_content:
         parts.append(
-            SOP_CONTEXT_BLOCK.format(sop_title=sop_title, sop_content=sop_content)
+            SOP_CONTEXT_BLOCK.format(
+                sop_title=sop_title,
+                sop_section_refs=_sop_section_refs(config),
+                sop_content=sop_content,
+            )
         )
     else:
         parts.append(_build_sop_missing_note(config))

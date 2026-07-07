@@ -101,14 +101,15 @@ def test_output_schema_score_range_uses_section_range(config: TeamConfig):
 def test_numeric_na_applicable_section_schema_allows_na(sales: TeamConfig):
     """A numeric+na_applicable section's schema must let the model return NA.
 
-    Sales has no numeric+na_applicable section today (all numeric sections
-    are na_applicable=false). We mutate a copy of the config to exercise the
-    branch and assert the prompt surfaces NA correctly.
+    sales_v2 sections carry per-section na_applies_when policy text; we
+    clear it here to exercise the generic-fallback branch (the policy-text
+    branch is asserted separately below).
     """
     numeric_sec = next(
         s for s in sales.ai_scored_sections if s.score_type == "numeric"
     )
     numeric_sec.na_applicable = True
+    numeric_sec.na_applies_when = None  # exercise the generic fallback note
     try:
         out = build_output_schema(sales)
         lo, hi = numeric_sec.score_range  # type: ignore[misc]
@@ -130,11 +131,14 @@ def test_numeric_na_applicable_section_schema_allows_na(sales: TeamConfig):
 
 
 def test_numeric_non_na_section_schema_unchanged(sales: TeamConfig):
-    """Regression: a numeric section with na_applicable=false must NOT mention NA."""
+    """Regression: a numeric section with na_applicable=false must NOT mention
+    NA. sales_v2 declares every section na_applicable, so flip one off to
+    exercise the branch."""
     numeric_sec = next(
-        s for s in sales.ai_scored_sections
-        if s.score_type == "numeric" and not s.na_applicable
+        s for s in sales.ai_scored_sections if s.score_type == "numeric"
     )
+    numeric_sec.na_applicable = False
+    numeric_sec.na_applies_when = None
     out = build_output_schema(sales)
     idx = out.find(f'"id": "{numeric_sec.id}"')
     assert idx != -1
