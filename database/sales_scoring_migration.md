@@ -237,24 +237,29 @@ No pre-sum weight moves and no post-sum scaling exist in this version. NA is res
 
 ---
 
-## 10. Open Items — closed 2026-07-04 (Sales management)
+## 10. Open Items — CLOSED. Formal Sales Management sign-off 2026-07-07 (B1–B7)
 
-- [x] **Scaled 1–5 → points curve: `(rating − 1) / 4` confirmed.** Requirement attached to the
-      decision: the curve must be reconfigurable in the same manager UI that ships a new scoring
-      version (formula or rubric). Architecturally satisfied today — the curve lives in the
-      formula JSON (`normalization.rating_1_5.output`), so any version-ship surface can change it;
-      the requirement binds the future rubric-editor UI (§3.19.2 editor write path).
-- [x] **NA = full credit confirmed as written**, all 15 sections, no redistribution. No other NA
-      behaviors in this version.
-- [x] **Version id: `sales_v2`** (formula AND rubric — the seeded `sales_v1` rubric id is
-      immutable and stays with the legacy 19-section rubric). `supersedes: null` for the formula;
-      the `sales_v2` rubric row closes `sales_v1` when shipped. Historic Analyst_History export
-      incoming for the backfill seed.
-- [x] **Section keys adopted as proposed** — no renames. Legacy 19-section ids remain valid
-      forever on historic rows via rubric pinning.
-- [x] **`category` persisted** on formula sections (reporting).
-- [x] **`client_experience` stays under *Post-Call & Documentation*.**
-- [x] **No rules / no triggers for `sales_v2`** — `evaluation_order: ["weighted_sum"]`.
+Resolutions staged 2026-07-04, formally confirmed by Sales Management on 2026-07-07. The
+**B1–B7** ids reference the per-item briefs in
+`qa-automation/AI-Scoring/references/Section10SignoffBriefs.md`.
+
+- [x] **B1 — Scaled 1–5 → points curve: `(rating − 1) / 4` confirmed.** Requirement attached to
+      the decision: the curve must be reconfigurable in the same manager UI that ships a new
+      scoring version (formula OR rubric). Architecturally satisfied today — the curve lives in
+      the formula JSON (`normalization.rating_1_5.output`), so any version-ship surface can
+      change it; the requirement binds the future rubric-editor UI (§3.19.2 editor write path).
+- [x] **B2 — NA = full credit confirmed as written**, all 15 sections, no redistribution. The
+      newest formula iteration uses no other NA/NS behaviors.
+- [x] **B3 — Version id: `sales_v2`** (formula AND rubric — the seeded `sales_v1` rubric id is
+      immutable and stays with the legacy 19-section rubric; supersedes the earlier
+      `sales_v1_ops` naming recommendation in the B3 brief). `supersedes: null` for the formula;
+      the `sales_v2` rubric row closes `sales_v1` when shipped. Historic Analyst_History rows
+      being provided by the owner (2026-07-07) for the backfill seed.
+- [x] **B4 — Section keys adopted as proposed** — no renames; the new 15 section keys land
+      as-is. Legacy 19-section ids remain valid forever on historic rows via rubric pinning.
+- [x] **B5 — `category` persisted** on formula sections (reporting).
+- [x] **B6 — `client_experience` stays under *Post-Call & Documentation*.**
+- [x] **B7 — No rules / no triggers for `sales_v2`** (per B2) — `evaluation_order: ["weighted_sum"]`.
 
 ### 10a. Rubric build decisions (2026-07-06)
 
