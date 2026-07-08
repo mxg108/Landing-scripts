@@ -63,7 +63,10 @@
 
 - **Tab title:** the agent's name (roster `name` from `qa.agents`).
 - **Columns:** `Period | Date | Overall Score |` the 9 sections (§3 order) `| Evaluator | Dialpad Link`.
-- One row per finalized evaluation in the target month, **newest first**.
+- One row per finalized evaluation in the **closing (target) month only**, **newest first**.
+  Prior months never appear (owner-confirmed 2026-07-07): the top-up rule is gone, the
+  endpoint only returns the requested month, and each run's clear-and-rewrite removes any
+  previously exported rows — so a detail tab never accumulates history across months.
 - `Period` = `YYYY-MM` of the evaluation (kept for layout continuity with the approved mockup —
   with the top-up rule dropped it always equals the target month).
 - `Date` = call time, `MM/DD/YYYY HH:MM`, rendered in project-local time (§4).
@@ -220,7 +223,7 @@ established patterns from `src/` (config-driven, render-only) but is deliberatel
 | # | Deliverable | Checkpoint |
 |---|---|---|
 | P1 | `hr_export` block in `member_support.json` + Pydantic model + validator | tests: block parses; internal-only rejection fires; shipped MS config exports exactly the 9 §3 sections; `human_review_required` invariant |
-| P2 | `hr_bonus_service.py` + route | tests: aggregation math (means/%Yes/blanks/rounding), month bucketing incl. the DST boundary case, finalized-only population, excluded-agents filter; **golden parity test** — service output vs the mockup exporter run on the same fixture data |
+| P2 | `hr_bonus_service.py` + route | tests: aggregation math (means/%Yes/blanks/rounding), month bucketing incl. the DST boundary case, finalized-only population, **target-month-only detail rows (no prior-month leakage)**, excluded-agents filter; **golden parity test** — service output vs the mockup exporter run on the same fixture data |
 | P3 | `hr-bonus/` GAS suite + build pipeline wiring | manual smoke into a copy of the workbook; layout diffed against a mockup-produced tab |
 | P4 | Trigger install + first supervised run | 2026-08-01 run for July data, operator watching; alert path verified |
 
@@ -241,10 +244,7 @@ made in this spec.
 
 ## 9. Open questions
 
-None blocking. Two conscious defaults, flagged for visibility:
+None blocking. One conscious default, flagged for visibility:
 
-1. Agent detail tabs accumulate across months (a tab holds only the latest exported month's
-   rows after its clear-and-rewrite). If HR wants per-month history preserved inside detail
-   tabs, that's a layout change to renegotiate — the approved mockup rewrites in place.
-2. `excluded_agents` matches on raw name (mockup parity). If roster names ever collide with an
+1. `excluded_agents` matches on raw name (mockup parity). If roster names ever collide with an
    excluded name, switch the match to `qa.agents.email`.
