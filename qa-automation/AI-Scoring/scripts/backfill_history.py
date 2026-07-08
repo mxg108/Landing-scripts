@@ -1,22 +1,38 @@
 #!/usr/bin/env python3
-"""
-One-time backfill script: copies Dialpad Link, Key Strengths, and
-Opportunities from Form Responses 1 into Analyst_History rows that
-are missing them.
+"""One-time backfill: copies Dialpad Link, Key Strengths, and
+Opportunities from a legacy form-responses tab into Analyst_History
+rows that are missing them.
 
-Matches rows by timestamp + agent name between the two sheets.
+Matches rows by eval timestamp + agent name between the two tabs.
+Column positions on the Analyst_History side are derived from the
+team's config (`HistoryLayout`) — never hardcoded, so the script is
+safe against the post-Phase-2 43/70-column layouts and any future
+section-count change.
+
+Timestamp note (call-time initiative): the eval/approval time this
+script matches on lives in the trailing `eval_approved_at` column on
+new-shape rows, falling back to col C on rows the PR-2
+`backfill_call_started.py` migration hasn't touched yet — the same
+transition semantics as `load_and_clean`.
 
 Usage:
     cd qa-automation/AI-Scoring
-    python3 scripts/backfill_history.py [--dry-run]
+    python3 scripts/backfill_history.py --team-id member_support [--dry-run]
 
 Flags:
-    --dry-run   Print what would be updated without writing to Sheets.
+    --team-id <id>      (required) Team config to load (e.g. sales,
+                        member_support). Drives the sheet ID env var
+                        and the history layout.
+    --source-tab NAME   Form-responses tab to copy from
+                        (default: "Form Responses 1").
+    --dry-run           Print what would be updated without writing.
 """
 
+import argparse
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -24,28 +40,31 @@ from dotenv import load_dotenv
 import gspread
 from google.oauth2.service_account import Credentials
 
-# Load .env from AI-Scoring directory
-_env_path = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(_env_path)
+# Load .env from AI-Scoring directory regardless of where the script is launched.
+_AI_SCORING = Path(__file__).resolve().parent.parent
+load_dotenv(_AI_SCORING / ".env")
+
+# Make `backend.*` importable so we reuse the production config.
+if str(_AI_SCORING) not in sys.path:
+    sys.path.insert(0, str(_AI_SCORING))
+
+from backend.config import history_layout
+from backend.config.history_layout import col_index_to_letter
+from backend.config.env import env_for_team
+from backend.config.team_config import get_team_config
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.readonly",
 ]
 
-# Form Responses 1 column indices (0-based)
+# Form-responses source column indices (0-based). The legacy form tab is
+# frozen — no new rows land there — so these stay literal.
 F1_TIMESTAMP = 0
 F1_AGENT_NAME = 2
 F1_KEY_STRENGTHS = 13   # col N
 F1_OPPORTUNITIES = 14   # col O
 F1_DIALPAD_LINK = 15    # col P
-
-# Analyst_History column indices (0-based)
-AH_AGENT_NAME = 0
-AH_TIMESTAMP = 2
-AH_DIALPAD_LINK = 15    # col P
-AH_KEY_STRENGTHS = 16   # col Q
-AH_IMPROVEMENTS = 17    # col R
 
 # Timestamp formats to try
 TS_FORMATS = [
@@ -74,14 +93,34 @@ def safe(row, idx):
 
 
 def main():
-    dry_run = "--dry-run" in sys.argv
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--team-id", required=True,
+                        help="Team config to load (e.g. sales, member_support)")
+    parser.add_argument("--source-tab", default="Form Responses 1",
+                        help='Form-responses tab to copy from (default: "Form Responses 1")')
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print what would be updated without writing to Sheets")
+    args = parser.parse_args()
+
+    config = get_team_config(args.team_id)
+    layout = config.history_layout
+
+    # Analyst_History columns, derived from the team's section count.
+    ah_dialpad = history_layout.COL_DIALPAD_LINK
+    ah_strengths = layout.col_key_strengths
+    ah_opportunities = layout.col_opportunities
+
+    dialpad_letter = col_index_to_letter(ah_dialpad)
+    strengths_letter = col_index_to_letter(ah_strengths)
+    opportunities_letter = col_index_to_letter(ah_opportunities)
 
     # Connect to Sheets
     creds_env = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
-    sheet_id = os.getenv("GOOGLE_SHEETS_ID", "")
+    sheet_id = env_for_team("GOOGLE_SHEETS_ID", args.team_id, legacy_ok=True)
 
     if not creds_env or not sheet_id:
-        print("ERROR: GOOGLE_SERVICE_ACCOUNT_JSON and GOOGLE_SHEETS_ID must be set in .env")
+        print("ERROR: GOOGLE_SERVICE_ACCOUNT_JSON and GOOGLE_SHEETS_ID"
+              f" (or GOOGLE_SHEETS_ID_{args.team_id.upper()}) must be set in .env")
         sys.exit(1)
 
     if creds_env.strip().startswith("{"):
@@ -93,52 +132,57 @@ def main():
     client.set_timeout(120)
     spreadsheet = client.open_by_key(sheet_id)
 
-    print("Reading Form Responses 1...")
-    form1 = spreadsheet.worksheet("Form Responses 1")
+    print(f"Team: {args.team_id} (N={layout.n} sections, "
+          f"dialpad={dialpad_letter}, strengths={strengths_letter}, "
+          f"opportunities={opportunities_letter})")
+
+    print(f"Reading {args.source_tab}...")
+    form1 = spreadsheet.worksheet(args.source_tab)
     form1_data = form1.get_all_values()
     print(f"  {len(form1_data) - 1} data rows")
 
-    print("Reading Analyst_History...")
-    history = spreadsheet.worksheet("Analyst_History")
+    history_tab = config.sheets.analyst_history.tab_name
+    print(f"Reading {history_tab}...")
+    history = spreadsheet.worksheet(history_tab)
     history_data = history.get_all_values()
     print(f"  {len(history_data) - 1} data rows")
 
-    # Build lookup from Form Responses 1: (normalized_ts, agent_lower) -> row
+    # Build lookup from the source tab: (normalized_ts, agent_lower) -> row
     form1_lookup = {}
-    for i, row in enumerate(form1_data[1:], start=2):  # skip header, 1-indexed
+    for row in form1_data[1:]:  # skip header
         ts = parse_ts(safe(row, F1_TIMESTAMP))
         agent = safe(row, F1_AGENT_NAME).lower()
-        key = (ts, agent)
-        form1_lookup[key] = row
+        form1_lookup[(ts, agent)] = row
 
-    print(f"  Form 1 lookup: {len(form1_lookup)} unique (timestamp, agent) pairs")
+    print(f"  Source lookup: {len(form1_lookup)} unique (timestamp, agent) pairs")
 
-    # Scan Analyst_History for rows missing Dialpad Link, Key Strengths, or Improvements
+    # Scan Analyst_History for rows missing Dialpad Link, Key Strengths,
+    # or Opportunities
     updates = []
     matched = 0
     skipped_no_match = 0
     skipped_already_filled = 0
 
     for i, row in enumerate(history_data[1:], start=2):  # skip header, 1-indexed in sheet
-        ts = parse_ts(safe(row, AH_TIMESTAMP))
-        agent = safe(row, AH_AGENT_NAME).lower()
+        # Eval time: new-shape rows carry it in eval_approved_at; pre-PR-2
+        # rows still have it in col C (see module docstring).
+        raw_ts = safe(row, layout.col_eval_approved_at) or safe(row, history_layout.COL_TIMESTAMP)
+        ts = parse_ts(raw_ts)
+        agent = safe(row, history_layout.COL_AGENT_NAME).lower()
 
         if not ts or not agent:
             continue
 
-        key = (ts, agent)
-        form1_row = form1_lookup.get(key)
-
+        form1_row = form1_lookup.get((ts, agent))
         if not form1_row:
             skipped_no_match += 1
             continue
 
         matched += 1
 
-        # Check what's missing in Analyst_History
-        current_link = safe(row, AH_DIALPAD_LINK)
-        current_strengths = safe(row, AH_KEY_STRENGTHS)
-        current_improvements = safe(row, AH_IMPROVEMENTS)
+        current_link = safe(row, ah_dialpad)
+        current_strengths = safe(row, ah_strengths)
+        current_opportunities = safe(row, ah_opportunities)
 
         new_link = safe(form1_row, F1_DIALPAD_LINK)
         new_strengths = safe(form1_row, F1_KEY_STRENGTHS)
@@ -146,16 +190,16 @@ def main():
 
         row_updates = {}
         if not current_link and new_link:
-            row_updates["P"] = new_link
+            row_updates["dialpad_link"] = new_link
         if not current_strengths and new_strengths:
-            row_updates["Q"] = new_strengths
-        if not current_improvements and new_opportunities:
-            row_updates["R"] = new_opportunities
+            row_updates["key_strengths"] = new_strengths
+        if not current_opportunities and new_opportunities:
+            row_updates["opportunities"] = new_opportunities
 
         if row_updates:
             updates.append({
                 "sheet_row": i,
-                "agent": safe(row, AH_AGENT_NAME),
+                "agent": safe(row, history_layout.COL_AGENT_NAME),
                 "timestamp": ts,
                 "updates": row_updates,
             })
@@ -176,21 +220,22 @@ def main():
     # Show preview
     print(f"\nPreview (first 10):")
     for u in updates[:10]:
-        cols = ", ".join(f"{k}={v[:40]}..." if len(v) > 40 else f"{k}={v}" for k, v in u["updates"].items())
+        cols = ", ".join(f"{k}={v[:40]}..." if len(v) > 40 else f"{k}={v}"
+                         for k, v in u["updates"].items())
         print(f"  Row {u['sheet_row']}: {u['agent']} ({u['timestamp']}) -> {cols}")
 
     if len(updates) > 10:
         print(f"  ... and {len(updates) - 10} more")
 
-    if dry_run:
+    if args.dry_run:
         print("\n[DRY RUN] No changes written. Remove --dry-run to apply.")
         return
 
-    # Apply updates — batch P/Q/R into a single row update per row,
-    # with rate limiting (max 50 requests/min to stay under 60/min quota)
-    import time
-
-    print(f"\nWriting {len(updates)} row updates to Analyst_History...")
+    # Apply updates. The dialpad-link cell sits in the fixed prefix while
+    # strengths/opportunities are trailing columns, so each row needs two
+    # ranges — batched into a single API call per row, rate-limited to
+    # stay under the 60 writes/min quota.
+    print(f"\nWriting {len(updates)} row updates to {history_tab}...")
     print(f"  Rate limit: 50 writes/min (~1.2s between writes)")
 
     written = 0
@@ -201,18 +246,23 @@ def main():
         row_num = u["sheet_row"]
         cols = u["updates"]
 
-        # Build a single batch: always write P, Q, R (use existing value if no update)
+        # Always write all three cells, keeping existing values where no
+        # update applies — same batching strategy as the original script.
         row_data = history_data[row_num - 1]  # 0-indexed
-        p_val = cols.get("P", safe(row_data, AH_DIALPAD_LINK))
-        q_val = cols.get("Q", safe(row_data, AH_KEY_STRENGTHS))
-        r_val = cols.get("R", safe(row_data, AH_IMPROVEMENTS))
+        link_val = cols.get("dialpad_link", safe(row_data, ah_dialpad))
+        strengths_val = cols.get("key_strengths", safe(row_data, ah_strengths))
+        opportunities_val = cols.get("opportunities", safe(row_data, ah_opportunities))
+
+        batch = [
+            {"range": f"{dialpad_letter}{row_num}", "values": [[link_val]]},
+            {"range": f"{strengths_letter}{row_num}:{opportunities_letter}{row_num}",
+             "values": [[strengths_val, opportunities_val]]},
+        ]
 
         retries = 0
         while retries < 3:
             try:
-                # Single API call writes all 3 columns at once (P=16, Q=17, R=18 → 1-indexed)
-                history.update([[p_val, q_val, r_val]], f"P{row_num}:R{row_num}",
-                               value_input_option="USER_ENTERED")
+                history.batch_update(batch, value_input_option="USER_ENTERED")
                 written += 1
                 break
             except Exception as e:
