@@ -38,7 +38,7 @@ That's the finish line. Nothing else needs to ship for that outcome.
 | File | Team | Status |
 |---|---|---|
 | `database/member_support_scoring_migration.md` | Member Support | ✅ **Finalized** — Ops VP sign-off. 4 minor items in §10 still to confirm (see §5 below). |
-| `database/sales_scoring_migration.md` | Sales | ⚠️ **Populated from source PDF, PENDING sign-off** — 7 open items in its §10. Blocks Sales bonus math. |
+| `database/sales_scoring_migration.md` | Sales | ✅ **Finalized** — Sales Management sign-off 2026-07-07 (B1–B7, recorded in its §10). Sales bonus math unblocked. |
 
 **These files DEFINE THE SCHEMA that the specs load into:**
 
@@ -118,17 +118,19 @@ The Ops-signed specs use a **richer formula shape** than `SQLMigration.md §3.8`
 - [ ] Confirm hard-zero stays globally available (enabled per team) vs. removed outright for MS
 - [ ] Confirm NA-spread behavior when **multiple** sections are NA (current: recompute equal-additive over remaining active sections)
 
-**Sales (§10 of the Sales scoring spec):**
+**Sales (§10 of the Sales scoring spec)** — CLOSED 2026-07-07, Sales Management sign-off
+B1–B7 (answers recorded in the Sales spec's §10; briefs in Section10SignoffBriefs.md):
 
-- [ ] Confirm rating→points curve (`(rating − 1) / 4` vs `rating / 5`) — **materially changes every scaled section's score**
-- [ ] Confirm NA = full credit on-slot **for all 15 sections** with no redistribution
-- [ ] Confirm `formula_id = sales_v1` and version lineage
-- [ ] Confirm section keys (the spec's proposed keys)
-- [ ] Confirm whether to persist the PDF's `category` grouping on `qa.formula_section`
-- [ ] Confirm `client_experience` placement under *Post-Call & Documentation*
-- [ ] Confirm no rules / no triggers planned for `sales_v1`
+- [x] Confirm rating→points curve (`(rating − 1) / 4` vs `rating / 5`) — **B1: `(rating − 1) / 4`**, must stay reconfigurable in the version-ship manager UI
+- [x] Confirm NA = full credit on-slot **for all 15 sections** with no redistribution — **B2: confirmed**
+- [x] Confirm `formula_id = sales_v1` and version lineage — **B3: `sales_v2`** (formula and rubric; `sales_v1` stays with the legacy 19-section rubric)
+- [x] Confirm section keys (the spec's proposed keys) — **B4: adopted as-is, no renames**
+- [x] Confirm whether to persist the PDF's `category` grouping on `qa.formula_section` — **B5: keep it**
+- [x] Confirm `client_experience` placement under *Post-Call & Documentation* — **B6: confirmed**
+- [x] Confirm no rules / no triggers planned — **B7: none for `sales_v2`**
 
-**Nothing else can start on Sales bonus math until §10 is closed.** MS can start now.
+**Sales bonus math is unblocked.** Still open on the Sales side: the 13 default
+`na_applies_when` texts (spec §10a pre-flip checklist).
 
 **Q — should we get all sign-offs before writing any code?** No — Phase 1 and 2 (Foundation + Compute Engine) are entirely internal, agnostic to which sections/weights end up locked. Formula sign-off gates Phase 3 (ship the versions) onward, not the engine itself.
 
