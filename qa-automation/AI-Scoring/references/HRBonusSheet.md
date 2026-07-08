@@ -145,12 +145,15 @@ All numbers are computed by the backend from Postgres. Definitions:
 ## 5. Backend endpoint
 
 ```
-GET /hr-bonus/{team_id}/{month}          month = YYYY-MM
+GET /api/{team_id}/hr-bonus/{month}      month = YYYY-MM
 ```
 
-- **Auth:** existing API-key middleware; a dedicated read-only reporting key for the GAS suite
-  (same key-role machinery as the other GAS↔backend calls). Requests land in
-  `qa.api_audit_log` like every other endpoint.
+(Mounted team-aware like every other router — `/api/{team_id}` prefix with `TEAM_AUTH`;
+no legacy `/api` shim.)
+
+- **Auth:** existing API-key middleware; the GAS suite calls with a team-bound API key
+  (the key's team must match the URL team, same machinery as the other routers). Requests
+  land in `qa.api_audit_log` like every other endpoint.
 - **Validation:** unknown `team_id` → 404; malformed month → 422; a team without an
   `hr_export` block → 404 (this is how Sales stays dark until §8 is decided).
 - **Response** (shape the GAS renderer consumes 1:1):
