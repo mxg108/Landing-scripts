@@ -5,6 +5,23 @@
 
   "excluded_test_agents": ["Maximiliano Perez"],
 
+  "hr_internal_section_ids": ["human_review_required"],
+
+  "hr_export": {
+    "sections": [
+      {"id": "greeting",          "hr_label": "Greeting"},
+      {"id": "caller_id",         "hr_label": "Caller ID"},
+      {"id": "purpose",           "hr_label": "Purpose of the call"},
+      {"id": "matching",          "hr_label": "Matching the moment"},
+      {"id": "process_adherence", "hr_label": "Process Adherence"},
+      {"id": "call_resolution",   "hr_label": "Call Resolution"},
+      {"id": "comms",             "hr_label": "Communication"},
+      {"id": "efficiency",        "hr_label": "Efficiency & Call Handling"},
+      {"id": "cri",               "hr_label": "CRI"}
+    ],
+    "excluded_agents": ["maximiliano perez", "maximiliano.perez"]
+  },
+
   "stats": {
     "min_evals_for_outlier": 5,
     "outlier_z_threshold": 3.5,

@@ -97,6 +97,27 @@ class StatsConfig(BaseModel):
     spc_sigma_multiplier: float = 2.0
 
 
+class HrExportSectionConfig(BaseModel):
+    """One HR-visible section: rubric section id + the header HR sees."""
+    id: str
+    hr_label: str
+
+
+class HrExportConfig(BaseModel):
+    """HR bonus sheet export surface (references/HRBonusSheet.md §3).
+
+    Lives at the top level of the team JSON — NOT inside the rubric block,
+    which is content-hashed for version archiving. Aggregation shape
+    (numeric mean vs binary %Yes) is derived from the rubric section's
+    score_type, never restated here.
+    """
+    sections: list[HrExportSectionConfig]
+    excluded_agents: list[str] = Field(
+        default_factory=list,
+        description="Raw agent names (case-insensitive) filtered out of the HR export.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # TeamConfig
 # ---------------------------------------------------------------------------
@@ -120,8 +141,39 @@ class TeamConfig(BaseModel):
     sheets: SheetsConfig
     rubric: Rubric
     stats: StatsConfig = Field(default_factory=StatsConfig)
+    hr_export: Optional[HrExportConfig] = None
+    hr_internal_section_ids: list[str] = Field(
+        default_factory=list,
+        description="Section ids that must never leave internal surfaces "
+                    "(HR export rejects them — HRBonusSheet.md §3).",
+    )
 
     model_config = ConfigDict(extra="ignore")
+
+    @model_validator(mode="after")
+    def _validate_hr_export(self) -> "TeamConfig":
+        """hr_export sections must be non-empty, unique, rubric-known, and
+        never internal-only. This is the mechanical form of the
+        "Documentation / Human Review Required never leaves the building"
+        guarantee from the HR bonus sheet spec."""
+        if self.hr_export is None:
+            return self
+        if not self.hr_export.sections:
+            raise ValueError("hr_export.sections must not be empty")
+        known = {s.id for s in self.rubric.sections}
+        internal = set(self.hr_internal_section_ids)
+        seen: set[str] = set()
+        for sec in self.hr_export.sections:
+            if sec.id not in known:
+                raise ValueError(f"hr_export section '{sec.id}' is not a rubric section")
+            if sec.id in internal:
+                raise ValueError(
+                    f"hr_export section '{sec.id}' is internal-only and must never be exported"
+                )
+            if sec.id in seen:
+                raise ValueError(f"hr_export section '{sec.id}' listed twice")
+            seen.add(sec.id)
+        return self
 
     # --- Rubric passthroughs (backward-compat surface) ----------------------
 
