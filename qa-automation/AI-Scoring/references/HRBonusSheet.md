@@ -197,25 +197,27 @@ Implementation: `backend/services/hr_bonus_service.py` (pure query + aggregation
 
 ## 6. GAS suite
 
-New top-level GAS project `qa-automation/hr-bonus/`, built and pushed through the existing
-pipeline (`push.sh` target + `scripts/build_config.py` emitting its `Config.js`). It reuses the
-established patterns from `src/` (config-driven, render-only) but is deliberately tiny:
+New top-level GAS project `qa-automation/hr-bonus/`, registered as the `hr-bonus` target in
+`push.projects` (single-project layout — no team overlay, no build step). It reuses the
+established patterns from `src/` (render-only, backend preps the data) but is deliberately tiny:
 
 | File | Responsibility |
 |---|---|
-| `Main.js` | `runMonthlyExport()` — trigger entry; computes prior month, orchestrates; `runExportFor(month)` for manual re-runs (custom menu) |
+| `Main.js` | `runMonthlyExport()` — trigger entry; `runManualExport()` (re-run via `MANUAL_MONTH` Script Property); `installMonthlyTrigger()`; failure alerts |
 | `ApiClient.js` | `UrlFetchApp` GET to the backend with the API key from Script Properties; JSON parse + error surfacing |
 | `SheetWriter.js` | Summary + detail tab rendering per §2 (clear-in-place, freeze header, index 0 for summary) |
-| `Config.js` | generated — backend base URL, team id |
+| `Config.js` | static — team id only (everything dynamic arrives in the payload; deployment values live in Script Properties) |
 
-- **Script Properties:** `HR_BONUS_API_KEY` (the reporting key), `HR_BONUS_SPREADSHEET_ID`
-  (the workbook — GAS opens by id; the suite is not container-bound so the workbook can be
-  swapped without redeploying).
-- **Trigger:** time-driven, **1st of each month, 06:00–07:00 America/Los_Angeles**, exporting
-  the month that just ended.
+- **Script Properties:** `BACKEND_BASE_URL`, `HR_BONUS_API_KEY` (the team API key),
+  `HR_BONUS_SPREADSHEET_ID` (the workbook — GAS opens by id; the suite is not
+  container-bound so the workbook can be swapped without redeploying), optional
+  `ALERT_EMAIL` and `MANUAL_MONTH`.
+- **Trigger:** time-driven, **1st of each month, 06:00–07:00 America/Los_Angeles** (the
+  script timezone in `appsscript.json`), exporting the month that just ended. Installed
+  once via `installMonthlyTrigger()` (idempotent — never stacks duplicates).
 - **Failure handling:** any error → `MailApp` alert to the operator with the error and month;
   no partial-write cleanup needed because re-runs are idempotent (§2). No retry loop in v1 —
-  the operator re-runs from the menu.
+  the operator re-runs via `runManualExport()` (standalone scripts have no spreadsheet menu).
 - **Write pacing:** `SpreadsheetApp` batched `setValues` per tab (one write per tab — the
   Sheets-API-quota pacing that shaped the mockup's `_paced` writer doesn't apply to GAS).
 
