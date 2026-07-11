@@ -126,13 +126,18 @@ def test_approve_publish_includes_eval_id_field():
     """The published eval_approved payload must include `eval_id` derived
     from dialpad_link so the toast click navigates to the same datapoint
     URL the rest of the dashboard uses (entry_point_call_id, not master
-    call_id). Source-presence guard against regression of the fix."""
+    call_id). Source-presence guard against regression of the fix.
+
+    Post-slice-5 the only publisher is `_publish_finalized_event` (the
+    auto-finalize and flagged-resolution paths both route through it),
+    so the guard fingerprints its link-derived eval_id."""
     src = inspect.getsource(scoring_module)
-    assert "_eval_id_from_link" in src, (
-        "_eval_id_from_link helper is missing — approve publish would "
+    assert "_sse_eval_id_from_link" in src, (
+        "_sse_eval_id_from_link helper is missing — approve publish would "
         "fall back to master call_id and the toast would link to the "
         "wrong datapoint URL"
     )
-    assert '"eval_id": eval_id' in src, (
-        "eval_id is no longer published in the eval_approved payload"
+    assert '"eval_id": _sse_eval_id_from_link' in src, (
+        "eval_id is no longer derived from dialpad_link in the "
+        "eval_approved payload"
     )
