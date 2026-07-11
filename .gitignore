@@ -39,3 +39,7 @@ docs/git-for-the-recruit.md
 database/analyst_history_*.csv
 database/export_document_test_data.csv
 database/onepager_*.html
+
+# B0 staging outputs (backfill_seed_b0.py) — derived from the seed CSVs,
+# same PII surface. Reports included: exclusion rows carry agent names.
+database/backfill_staging/
