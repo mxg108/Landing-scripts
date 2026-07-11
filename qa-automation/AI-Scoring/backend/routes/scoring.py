@@ -35,12 +35,8 @@ from backend.services.event_bus import get_event_bus
 from backend.services.scoring_service import score_call
 from backend.services.sheets_service import (
     append_score_audit_row,
-    apply_analyst_edits_to_fr_ai,
-    finalize_to_analyst_history,
-    read_score_and_writeback,
     trigger_apps_script,
     write_draft_to_fr_ai,
-    write_to_score_destination,
 )
 from backend.services.dialpad_client import (
     DialpadRateLimited,
@@ -401,17 +397,16 @@ async def score_single_call(
                     call_details=call_details,
                 )
             row_num = write_draft_to_fr_ai(scorecard, config)
-            # Stage 1 dual-write. Pre-flip (§7.3 Phase A): never raises.
-            # Post-flip (scoring_owner='postgres', Phase C): DB errors raise
-            # and the whole job errors — the DB row is truth.
-            owner = await eval_store.get_scoring_owner(team_id)
+            # Stage 1 dual-write (§7.3 Phase C): the DB row is truth — DB
+            # errors raise and the whole job errors. The FR-AI sheet write
+            # above is the projection side of the dual-write.
             evaluation_id = await record_draft_evaluation(
-                scorecard, config, strict=(owner == "postgres")
+                scorecard, config, strict=True
             )
             _jobs[key]["sheets_row"] = row_num
             _jobs[key]["evaluation_id"] = evaluation_id
             _jobs[key]["scorecard"] = scorecard.model_dump()
-            if owner == "postgres" and evaluation_id is not None:
+            if evaluation_id is not None:
                 await _postgres_post_stage1(
                     _jobs[key], evaluation_id, scorecard, config, team_id
                 )
@@ -526,14 +521,13 @@ async def score_batch(
                         duration_ms=dur,
                     )
                 row_num = write_draft_to_fr_ai(scorecard, config)
-                owner = await eval_store.get_scoring_owner(team_id)
                 evaluation_id = await record_draft_evaluation(
-                    scorecard, config, strict=(owner == "postgres")
+                    scorecard, config, strict=True
                 )
                 _jobs[k]["sheets_row"] = row_num
                 _jobs[k]["evaluation_id"] = evaluation_id
                 _jobs[k]["scorecard"] = scorecard.model_dump()
-                if owner == "postgres" and evaluation_id is not None:
+                if evaluation_id is not None:
                     await _postgres_post_stage1(
                         _jobs[k], evaluation_id, scorecard, config, team_id
                     )
@@ -556,11 +550,15 @@ async def approve_scorecard(
 ):
     """
     Manager approves a scored call (optionally with edits).
-    Updates Form Responses AI, copies to Form Responses 1,
-    waits for ARRAYFORMULA, then triggers Apps Script email pipeline.
 
-    Writes a Score_Audit row with action="approved" once Stage 4
-    succeeds — captured before the Apps Script email dispatch so an
+    Engine path (CutoverDesign §2/§5): DB state transition + engine
+    compute + Sheets projection, then the Apps Script email dispatch.
+    No destination tab, no ARRAYFORMULA readback — DB errors are hard
+    errors (§7.3 Phase C). The pre-cutover four-stage sheet flow was
+    deleted in the §8 slice-5 cleanup.
+
+    Writes a Score_Audit row with action="approved" once the evaluation
+    finalizes — captured before the Apps Script email dispatch so an
     Apps Script failure still leaves the audit trail intact.
     """
     team_id = team_id_from_path(request)
@@ -603,150 +601,23 @@ async def approve_scorecard(
         job["status"] = "complete"
         raise HTTPException(status_code=409, detail="Evaluation is finalized (engine-scored) — read-only")
 
-    owner = await eval_store.get_scoring_owner(team_id)
-    if owner == "postgres":
-        # Flagged-call resolution path (CutoverDesign §2/§5): DB transition +
-        # engine compute + projections. No destination tab, no readback —
-        # DB errors are hard errors (§7.3 Phase C).
-        sc = job["scorecard"]
-        evaluator_email = sc.get("manager_email", "")
-        # Backend guard behind the frontend's "Score Required" gate: manual
-        # sections without a formula na_default must carry real scores —
-        # NA would ride into full credit (the 2026-07-06 Sales find).
-        unscored = eval_store.missing_manual_scores(config, approval.sections)
-        if unscored:
-            job["status"] = "complete"
-            raise HTTPException(
-                status_code=422,
-                detail=f"Manual sections require scores before approval: {unscored}",
-            )
-        try:
-            evaluation_id = await record_approval(
-                config,
-                evaluation_id=job.get("evaluation_id"),
-                dialpad_link=sc.get("dialpad_link"),
-                evaluator_email=evaluator_email,
-                approved_sections=approval.sections,
-                draft_sections=sc.get("sections", []),
-                key_strengths=approval.key_strengths,
-                opportunities=approval.opportunities,
-                overall_score_raw=None,  # the engine produces the number
-                agent_email=job.get("agent_email") or None,
-                model=sc.get("model", "gemini-2.5-flash"),
-                strict=True,
-                resolving_review=job.get("scoring_status") == "flagged_human_review",
-            )
-            if evaluation_id is None:
-                raise HTTPException(status_code=500, detail="No draft evaluation row to approve")
-            detail = await eval_store.stamp_and_finalize(
-                evaluation_id, config, evaluator_email=evaluator_email
-            )
-            pool = await eval_store.get_pool()
-            history_row = await project_evaluation(
-                pool, evaluation_id, config, include_history=True
-            )
-            if history_row is not None and history_row > 0:
-                try:
-                    script_response = trigger_apps_script(history_row, team_id)
-                    job["email_dispatch"] = script_response
-                except Exception as e:
-                    job["email_dispatch"] = {"status": "error", "message": str(e)}
-                    logging.getLogger(__name__).exception(
-                        "approve: Apps Script dispatch failed for eval %s (retryable)",
-                        evaluation_id,
-                    )
-            await _publish_finalized_event(
-                team_id, job,
-                agent_name=job.get("agent_name") or sc.get("agent_name"),
-                evaluator_email=evaluator_email,
-                overall_score=float(detail.overall_score),
-                history_row=history_row,
-                dialpad_link=sc.get("dialpad_link"),
-                call_summary=sc.get("call_summary", ""),
-                key_strengths=approval.key_strengths,
-                opportunities=approval.opportunities,
-            )
-            append_score_audit_row(
-                api_key_role=identity.role,
-                evaluator_email=evaluator_email,
-                agent_email=job.get("agent_email", ""),
-                agent_name=job.get("agent_name") or sc.get("agent_name") or "",
-                call_id=job.get("call_id", ""),
-                target_team=team_id,
-                action=audit_cfg.ACTION_APPROVED,
-                result_row=history_row,
-                notes="engine-scored",
-            )
-            job["status"] = "approved"
-            job["state"] = "finalized"
-            job["scoring_status"] = "complete"
-            job["overall_score"] = float(detail.overall_score)
-            job["evaluation_id"] = evaluation_id
-            return {
-                "status": "approved",
-                "state": "finalized",
-                "overall_score": float(detail.overall_score),
-                "history_row": history_row,
-            }
-        except HTTPException:
-            job["status"] = "complete"
-            raise
-        except Exception as e:
-            # Roll back to 'complete' so the manager can retry — the failed
-            # DB transaction rolled back too, so the row is still consistent.
-            # (Mirrors the legacy path's retry semantics.)
-            job["status"] = "complete"
-            job["error"] = str(e)
-            raise HTTPException(status_code=500, detail=f"Engine approval failed: {e}")
-
+    # Engine approval (CutoverDesign §2/§5): DB transition + engine compute
+    # + projections. No destination tab, no readback — DB errors are hard
+    # errors (§7.3 Phase C).
+    sc = job["scorecard"]
+    evaluator_email = sc.get("manager_email", "")
+    # Backend guard behind the frontend's "Score Required" gate: manual
+    # sections without a formula na_default must carry real scores —
+    # NA would ride into full credit (the 2026-07-06 Sales find).
+    unscored = eval_store.missing_manual_scores(config, approval.sections)
+    if unscored:
+        job["status"] = "complete"
+        raise HTTPException(
+            status_code=422,
+            detail=f"Manual sections require scores before approval: {unscored}",
+        )
     try:
-        sections_dicts = [s.model_dump() for s in approval.sections]
-        sc = job["scorecard"]
-        # Treat the scoring-time manager_email as the evaluator at approval
-        # time. Future: replace with authenticated session user.
-        evaluator_email = sc.get("manager_email", "")
-
-        # Stage 1.5 — apply analyst edits (sections + feedback) to FR-AI
-        print(f"[approve] Stage 1.5: applying analyst edits to FR-AI row {sheets_row}...")
-        apply_analyst_edits_to_fr_ai(
-            fr_ai_row_num=sheets_row,
-            sections=sections_dicts,
-            config=config,
-            key_strengths=approval.key_strengths,
-            opportunities=approval.opportunities,
-        )
-        print("[approve] Stage 1.5 complete.")
-
-        # Stage 2 — write to per-team score destination tab
-        print(f"[approve] Stage 2: writing to score destination ({config.sheets.score_destination.tab_name})...")
-        dest_row = write_to_score_destination(
-            fr_ai_row_num=sheets_row,
-            config=config,
-            evaluator_email=evaluator_email,
-        )
-        print(f"[approve] Stage 2 complete. Destination row: {dest_row}")
-
-        # Stage 3 — poll readback col, write overall_score back to FR-AI col F
-        print(f"[approve] Stage 3: polling {config.sheets.score_destination.score_readback_col}{dest_row} for ARRAYFORMULA result...")
-        overall_score = await read_score_and_writeback(
-            dest_row_num=dest_row,
-            fr_ai_row_num=sheets_row,
-            config=config,
-        )
-        print(f"[approve] Stage 3 complete. Overall score: '{overall_score}'")
-
-        # Stage 4 — finalize to Analyst_History
-        print(f"[approve] Stage 4: finalizing to Analyst_History...")
-        history_row = finalize_to_analyst_history(
-            fr_ai_row_num=sheets_row,
-            evaluator_email=evaluator_email,
-            config=config,
-        )
-        print(f"[approve] Stage 4 complete. Analyst_History row: {history_row}")
-
-        # Postgres dual-write for the whole approve transition (Stages
-        # 1.5+2+3+4 — Wave 2 Phase 4b). §7.3 Phase A: never raises.
-        job["evaluation_id"] = await record_approval(
+        evaluation_id = await record_approval(
             config,
             evaluation_id=job.get("evaluation_id"),
             dialpad_link=sc.get("dialpad_link"),
@@ -755,15 +626,42 @@ async def approve_scorecard(
             draft_sections=sc.get("sections", []),
             key_strengths=approval.key_strengths,
             opportunities=approval.opportunities,
-            overall_score_raw=overall_score,
+            overall_score_raw=None,  # the engine produces the number
             agent_email=job.get("agent_email") or None,
             model=sc.get("model", "gemini-2.5-flash"),
+            strict=True,
+            resolving_review=job.get("scoring_status") == "flagged_human_review",
         )
-
-        # Audit the approval BEFORE Stage 5 so a downstream Apps Script
-        # failure doesn't lose the record. Identity comes from the API key
-        # used to hit /approve (may differ from the one that hit /score —
-        # e.g. a privileged operator approving on behalf of a team).
+        if evaluation_id is None:
+            raise HTTPException(status_code=500, detail="No draft evaluation row to approve")
+        detail = await eval_store.stamp_and_finalize(
+            evaluation_id, config, evaluator_email=evaluator_email
+        )
+        pool = await eval_store.get_pool()
+        history_row = await project_evaluation(
+            pool, evaluation_id, config, include_history=True
+        )
+        if history_row is not None and history_row > 0:
+            try:
+                script_response = trigger_apps_script(history_row, team_id)
+                job["email_dispatch"] = script_response
+            except Exception as e:
+                job["email_dispatch"] = {"status": "error", "message": str(e)}
+                logging.getLogger(__name__).exception(
+                    "approve: Apps Script dispatch failed for eval %s (retryable)",
+                    evaluation_id,
+                )
+        await _publish_finalized_event(
+            team_id, job,
+            agent_name=job.get("agent_name") or sc.get("agent_name"),
+            evaluator_email=evaluator_email,
+            overall_score=float(detail.overall_score),
+            history_row=history_row,
+            dialpad_link=sc.get("dialpad_link"),
+            call_summary=sc.get("call_summary", ""),
+            key_strengths=approval.key_strengths,
+            opportunities=approval.opportunities,
+        )
         append_score_audit_row(
             api_key_role=identity.role,
             evaluator_email=evaluator_email,
@@ -773,69 +671,25 @@ async def approve_scorecard(
             target_team=team_id,
             action=audit_cfg.ACTION_APPROVED,
             result_row=history_row,
-            notes="",
+            notes="engine-scored",
         )
-
-        # Publish "eval_approved" to subscribed dashboards. Fires AFTER
-        # the audit row is written (no event for a half-finalized eval)
-        # and BEFORE Apps Script dispatch (the toast races the email,
-        # which is fine — the dashboard reflects approved state; the
-        # email is the deliverable). Truncates free-text fields to 280
-        # chars to bound per-client SSE payload bytes (LiveDashboard.md
-        # resolved Q2). Full text remains available via /datapoint.
-        def _truncate(s: str, n: int = 280) -> str:
-            s = s or ""
-            return s if len(s) <= n else s[: n - 1] + "…"
-
-        # `eval_id` is the datapoint-route key (entry_point_call_id for
-        # inbound queue calls, master call_id for direct calls). It comes
-        # from the trailing path segment of `dialpad_link`, which
-        # scoring_service.py already builds via build_dialpad_link with
-        # the entry_point_call_id captured by get_call_details. Mirrors
-        # the parse in services/team_stats.py:_parse_row so SSE drill-down
-        # URLs match the Analyst_History eval_id used by /datapoint.
-        def _eval_id_from_link(link: str) -> str:
-            if not link:
-                return ""
-            clean = link.split("[")[0].strip().split("?")[0].strip()
-            return clean.rstrip("/").split("/")[-1]
-
-        dialpad_link = sc.get("dialpad_link", "")
-        eval_id = _eval_id_from_link(dialpad_link) or job.get("call_id", "")
-
-        await get_event_bus().publish(team_id, "eval_approved", {
-            "call_id": job.get("call_id", ""),
-            "eval_id": eval_id,
-            "history_row": history_row,
-            "agent": job.get("agent_name") or sc.get("agent_name") or "",
-            "evaluator_email": evaluator_email,
-            "overall_score": overall_score,
-            "summary": _truncate(sc.get("call_summary", "")),
-            "strengths": _truncate(approval.key_strengths),
-            "opportunities": _truncate(approval.opportunities),
-            "dialpad_link": dialpad_link,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
-
-        # Stage 5 — dispatch QA email via Apps Script (reads AH row).
-        print(f"[approve] Triggering Apps Script doPost (history_row={history_row})...")
-        script_response = trigger_apps_script(history_row, config.team_id)
-        print(f"[approve] Apps Script response: {script_response}")
-
         job["status"] = "approved"
-        job["destination_row"] = dest_row
-        job["history_row"] = history_row
-        job["overall_score"] = overall_score
-
+        job["state"] = "finalized"
+        job["scoring_status"] = "complete"
+        job["overall_score"] = float(detail.overall_score)
+        job["evaluation_id"] = evaluation_id
         return {
             "status": "approved",
-            "fr_ai_row": sheets_row,
-            "destination_row": dest_row,
+            "state": "finalized",
+            "overall_score": float(detail.overall_score),
             "history_row": history_row,
-            "overall_score": overall_score,
-            "script_response": script_response,
         }
-
+    except HTTPException:
+        job["status"] = "complete"
+        raise
     except Exception as e:
-        job["status"] = "complete"  # roll back so manager can retry
-        raise HTTPException(status_code=500, detail=f"Approval failed: {str(e)}")
+        # Roll back to 'complete' so the manager can retry — the failed
+        # DB transaction rolled back too, so the row is still consistent.
+        job["status"] = "complete"
+        job["error"] = str(e)
+        raise HTTPException(status_code=500, detail=f"Engine approval failed: {e}")

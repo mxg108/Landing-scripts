@@ -340,7 +340,7 @@ def test_score_endpoint_privileged_bypasses_roster(client, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_approve_writes_audit_row(client, monkeypatch):
-    """Stage 4 success appends a Score_Audit row with action="approved"."""
+    """Engine approval appends a Score_Audit row with action="approved"."""
     # Pre-seed a completed job with the metadata the approve handler reads.
     job_id = "call-approve_Luis_Rubio"
     key = scoring_module._job_key("member_support", job_id)
@@ -351,6 +351,7 @@ def test_approve_writes_audit_row(client, monkeypatch):
         "agent_name": "Luis Rubio",
         "manager_email": "ana@landing.com",
         "sheets_row": 99,
+        "evaluation_id": 77,
         "scorecard": {
             "manager_email": "ana@landing.com",
             "agent_name": "Luis Rubio",
@@ -361,12 +362,31 @@ def test_approve_writes_audit_row(client, monkeypatch):
         },
     }
 
-    # Stub the four sheets stages + Apps Script trigger so we don't hit gspread.
-    monkeypatch.setattr(scoring_module, "apply_analyst_edits_to_fr_ai", lambda **kw: None)
-    monkeypatch.setattr(scoring_module, "write_to_score_destination", lambda **kw: 200)
-    async def fake_readback(**kw): return "85"
-    monkeypatch.setattr(scoring_module, "read_score_and_writeback", fake_readback)
-    monkeypatch.setattr(scoring_module, "finalize_to_analyst_history", lambda **kw: 555)
+    # Stub the engine path (DB transition + projection + Apps Script) so
+    # the test never reaches Postgres or gspread.
+    monkeypatch.setattr(
+        scoring_module.eval_store, "missing_manual_scores",
+        lambda config, sections: [],
+    )
+
+    async def fake_record_approval(config, **kw):
+        return 77
+    monkeypatch.setattr(scoring_module, "record_approval", fake_record_approval)
+
+    class _Detail:
+        overall_score = 85.0
+
+    async def fake_stamp(evaluation_id, config, evaluator_email):
+        return _Detail()
+    monkeypatch.setattr(scoring_module.eval_store, "stamp_and_finalize", fake_stamp)
+
+    async def fake_pool():
+        return object()
+    monkeypatch.setattr(scoring_module.eval_store, "get_pool", fake_pool)
+
+    async def fake_project(pool, evaluation_id, config, include_history=True):
+        return 555
+    monkeypatch.setattr(scoring_module, "project_evaluation", fake_project)
     monkeypatch.setattr(scoring_module, "trigger_apps_script", lambda row, team_id: {"status": "ok"})
 
     resp = client.post(
@@ -382,6 +402,8 @@ def test_approve_writes_audit_row(client, monkeypatch):
         },
     )
     assert resp.status_code == 200, resp.text
+    assert resp.json()["state"] == "finalized"
+    assert resp.json()["overall_score"] == 85.0
     approved = [r for r in client.audit_rows if r["action"] == "approved"]
     assert len(approved) == 1
     row = approved[0]
@@ -392,6 +414,7 @@ def test_approve_writes_audit_row(client, monkeypatch):
     assert row["call_id"] == "call-approve"
     assert row["target_team"] == "member_support"
     assert row["result_row"] == 555
+    assert row["notes"] == "engine-scored"
 
 
 def test_score_endpoint_legacy_name_only_resolves_email_for_roster_check(client, monkeypatch):

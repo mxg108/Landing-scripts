@@ -58,26 +58,10 @@ _pool = None
 _pool_lock: Optional[asyncio.Lock] = None
 
 
-# ---------------------------------------------------------------------------
-# Per-team scoring truth flag (migration 013 / CutoverDesign §4)
-# ---------------------------------------------------------------------------
-
-async def get_scoring_owner(team_id: str) -> str:
-    """'sheets' (legacy pipeline is truth) or 'postgres' (engine scores,
-    Sheets are projections). Queried per request — the flip is a one-line
-    UPDATE and must take effect without a deploy. Any failure or missing
-    DB degrades to 'sheets' (the safe, legacy mode)."""
-    try:
-        pool = await _get_pool()
-        if pool is None:
-            return "sheets"
-        owner = await pool.fetchval(
-            "SELECT scoring_owner FROM public.teams WHERE id = $1", team_id
-        )
-        return owner or "sheets"
-    except Exception:
-        logger.exception("eval_store: scoring_owner lookup failed for %s — using 'sheets'", team_id)
-        return "sheets"
+# NOTE: get_scoring_owner (the per-request public.teams.scoring_owner
+# lookup) was deleted in the CutoverDesign §8 slice-5 cleanup — both teams
+# run engine-scored, and every caller now assumes 'postgres' semantics.
+# The migration-013 column itself stays in the DB (historical record).
 
 
 # ---------------------------------------------------------------------------
@@ -722,7 +706,6 @@ __all__ = [
     "record_draft_evaluation",
     "record_approval",
     "stamp_and_finalize",
-    "get_scoring_owner",
     "get_pool",
     "build_draft_row",
     "build_draft_sections",

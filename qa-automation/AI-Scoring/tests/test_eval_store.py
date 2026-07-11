@@ -630,38 +630,10 @@ class TestApprovalRecomputeAndShadow:
 
 
 # ---------------------------------------------------------------------------
-# scoring_owner flag + strict mode + stamp_and_finalize (cutover slice 2)
+# strict mode + stamp_and_finalize (cutover slice 2)
 # ---------------------------------------------------------------------------
-
-class OwnerFakePool:
-    def __init__(self, owner):
-        self.owner = owner
-
-    async def fetchval(self, query, *args):
-        assert "scoring_owner FROM public.teams" in query
-        return self.owner
-
-
-class TestScoringOwner:
-    pytestmark = pytest.mark.asyncio
-
-    async def test_no_pool_defaults_to_sheets(self, monkeypatch):
-        async def no_pool():
-            return None
-        monkeypatch.setattr(eval_store, "_get_pool", no_pool)
-        assert await eval_store.get_scoring_owner("member_support") == "sheets"
-
-    async def test_reads_flag(self, monkeypatch):
-        async def pool():
-            return OwnerFakePool("postgres")
-        monkeypatch.setattr(eval_store, "_get_pool", pool)
-        assert await eval_store.get_scoring_owner("member_support") == "postgres"
-
-    async def test_lookup_failure_degrades_to_sheets(self, monkeypatch):
-        async def exploding():
-            raise ConnectionError("pg down")
-        monkeypatch.setattr(eval_store, "_get_pool", exploding)
-        assert await eval_store.get_scoring_owner("member_support") == "sheets"
+# TestScoringOwner was deleted with get_scoring_owner in the §8 slice-5
+# cleanup — the engine path no longer consults the flag.
 
 
 class TestStrictMode:
