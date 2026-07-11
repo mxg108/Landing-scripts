@@ -95,6 +95,12 @@ row). Data quirks beyond MS: heavy *blank* cells (e.g. FLEX Pitch blank on 129 r
 treated blank exactly like "Not Applicable" (excluded + rescaled); one corrupted stray-value row
 (excluded); one row missing Overall Score (excluded).
 
+> **Re-export note (B0 run, 2026-07-11):** the CSV on disk is newer than this analysis. The
+> corrupted stray-value row was cleaned at the source (exclusions drop 2 → 1: only the
+> blank-Overall row remains), and an approval-clock trailing column appeared, populated on
+> ~64 AI-era rows — D1's Timestamp fallback now applies to 269 rows, not all. B0's expectation
+> gates encode the corrected numbers; anomaly and duplicate-group counts held (13 / 2).
+
 **Legacy Sales formula, reverse-engineered** (`sales_v0_sheet`, archived like MS's):
 
 ```
