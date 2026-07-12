@@ -297,28 +297,72 @@ async def phase_enrich(db, team_id: str, batch_size: int,
                 row["call_connected_at"].isoformat())
             counts["clock_overwrites"] += 1
         metadata["dialpad_raw"] = details.get("raw") or {}
-        try:
-            # Idempotent single-row UPDATE — safe to retry blindly.
-            await b1.with_reconnect(db, lambda: db.conn.execute(
-                "UPDATE qa.evaluations SET "
-                "dialpad_call_id=$2, dialpad_master_call_id=$3, "
-                "dialpad_entry_point_call_id=$4, "
-                "call_connected_at=COALESCE($5, call_connected_at), "
-                "call_started_at=$6, call_ended_at=$7, call_duration_ms=$8, "
-                "call_type=$9, mos_score=$10, recording_urls=$11::jsonb, "
-                "caller_name=COALESCE(caller_name, $12), "
-                "caller_phone=COALESCE(caller_phone, $13), "
-                "dialpad_call_metadata=$14::jsonb "
-                "WHERE id=$1",
-                row["id"], fields["dialpad_call_id"],
-                fields["dialpad_master_call_id"],
-                fields["dialpad_entry_point_call_id"],
+
+        async def update_row(include_ids: bool):
+            """Idempotent single-row UPDATE — safe to retry blindly.
+            include_ids=False leaves the unique-indexed call-id columns
+            alone (they go to metadata instead — D2 semantics)."""
+            id_sql = ("dialpad_call_id=$12, dialpad_master_call_id=$13, "
+                      "dialpad_entry_point_call_id=$14, " if include_ids else "")
+            params = [
+                row["id"],
                 fields["call_connected_at"], fields["call_started_at"],
                 fields["call_ended_at"], fields["call_duration_ms"],
                 fields["call_type"], fields["mos_score"],
                 json.dumps(fields["recording_urls"]),
                 fields["caller_name"], fields["caller_phone"],
-                json.dumps(metadata)))
+                json.dumps(metadata),
+            ]
+            if include_ids:
+                params += [fields["dialpad_call_id"],
+                           fields["dialpad_master_call_id"],
+                           fields["dialpad_entry_point_call_id"]]
+            await b1.with_reconnect(db, lambda: db.conn.execute(
+                "UPDATE qa.evaluations SET " + id_sql +
+                "call_connected_at=COALESCE($2, call_connected_at), "
+                "call_started_at=$3, call_ended_at=$4, call_duration_ms=$5, "
+                "call_type=$6, mos_score=$7, recording_urls=$8::jsonb, "
+                "caller_name=COALESCE(caller_name, $9), "
+                "caller_phone=COALESCE(caller_phone, $10), "
+                "dialpad_call_metadata=$11::jsonb "
+                "WHERE id=$1",
+                *params))
+
+        try:
+            import asyncpg
+            try:
+                await update_row(include_ids=True)
+            except asyncpg.exceptions.UniqueViolationError:
+                # D2 re-evaluation group: another backfill row of the same
+                # call already holds (team_id, dialpad_call_id). The
+                # dialpad_link holder is the canonical owner of the call-id
+                # family; superseded rows stash theirs in metadata.
+                holder = await b1.with_reconnect(db, lambda: db.conn.fetchrow(
+                    "SELECT id, dialpad_link, dialpad_call_metadata "
+                    "FROM qa.evaluations WHERE team_id=$1 AND dialpad_call_id=$2",
+                    team_id, fields["dialpad_call_id"]))
+                if (row["dialpad_link"] is not None and holder is not None
+                        and holder["dialpad_link"] is None):
+                    # Wrong row got there first (CSV order): demote the
+                    # superseded holder, then claim the ids here.
+                    holder_meta = json.loads(holder["dialpad_call_metadata"])
+                    holder_meta["backfill"]["superseded_dialpad_call_id"] = (
+                        fields["dialpad_call_id"])
+                    await b1.with_reconnect(db, lambda: db.conn.execute(
+                        "UPDATE qa.evaluations SET dialpad_call_id=NULL, "
+                        "dialpad_master_call_id=NULL, "
+                        "dialpad_entry_point_call_id=NULL, "
+                        "dialpad_call_metadata=$2::jsonb WHERE id=$1",
+                        holder["id"], json.dumps(holder_meta)))
+                    await update_row(include_ids=True)
+                    counts["call_id_swaps"] += 1
+                else:
+                    # This row is the superseded one (or a same-call link
+                    # variant): keep ids off the unique columns.
+                    metadata["backfill"]["superseded_dialpad_call_id"] = (
+                        fields["dialpad_call_id"])
+                    await update_row(include_ids=False)
+                    counts["call_id_deferred"] += 1
             counts["enriched"] += 1
             if fields["caller_name"] and not row["caller_name"]:
                 counts["caller_fields_filled"] += 1
@@ -345,7 +389,8 @@ async def run(args) -> int:
         "repair_unresolvable", "repair_failed", "enrich_batch", "enriched",
         "enrich_failed_404", "enrich_failed_other", "clock_overwrites",
         "caller_fields_filled", "rate_limit_hits", "unenrichable_no_link",
-        "enrich_remaining_after", "reconnects")}
+        "enrich_remaining_after", "reconnects", "call_id_swaps",
+        "call_id_deferred")}
     counts["aborted_rate_limited"] = False
     failures: list[dict] = []
 
@@ -373,6 +418,8 @@ async def run(args) -> int:
           f"{counts['enrich_failed_404']} marked 404, "
           f"{counts['clock_overwrites']} clock overwrites, "
           f"{counts['caller_fields_filled']} caller fields filled")
+    print(f"  D2 re-eval call-id resolution: {counts['call_id_swaps']} swaps, "
+          f"{counts['call_id_deferred']} deferred to holder")
     print(f"  remaining after this run: {counts['enrich_remaining_after']} "
           f"(no-link unenrichable: {counts['unenrichable_no_link']})")
     print(f"  report: {report_path}")
