@@ -128,7 +128,7 @@ async def fetch_details(call_id: str, counts: dict) -> dict | None:
     return details
 
 
-async def phase_repair(conn, team_id: str, staging_dir: Path,
+async def phase_repair(db, team_id: str, staging_dir: Path,
                        counts: dict, failures: list, dry_run: bool) -> None:
     """Phase R: import the clock-blocked staging rows via Dialpad repair."""
     staging_path = staging_dir / f"staging_{team_id}.jsonl"
@@ -142,9 +142,9 @@ async def phase_repair(conn, team_id: str, staging_dir: Path,
         return
 
     existing = {
-        r[0] for r in await conn.fetch(
+        r[0] for r in await b1.with_reconnect(db, lambda: db.conn.fetch(
             f"SELECT {_NK} FROM qa.evaluations WHERE team_id = $1 AND {_NK} IS NOT NULL",
-            team_id)
+            team_id))
     }
     for s in blocked:
         if s["natural_key"] in existing:
@@ -184,7 +184,8 @@ async def phase_repair(conn, team_id: str, staging_dir: Path,
                                  "imported_at": now_iso},
                     "dialpad_raw": details.get("raw") or {}}
         era_ai = s["era"] == "ai"
-        try:
+
+        async def insert_repaired(conn):
             async with conn.transaction():
                 evaluation_id = await conn.fetchval(
                     b1._EVAL_INSERT,
@@ -215,17 +216,34 @@ async def phase_repair(conn, team_id: str, staging_dir: Path,
                     fields["call_duration_ms"], fields["call_type"],
                     fields["mos_score"], json.dumps(fields["recording_urls"]),
                 )
+
+        try:
+            await insert_repaired(db.conn)
             counts["repaired_imported"] += 1
         except Exception as e:  # noqa: BLE001
+            if b1.DbSession.is_conn_error(e):
+                counts["reconnects"] += 1
+                await db.reconnect()
+                # Non-idempotent insert: check whether the commit landed
+                # and only the ack was lost before retrying.
+                if await b1._row_landed(db.conn, team_id, s["natural_key"]):
+                    counts["repaired_imported"] += 1
+                    continue
+                try:
+                    await insert_repaired(db.conn)
+                    counts["repaired_imported"] += 1
+                    continue
+                except Exception as e2:  # noqa: BLE001
+                    e = e2
             counts["repair_failed"] += 1
             failures.append({"phase": "R", "natural_key": s["natural_key"],
                              "error": f"{type(e).__name__}: {e}"})
 
 
-async def phase_enrich(conn, team_id: str, batch_size: int,
+async def phase_enrich(db, team_id: str, batch_size: int,
                        counts: dict, failures: list, dry_run: bool) -> None:
     """Phase E: cursor-based enrichment of imported backfill rows."""
-    rows = await conn.fetch(
+    rows = await b1.with_reconnect(db, lambda: db.conn.fetch(
         f"SELECT id, dialpad_link, caller_name, caller_phone, "
         f"call_connected_at, dialpad_call_metadata, "
         f"COALESCE(dialpad_link, {_SUPERSEDED}) AS effective_link "
@@ -233,17 +251,19 @@ async def phase_enrich(conn, team_id: str, batch_size: int,
         f"WHERE team_id = $1 AND {_NK} IS NOT NULL "
         f"AND {_ENRICHED} IS NULL AND {_FAILED} IS NULL "
         f"AND COALESCE(dialpad_link, {_SUPERSEDED}) IS NOT NULL "
-        f"ORDER BY id LIMIT $2", team_id, batch_size)
+        f"ORDER BY id LIMIT $2", team_id, batch_size))
     counts["enrich_batch"] = len(rows)
-    counts["enrich_remaining_after"] = max(0, await conn.fetchval(
-        f"SELECT COUNT(*) FROM qa.evaluations "
-        f"WHERE team_id = $1 AND {_NK} IS NOT NULL "
-        f"AND {_ENRICHED} IS NULL AND {_FAILED} IS NULL "
-        f"AND COALESCE(dialpad_link, {_SUPERSEDED}) IS NOT NULL", team_id) - len(rows))
-    counts["unenrichable_no_link"] = await conn.fetchval(
-        f"SELECT COUNT(*) FROM qa.evaluations "
-        f"WHERE team_id = $1 AND {_NK} IS NOT NULL "
-        f"AND COALESCE(dialpad_link, {_SUPERSEDED}) IS NULL", team_id)
+    counts["enrich_remaining_after"] = max(0, await b1.with_reconnect(
+        db, lambda: db.conn.fetchval(
+            f"SELECT COUNT(*) FROM qa.evaluations "
+            f"WHERE team_id = $1 AND {_NK} IS NOT NULL "
+            f"AND {_ENRICHED} IS NULL AND {_FAILED} IS NULL "
+            f"AND COALESCE(dialpad_link, {_SUPERSEDED}) IS NOT NULL", team_id)) - len(rows))
+    counts["unenrichable_no_link"] = await b1.with_reconnect(
+        db, lambda: db.conn.fetchval(
+            f"SELECT COUNT(*) FROM qa.evaluations "
+            f"WHERE team_id = $1 AND {_NK} IS NOT NULL "
+            f"AND COALESCE(dialpad_link, {_SUPERSEDED}) IS NULL", team_id))
 
     for i, row in enumerate(rows, start=1):
         call_id = eval_id_from_link(row["effective_link"])
@@ -261,9 +281,9 @@ async def phase_enrich(conn, team_id: str, batch_size: int,
             counts["enrich_failed_404"] += 1
             if not dry_run:
                 metadata["backfill"]["enrich_failed"] = f"dialpad_empty_or_404:{call_id}"
-                await conn.execute(
+                await b1.with_reconnect(db, lambda: db.conn.execute(
                     "UPDATE qa.evaluations SET dialpad_call_metadata=$2::jsonb WHERE id=$1",
-                    row["id"], json.dumps(metadata))
+                    row["id"], json.dumps(metadata)))
             continue
 
         fields = enrichment_fields(details)
@@ -278,7 +298,8 @@ async def phase_enrich(conn, team_id: str, batch_size: int,
             counts["clock_overwrites"] += 1
         metadata["dialpad_raw"] = details.get("raw") or {}
         try:
-            await conn.execute(
+            # Idempotent single-row UPDATE — safe to retry blindly.
+            await b1.with_reconnect(db, lambda: db.conn.execute(
                 "UPDATE qa.evaluations SET "
                 "dialpad_call_id=$2, dialpad_master_call_id=$3, "
                 "dialpad_entry_point_call_id=$4, "
@@ -297,7 +318,7 @@ async def phase_enrich(conn, team_id: str, batch_size: int,
                 fields["call_type"], fields["mos_score"],
                 json.dumps(fields["recording_urls"]),
                 fields["caller_name"], fields["caller_phone"],
-                json.dumps(metadata))
+                json.dumps(metadata)))
             counts["enriched"] += 1
             if fields["caller_name"] and not row["caller_name"]:
                 counts["caller_fields_filled"] += 1
@@ -307,12 +328,10 @@ async def phase_enrich(conn, team_id: str, batch_size: int,
                              "error": f"{type(e).__name__}: {e}"})
         if i % 50 == 0:
             print(f"  {i}/{len(rows)} enriched "
-                  f"({counts['enrich_failed_404']} 404s so far)")
+                  f"({counts['enrich_failed_404']} 404s so far)", flush=True)
 
 
 async def run(args) -> int:
-    import asyncpg
-
     dsn = os.environ.get("DATABASE_URL", "")
     if not dsn:
         print("structural: DATABASE_URL not set")
@@ -326,18 +345,19 @@ async def run(args) -> int:
         "repair_unresolvable", "repair_failed", "enrich_batch", "enriched",
         "enrich_failed_404", "enrich_failed_other", "clock_overwrites",
         "caller_fields_filled", "rate_limit_hits", "unenrichable_no_link",
-        "enrich_remaining_after")}
+        "enrich_remaining_after", "reconnects")}
     counts["aborted_rate_limited"] = False
     failures: list[dict] = []
 
-    conn = await asyncpg.connect(dsn, timeout=15)
+    db = b1.DbSession(dsn)
+    await db.connect()
     try:
-        await phase_repair(conn, args.team_id, Path(args.staging_dir),
+        await phase_repair(db, args.team_id, Path(args.staging_dir),
                            counts, failures, args.dry_run)
-        await phase_enrich(conn, args.team_id, args.batch_size,
+        await phase_enrich(db, args.team_id, args.batch_size,
                            counts, failures, args.dry_run)
     finally:
-        await conn.close()
+        await db.close()
 
     report = {"stage": "B2", "team_id": args.team_id,
               "dry_run": args.dry_run, "counts": counts, "failures": failures}
