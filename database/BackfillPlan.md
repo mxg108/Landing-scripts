@@ -207,6 +207,11 @@ as documentation output. Sales §11's 75.00 vector stays the Sales fixture until
   clearly marked as post-hoc.
 - **Agent emails** beyond Mails-tab coverage; **caller identity** where Dialpad no longer retains
   the call; the 22 agents who never appear with an email.
+- **The 15 no-clock, no-link rows (B2 finding, 2026-07-11):** 14 MS + 1 Sales rows have a broken
+  Timestamp, no approval-clock value, *and* no Dialpad link — there is no clock source anywhere,
+  and `state='finalized'` CHECKs require `approved_at`. They stay in staging as
+  `import_blocked` forever and appear in every B2 report as unresolvable (zero API cost —
+  they're linkless). The other 4 Sales blocked rows carry links and repair via B2 phase R.
 
 ## 8. Decisions (locked 2026-07-01)
 
