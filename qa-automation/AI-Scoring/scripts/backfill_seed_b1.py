@@ -86,6 +86,71 @@ INSERT INTO qa.evaluation_sections (
 _NK_PATH_SQL = "dialpad_call_metadata #>> '{backfill,natural_key}'"
 
 
+class DbSession:
+    """Auto-reconnecting asyncpg connection for long backfill runs.
+
+    Learned the hard way (2026-07-11 B1 full run): Railway silently drops
+    long-lived connections, and without a command timeout the client hangs
+    forever awaiting a response that will never come — 366 rows in, frozen
+    for an hour. ``command_timeout`` turns the dead socket into an
+    exception; ``reconnect()`` resumes with backoff. Callers decide retry
+    semantics per operation (idempotent ops retry blindly; inserts check
+    whether the commit actually landed first — the ack, not the commit,
+    may be what was lost).
+    """
+
+    RECONNECT_ATTEMPTS = 6
+
+    def __init__(self, dsn: str):
+        self.dsn = dsn
+        self.conn = None
+
+    async def connect(self):
+        import asyncpg
+        self.conn = await asyncpg.connect(self.dsn, timeout=15, command_timeout=60)
+        return self.conn
+
+    async def close(self):
+        if self.conn is not None and not self.conn.is_closed():
+            try:
+                await self.conn.close(timeout=10)
+            except Exception:  # noqa: BLE001 — already dead is fine
+                pass
+
+    async def reconnect(self):
+        await self.close()
+        last_error = None
+        for attempt in range(1, self.RECONNECT_ATTEMPTS + 1):
+            try:
+                await asyncio.sleep(5 * attempt)
+                return await self.connect()
+            except Exception as e:  # noqa: BLE001
+                last_error = e
+                print(f"  reconnect attempt {attempt}/{self.RECONNECT_ATTEMPTS} "
+                      f"failed: {e}", flush=True)
+        raise ConnectionError(f"could not re-establish DB connection: {last_error}")
+
+    @staticmethod
+    def is_conn_error(e: BaseException) -> bool:
+        import asyncpg
+        return isinstance(e, (ConnectionError, OSError, asyncio.TimeoutError,
+                              asyncpg.PostgresConnectionError,
+                              asyncpg.InterfaceError))
+
+
+async def with_reconnect(db: DbSession, op):
+    """Run an IDEMPOTENT operation, reconnecting + retrying once on a
+    connection-class failure. ``op`` is a zero-arg coroutine factory."""
+    try:
+        return await op()
+    except Exception as e:  # noqa: BLE001
+        if not DbSession.is_conn_error(e):
+            raise
+        print(f"  connection lost ({type(e).__name__}); reconnecting...", flush=True)
+        await db.reconnect()
+        return await op()
+
+
 def _ts(iso: str | None) -> datetime | None:
     return datetime.fromisoformat(iso) if iso else None
 
@@ -133,9 +198,39 @@ async def ship_v0_sheet_formula(conn, team_id: str, staged: list[dict], dry_run:
     return "inserted"
 
 
-async def run(args) -> int:
-    import asyncpg
+async def _import_row(conn, s: dict, imported_at: str) -> None:
+    """One evaluation + its sections, atomically."""
+    metadata = {"backfill": {
+        **s["annotations"],
+        "natural_key": s["natural_key"],
+        "staged_line": s["line"],
+        "imported_at": imported_at,
+    }}
+    era_ai = s["era"] == "ai"
+    async with conn.transaction():
+        evaluation_id = await conn.fetchval(
+            _EVAL_INSERT,
+            s["team_id"], s["agent_name_raw"], s["agent_email"],
+            s["evaluator_email"], s["state"], s["source"],
+            _ts(s["call_connected_at"]), s["dialpad_link"],
+            s["overall_score"], s["formula_version"], s["rubric_version"],
+            json.dumps(s["models_used"]),
+            "gemini" if era_ai else None,
+            s["key_strengths"], s["opportunities"], s["call_summary"],
+            s["caller_name"], s["caller_phone"],
+            json.dumps(metadata),
+            _ts(s["approved_at"]), _ts(s["approved_at"]),
+        )
+        await conn.executemany(_SECTION_INSERT, _section_params(evaluation_id, s))
 
+
+async def _row_landed(conn, team_id: str, natural_key: str) -> bool:
+    return bool(await conn.fetchval(
+        f"SELECT 1 FROM qa.evaluations WHERE team_id = $1 AND {_NK_PATH_SQL} = $2",
+        team_id, natural_key))
+
+
+async def run(args) -> int:
     staging_path = Path(args.staging_dir) / f"staging_{args.team_id}.jsonl"
     if not staging_path.exists():
         print(f"structural: staging file missing: {staging_path} — run B0 first")
@@ -150,12 +245,13 @@ async def run(args) -> int:
     if not dsn:
         print("structural: DATABASE_URL not set")
         return 1
-    conn = await asyncpg.connect(dsn, timeout=15)
+    db = DbSession(dsn)
+    conn = await db.connect()
 
     counts = {
         "staged_total": len(staged_all), "import_blocked": len(blocked),
         "candidates": len(importable), "already_imported": 0,
-        "link_collisions": 0, "inserted": 0, "failed": 0,
+        "link_collisions": 0, "inserted": 0, "failed": 0, "reconnects": 0,
     }
     failures: list[dict] = []
 
@@ -208,48 +304,47 @@ async def run(args) -> int:
         # ---- import loop: one transaction per evaluation --------------------
         imported_at = datetime.now(timezone.utc).isoformat()
         for i, s in enumerate(to_import, start=1):
-            metadata = {"backfill": {
-                **s["annotations"],
-                "natural_key": s["natural_key"],
-                "staged_line": s["line"],
-                "imported_at": imported_at,
-            }}
-            era_ai = s["era"] == "ai"
             try:
-                async with conn.transaction():
-                    evaluation_id = await conn.fetchval(
-                        _EVAL_INSERT,
-                        s["team_id"], s["agent_name_raw"], s["agent_email"],
-                        s["evaluator_email"], s["state"], s["source"],
-                        _ts(s["call_connected_at"]), s["dialpad_link"],
-                        s["overall_score"], s["formula_version"], s["rubric_version"],
-                        json.dumps(s["models_used"]),
-                        "gemini" if era_ai else None,
-                        s["key_strengths"], s["opportunities"], s["call_summary"],
-                        s["caller_name"], s["caller_phone"],
-                        json.dumps(metadata),
-                        _ts(s["approved_at"]), _ts(s["approved_at"]),
-                    )
-                    await conn.executemany(_SECTION_INSERT, _section_params(evaluation_id, s))
+                await _import_row(db.conn, s, imported_at)
                 counts["inserted"] += 1
             except Exception as e:  # noqa: BLE001 — overnight contract: log, continue
-                counts["failed"] += 1
-                failures.append({"natural_key": s["natural_key"], "line": s["line"],
-                                 "error": f"{type(e).__name__}: {e}"})
-            if i % 200 == 0:
+                if DbSession.is_conn_error(e):
+                    # Dead socket mid-row. Reconnect, then find out whether
+                    # the commit landed and only the ack was lost.
+                    print(f"  connection lost at row {i} ({type(e).__name__}); "
+                          f"reconnecting...", flush=True)
+                    counts["reconnects"] += 1
+                    await db.reconnect()
+                    if await _row_landed(db.conn, args.team_id, s["natural_key"]):
+                        counts["inserted"] += 1
+                    else:
+                        try:
+                            await _import_row(db.conn, s, imported_at)
+                            counts["inserted"] += 1
+                        except Exception as e2:  # noqa: BLE001
+                            counts["failed"] += 1
+                            failures.append({"natural_key": s["natural_key"],
+                                             "line": s["line"],
+                                             "error": f"retry: {type(e2).__name__}: {e2}"})
+                else:
+                    counts["failed"] += 1
+                    failures.append({"natural_key": s["natural_key"], "line": s["line"],
+                                     "error": f"{type(e).__name__}: {e}"})
+            if i % 100 == 0:
                 print(f"  {i}/{len(to_import)} imported "
-                      f"({counts['failed']} failed so far)")
+                      f"({counts['failed']} failed, "
+                      f"{counts['reconnects']} reconnects so far)", flush=True)
 
         # ---- §7.4 checks -----------------------------------------------------
-        db = await conn.fetchrow(
+        db_stats = await with_reconnect(db, lambda: db.conn.fetchrow(
             f"SELECT COUNT(*) AS n, COALESCE(SUM(overall_score), 0) AS score_sum, "
             f"COUNT(*) FILTER (WHERE call_connected_at IS NULL) AS null_clock "
             f"FROM qa.evaluations WHERE team_id = $1 AND {_NK_PATH_SQL} IS NOT NULL",
-            args.team_id)
-        section_count = await conn.fetchval(
+            args.team_id))
+        section_count = await with_reconnect(db, lambda: db.conn.fetchval(
             f"SELECT COUNT(*) FROM qa.evaluation_sections es "
             f"JOIN qa.evaluations e ON e.id = es.evaluation_id "
-            f"WHERE e.team_id = $1 AND e.{_NK_PATH_SQL} IS NOT NULL", args.team_id)
+            f"WHERE e.team_id = $1 AND e.{_NK_PATH_SQL} IS NOT NULL", args.team_id))
         expected_rows = counts["already_imported"] + counts["inserted"]
         if args.limit:
             # Partial smoke run: DB may hold rows outside the truncated
@@ -258,29 +353,29 @@ async def run(args) -> int:
         else:
             complete = counts["failed"] == 0 and counts["link_collisions"] == 0
             checks = {
-                "db_rows_equal_imported": db["n"] == expected_rows,
+                "db_rows_equal_imported": db_stats["n"] == expected_rows,
                 "db_sections_equal_rows_x_n":
                     section_count == expected_rows * len(staged_all[0]["sections"]),
-                "overall_sum_matches_staging": complete and float(db["score_sum"])
+                "overall_sum_matches_staging": complete and float(db_stats["score_sum"])
                     == round(sum(s["overall_score"] for s in importable), 1),
             }
     finally:
-        await conn.close()
+        await db.close()
 
     report = {
         "stage": "B1", "team_id": args.team_id, "counts": counts,
         "checks": checks, "failures": failures,
-        "db": {"rows": db["n"], "sections": section_count,
-               "overall_sum": float(db["score_sum"]),
-               "null_call_clock": db["null_clock"]},
+        "db": {"rows": db_stats["n"], "sections": section_count,
+               "overall_sum": float(db_stats["score_sum"]),
+               "null_call_clock": db_stats["null_clock"]},
     }
     report_path = Path(args.staging_dir) / f"report_{args.team_id}_b1.json"
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     print(f"[B1:{args.team_id}] inserted={counts['inserted']} "
           f"failed={counts['failed']} already_imported={counts['already_imported']}")
-    print(f"  db rows={db['n']} sections={section_count} "
-          f"null-clock (B2 queue)={db['null_clock']}")
+    print(f"  db rows={db_stats['n']} sections={section_count} "
+          f"null-clock (B2 queue)={db_stats['null_clock']}")
     for name, ok in checks.items():
         print(f"  check {name}: {'OK' if ok else 'DRIFTED'}")
     print(f"  report: {report_path}")
