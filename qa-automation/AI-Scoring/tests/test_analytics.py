@@ -236,7 +236,7 @@ def test_monthly_summary_month_boundary_buckets_strictly():
     assert out["current"]["mean"] == 95.0
 
 
-def test_monthly_summary_buckets_in_project_local_time():
+def test_monthly_summary_buckets_in_project_local_time(monkeypatch):
     """The PR-3 smoke-test regression: a call that displays as May 31
     8:33 PM in the project bucket TZ (3:33 AM Jun 1 UTC) must bucket
     into May, not June. The previous tz-naive bucketing put it in June
@@ -245,7 +245,16 @@ def test_monthly_summary_buckets_in_project_local_time():
     from datetime import datetime as _dt
     from zoneinfo import ZoneInfo
     import pandas as pd
+    from backend.services import team_stats as _ts
     from backend.services.team_stats import _BUCKET_TZ
+
+    # Pin "now" so the last/current labels are deterministic: with now in
+    # June 2026, "current" = 2026-06 and "last" = 2026-05. Without this
+    # the test only passed while the real clock sat within a month of the
+    # hardcoded May boundary (it went red once the calendar reached July).
+    monkeypatch.setattr(
+        _ts, "_now_in_bucket_tz",
+        lambda: _dt(2026, 6, 15, 12, 0, 0, tzinfo=_BUCKET_TZ))
 
     # Construct a timestamp that is May 31 in the bucket TZ but Jun 1 UTC.
     # 31 May 23:30 LA = 06 Jun 1 06:30 UTC (LA is UTC-7 in DST).
