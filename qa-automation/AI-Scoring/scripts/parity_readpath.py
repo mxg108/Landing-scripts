@@ -37,7 +37,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import math
 import sys
 from datetime import datetime, time, timedelta
 from pathlib import Path
@@ -53,54 +52,12 @@ if str(_AI_SCORING) not in sys.path:
 
 from backend.config.team_config import get_team_config  # noqa: E402
 from backend.services import team_stats as ts  # noqa: E402
+from backend.services.read_path_shadow import (  # noqa: E402
+    align, cell_diffs as _cell_diffs, norm_cell as _norm,
+)
 from backend.services.team_source import fetch_history_frame  # noqa: E402
 
 _ALL_TEAMS = ["member_support", "sales"]
-
-
-def _strip_accents(s):
-    import unicodedata
-    return "".join(c for c in unicodedata.normalize("NFD", s)
-                   if not unicodedata.combining(c))
-
-
-def _key(df):
-    """String key eval_id|agent|ordinal — agent accent-stripped (roster
-    spellings drift), ordinal disambiguates D2 re-eval pairs
-    deterministically by (timestamp, overall_score)."""
-    base = (df["eval_id"].astype(str) + "|"
-            + df["agent"].str.strip().str.lower().map(_strip_accents))
-    order = df.assign(_b=base).sort_values(["_b", "timestamp", "overall_score"])
-    ordinal = order.groupby("_b").cumcount()
-    return (base + "|" + ordinal.reindex(df.index).astype(str)).tolist()
-
-
-def _norm(v):
-    if isinstance(v, float) and math.isnan(v):
-        return None
-    if hasattr(v, "isoformat"):
-        return v.isoformat(timespec="seconds")
-    return v
-
-
-def _common_subsets(sheet_df, pg_df):
-    """Align on the eval_id|agent|ordinal key; return the membership
-    classification plus the two common-subset frames (clean RangeIndex,
-    identical row order — sorted by key)."""
-    sheet_df = sheet_df.assign(_k=_key(sheet_df)).set_index("_k")
-    pg_df = pg_df.assign(_k=_key(pg_df)).set_index("_k")
-    sheet_only = sorted(set(sheet_df.index) - set(pg_df.index))
-    db_only = sorted(set(pg_df.index) - set(sheet_df.index))
-    common = sorted(set(sheet_df.index) & set(pg_df.index))
-    membership = {
-        "sheet": len(sheet_df), "pg": len(pg_df), "common": len(common),
-        "sheet_only": len(sheet_only), "db_only": len(db_only),
-        "sheet_only_keys": [k.split("|") for k in sheet_only[:25]],
-        "db_only_sample": [k.split("|") for k in db_only[:5]],
-    }
-    sub_sheet = sheet_df.loc[common].reset_index(drop=True)
-    sub_pg = pg_df.loc[common].reset_index(drop=True)
-    return membership, sub_sheet, sub_pg
 
 
 # ---------------------------------------------------------------------------
@@ -108,15 +65,7 @@ def _common_subsets(sheet_df, pg_df):
 # ---------------------------------------------------------------------------
 
 def frame_parity(sub_sheet, sub_pg, config) -> dict:
-    cols = [c for c in sub_sheet.columns if c in sub_pg.columns]
-    cell_diffs = []
-    for i in range(len(sub_sheet)):
-        a, b = sub_sheet.iloc[i], sub_pg.iloc[i]
-        for c in cols:
-            va, vb = _norm(a[c]), _norm(b[c])
-            if va != vb:
-                cell_diffs.append({"row": i, "col": c, "sheet": va, "pg": vb})
-
+    cell_diff_count, cell_diff_sample = _cell_diffs(sub_sheet, sub_pg)
     stats = config.stats
     computations = {
         "monthly_summary": lambda d: ts.compute_monthly_summary(d),
@@ -135,7 +84,7 @@ def frame_parity(sub_sheet, sub_pg, config) -> dict:
         ja, jb = _safe(lambda: fn(sub_sheet)), _safe(lambda: fn(sub_pg))
         if ja != jb:
             compute_diffs[name] = {"sheet_len": len(ja), "pg_len": len(jb)}
-    return {"cell_diffs": cell_diffs[:50], "cell_diff_count": len(cell_diffs),
+    return {"cell_diffs": cell_diff_sample, "cell_diff_count": cell_diff_count,
             "compute_diffs": compute_diffs}
 
 
@@ -290,7 +239,7 @@ async def run_team(team_id: str) -> int:
               f"(sheet={len(sheet_df)} pg={len(pg_df)})")
         return 2
 
-    membership, sub_sheet, sub_pg = _common_subsets(sheet_df, pg_df)
+    membership, sub_sheet, sub_pg = align(sheet_df, pg_df)
     frame = frame_parity(sub_sheet, sub_pg, config)
     # Fixed reference time so both frames see the same days-cutoffs.
     endpoints = endpoint_parity(sub_sheet, sub_pg, config, datetime.now())
