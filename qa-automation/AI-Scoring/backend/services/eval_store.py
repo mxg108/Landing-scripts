@@ -661,6 +661,11 @@ async def stamp_and_finalize(
                 versions.rubric_version,
                 evaluator_email,
             )
+        # §9.2 / CutoverDesign 4c: one incremental stat point per finalize.
+        # Outside the transaction and non-fatal — derived data the replay
+        # script (scripts/backfill_stat_points.py) rebuilds deterministically.
+        from backend.services.stat_points import write_point_for_finalize
+        await write_point_for_finalize(conn, evaluation_id, config)
     logger.info(
         "eval_store: finalized eval %s under %s/%s — engine score %s",
         evaluation_id, versions.formula_version, versions.rubric_version,
