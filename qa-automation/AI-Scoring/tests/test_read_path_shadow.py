@@ -118,6 +118,43 @@ def test_key_ordinal_robust_to_clock_jitter():
     assert shadow.key_series(sheet)[0] == shadow.key_series(pg)[0]
 
 
+def test_key_ordinal_pairs_by_content_when_fully_tied():
+    """The prod-observed case the overall_score tiebreak missed: a D2 pair
+    tied on eval_id AND overall_score AND second-truncated timestamp, with
+    section values in opposite row order across sources (sub-second clock
+    jitter decided the old ordinal). Content ordering must pair (5,5) with
+    (5,5) — zero diffs."""
+    def rows(order):
+        return pd.DataFrame([
+            {"eval_id": "X", "agent": "A", "overall_score": 90.0,
+             "timestamp": datetime(2026, 1, 16, 20, 49, 40, us),
+             "matching_the_moment": v}
+            for us, v in order
+        ])
+    sheet = rows([(0, 5.0), (500000, 4.0)])
+    pg = rows([(600000, 4.0), (100000, 5.0)])   # opposite order, jittered µs
+    result = shadow.compare(sheet, pg)
+    assert result["membership"]["common"] == 2
+    assert result["cell_diff_count"] == 0
+
+
+def test_key_content_pairing_cannot_mask_real_divergence():
+    """Content ordering must NOT hide a genuine value difference inside a
+    same-key pair: sheet (5, 4) vs pg (5, 3) still shows exactly one diff."""
+    def rows(vals):
+        return pd.DataFrame([
+            {"eval_id": "X", "agent": "A", "overall_score": 90.0,
+             "timestamp": datetime(2026, 1, 16, 20, 49, 40),
+             "matching_the_moment": v}
+            for v in vals
+        ])
+    result = shadow.compare(rows([5.0, 4.0]), rows([3.0, 5.0]))
+    assert result["cell_diff_count"] == 1
+    d = result["cell_diff_sample"][0]
+    assert d["col"] == "matching_the_moment"
+    assert (d["sheet"], d["pg"]) == (4.0, 3.0)   # 5s paired; 4 vs 3 surfaces
+
+
 def test_log_shadow_never_raises_on_empty():
     # empty pg frame must not blow up the request path
     shadow.log_shadow("sales", _frame([("A", "Star Rep", 1, 90)]), pd.DataFrame())

@@ -36,21 +36,37 @@ def strip_accents(s: str) -> str:
                    if not unicodedata.combining(c))
 
 
+# Columns that legitimately differ between the two sources (see
+# classify_cell_diff): clocks were B2-repaired in the DB, roster fields go
+# stale in qa.agents, and agent spelling is accent-folded there. Everything
+# ELSE is expected byte-identical — those are the "stable content" columns.
+_CLOCK_COLS = {"timestamp", "eval_approved_at"}
+_ROSTER_COLS = {"is_active", "supervisor"}
+_JITTER_COLS = _CLOCK_COLS | _ROSTER_COLS | {"agent"}
+
+
 def key_series(df: pd.DataFrame) -> list[str]:
     """Row key eval_id|agent|ordinal — agent accent-stripped (roster
     spellings drift), ordinal disambiguates D2 re-eval pairs sharing an
     eval_id.
 
-    The ordinal sorts by ``overall_score`` FIRST, timestamp second: the
-    two sources' clocks differ by up to ~a second (B2 repaired the DB
-    clock from Dialpad), so a timestamp-first tiebreak would flip the
-    order of a same-eval_id pair and mis-pair their rows across sources
-    (observed: two adjacent MS evals whose section scores looked swapped).
-    overall_score is identical across sources for a given eval, so it
-    pairs the rows stably; timestamp only breaks the rare same-score tie."""
+    The ordinal orders same-key rows by their STABLE CONTENT (every shared
+    column except the known-jittery ones — clocks were B2-repaired in the
+    DB, roster/agent-spelling drift in qa.agents). Sorting by anything
+    jittery cross-pairs a D2 pair whose rows are otherwise tied: observed
+    twice on MS — first a pair tied on eval_id whose ±1s clock repair
+    flipped a timestamp tiebreak, then a pair ALSO tied on overall_score
+    and second-truncated timestamp, where sub-second jitter decided.
+
+    Pairing by content is sound, not self-fulfilling: within a same
+    (eval_id, agent) group every compute_* aggregates per-agent, so
+    intra-group order is analytically irrelevant — canonical ordering on
+    both sides pairs identical rows, and any REAL value difference still
+    has nowhere to hide (the multiset of rows differs)."""
     base = (df["eval_id"].astype(str) + "|"
             + df["agent"].str.strip().str.lower().map(strip_accents))
-    order = df.assign(_b=base).sort_values(["_b", "overall_score", "timestamp"])
+    stable = [c for c in sorted(df.columns) if c not in _JITTER_COLS]
+    order = df.assign(_b=base).sort_values(["_b", *stable])
     ordinal = order.groupby("_b").cumcount()
     return (base + "|" + ordinal.reindex(df.index).astype(str)).tolist()
 
@@ -97,12 +113,10 @@ def cell_diffs(sub_sheet: pd.DataFrame, sub_pg: pd.DataFrame) -> list[dict]:
     return diffs
 
 
-# Cell-diff classes for the read-path flip. The first three are KNOWN
-# source-of-truth differences between the sheet and qa.*, NOT row-source
-# bugs — so the sweep verdict (and the live-shadow alarm) key on 'other'.
-_CLOCK_COLS = {"timestamp", "eval_approved_at"}
-_ROSTER_COLS = {"is_active", "supervisor"}
-
+# Cell-diff classes for the read-path flip: clock / name_accent / roster
+# (the _JITTER_COLS above) are KNOWN source-of-truth differences between
+# the sheet and qa.*, NOT row-source bugs — so the sweep verdict (and the
+# live-shadow alarm) key on 'other'.
 
 def classify_cell_diff(d: dict) -> str:
     """Bucket one cell diff:
