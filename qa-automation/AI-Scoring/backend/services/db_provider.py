@@ -100,6 +100,44 @@ class PostgresProvider(DataProvider):
     async def get_all_history(self, days: int = 90) -> list[EvaluationRecord]:
         return await self._fetch_records(days=days)
 
+    async def get_by_eval_id(self, call_id: str) -> EvaluationRecord | None:
+        """Indexed single-eval lookup for /datapoints/{call_id} (W6).
+
+        Fast path: probe the Dialpad id columns — the entry-point id is the
+        link's trailing segment in the common case (idx_eval_entry_point_
+        call_id, migration 014); dialpad_call_id covers the rest
+        (uq_eval_team_call_id). Replaces the 365-day get_all_history load +
+        Python scan with a single indexed row hit.
+
+        Returns None on a miss OR when the resolved row's link-derived
+        eval_id disagrees with call_id, so the route falls back to the scan
+        (junk-link rows whose stored ids don't match the link) — the result
+        is never a different record than the scan would have returned.
+        """
+        if not call_id:
+            return None
+        await self._refresh_roster_if_stale()
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT {_EVAL_COLUMNS} FROM qa.evaluations "
+                "WHERE team_id = $1 AND state = 'finalized' "
+                "AND (dialpad_entry_point_call_id = $2 OR dialpad_call_id = $2) "
+                # Match get_all_history's ascending order so a (rare)
+                # duplicate call_id resolves to the same row the scan picks.
+                "ORDER BY COALESCE(call_connected_at, created_at) LIMIT 1",
+                self._team_id, call_id,
+            )
+            if row is None:
+                return None
+            sections = await conn.fetch(
+                "SELECT evaluation_id, section_id, numeric_score, binary_value, "
+                "confidence, reasoning "
+                "FROM qa.evaluation_sections WHERE evaluation_id = $1",
+                row["id"],
+            )
+        record = self._record_from_rows(row, sections)
+        return record if record.eval_id == call_id else None
+
     # ------------------------------------------------------------------
     async def _fetch_records(
         self, days: int, agent_name: str | None = None

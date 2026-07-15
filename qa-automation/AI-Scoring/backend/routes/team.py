@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, time, timedelta, timezone
 
+import pandas as pd
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from backend.config.team_config import get_team_config
 from backend.middleware.auth import team_id_from_path
+from backend.services.data_provider import _read_path_mode, get_provider
+from backend.services.read_path_shadow import log_shadow
+from backend.services.team_source import fetch_history_frame
 from backend.models.team_stats import (
     LongFormResponse,
     LongFormRow,
@@ -18,7 +23,6 @@ from backend.models.team_stats import (
     TeamEvalsResponse,
     TeamStatsResponse,
 )
-from backend.services.data_provider import get_provider
 from backend.services.team_stats import (
     _months_in_bucket_tz,
     compute_agent_roster,
@@ -34,7 +38,38 @@ from backend.services.team_stats import (
     load_and_clean,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/team", tags=["team"])
+
+
+async def _team_history_frame(team_id: str, config) -> pd.DataFrame:
+    """The load_and_clean-shaped analytics frame for the /team trio,
+    sourced per QA_READ_PATH (ReadPathFlip §5 F4):
+
+    - ``sheets``   → read Analyst_History via the SheetsProvider (today).
+    - ``shadow``   → serve the SHEET frame but also build the Postgres
+      frame and log the delta on live traffic (validation window).
+    - ``postgres`` → serve the Postgres row-source (team_source), which
+      already joins qa.agents for is_active/supervisor — no _ws access,
+      so it works when get_provider hands back a PostgresProvider.
+    """
+    mode = _read_path_mode()
+    if mode == "postgres":
+        return await fetch_history_frame(config)
+
+    provider = await get_provider(team_id)
+    sheet_df = load_and_clean(
+        provider._ws.get_all_values(), provider._get_mails_sheet(), config)
+    if mode == "shadow":
+        try:
+            pg_df = await fetch_history_frame(config)
+        except Exception:  # noqa: BLE001 — shadow must not break the response
+            logger.warning("read-path shadow[%s]: pg fetch failed",
+                           team_id, exc_info=True)
+        else:
+            log_shadow(team_id, sheet_df, pg_df)
+    return sheet_df
 
 
 # Coverage regime is hardcoded until Local AI scores 100% of calls
@@ -91,12 +126,8 @@ async def team_stats(
     """Return all team-level statistical computations in one response."""
     team_id = team_id_from_path(request)
     config = get_team_config(team_id)
-    provider = await get_provider(team_id)
 
-    raw_history = provider._ws.get_all_values()
-    raw_mails = provider._get_mails_sheet()
-
-    df = load_and_clean(raw_history, raw_mails, config)
+    df = await _team_history_frame(team_id, config)
     window = _resolve_window(date_from, date_to)
     filters = {
         "days": days,
@@ -191,12 +222,8 @@ async def team_month_evals(
     """
     team_id = team_id_from_path(request)
     config = get_team_config(team_id)
-    provider = await get_provider(team_id)
 
-    raw_history = provider._ws.get_all_values()
-    raw_mails = provider._get_mails_sheet()
-
-    df = load_and_clean(raw_history, raw_mails, config)
+    df = await _team_history_frame(team_id, config)
     filters = {"active_only": active_only, "supervisor": supervisor}
 
     if df.empty:
@@ -221,8 +248,6 @@ async def team_month_evals(
 
     # Sort newest first — analysts skim the top to find recent calls.
     df = df.sort_values("timestamp", ascending=False)
-
-    import pandas as pd
 
     def _to_utc(ts):
         """Ensure outgoing ISO timestamps carry an explicit UTC marker.
@@ -308,12 +333,8 @@ async def team_long_form(
     """
     team_id = team_id_from_path(request)
     config = get_team_config(team_id)
-    provider = await get_provider(team_id)
 
-    raw_history = provider._ws.get_all_values()
-    raw_mails = provider._get_mails_sheet()
-
-    df = load_and_clean(raw_history, raw_mails, config)
+    df = await _team_history_frame(team_id, config)
     window = _resolve_window(date_from, date_to)
     filters = {
         "days": days,
