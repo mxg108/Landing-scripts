@@ -146,7 +146,23 @@ need **no server work** — they ride on the rows above.
 
 Flag semantics: one env var (`QA_READ_PATH`, default `sheets`) — reads
 are stateless so a redeploy-free per-team column isn't warranted; flip
-and rollback are single Railway env changes.
+and rollback are single Railway env changes. **Three values** (refined in
+F4): `sheets` (today), `shadow` (serve the sheet but also build the
+Postgres frame and log the sheet↔pg delta on live traffic — the F4
+validation window), `postgres` (serve the row-source). `get_provider`
+treats `shadow` as `sheets` for Path-1 (the shadow window is a /team-trio
+concern); the promotion sequence is `sheets → shadow → postgres`, and
+rollback is any step leftward.
+
+**Implementation status (2026-07-14):** F2 ✅ (row-source + pytest +
+golden/endpoint parity harness), F3 ✅ (factory + lifecycle behind the
+flag), F4 ✅ (trio flag-aware + shadow, shared comparator in
+`services/read_path_shadow.py` used by both the harness and live shadow),
+F5 **partial** — W6 ✅ (indexed datapoint lookup, migration 014); the
+terminal cleanup (delete the trio's `_ws` sheet-read, drop gspread,
+W2/W3 as SQL views) is **deferred to post-cutover** — doing it now breaks
+the shadow window and the env-flip rollback (§6 sheet-retention). Prod
+flag stays `sheets` until the shadow window is validated on live traffic.
 
 ## 6. Explicitly out of scope
 
