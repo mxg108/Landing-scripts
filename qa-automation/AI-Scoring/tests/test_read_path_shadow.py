@@ -97,6 +97,27 @@ def test_accent_folded_key_aligns_then_surfaces_name_drift():
     assert result["classified"]["other"] == 0
 
 
+def test_key_ordinal_robust_to_clock_jitter():
+    """A same-eval_id D2 pair must align by overall_score, not timestamp:
+    the two sources' clocks differ by ~a second (B2 repair), so a
+    timestamp-first ordinal would flip the pair's order and cross-pair
+    their rows — the observed MS 'swapped section scores' artifact."""
+    sheet = pd.DataFrame([
+        {"eval_id": "X", "agent": "A", "overall_score": 95.0,
+         "timestamp": datetime(2026, 1, 1, 0, 0, 0)},
+        {"eval_id": "X", "agent": "A", "overall_score": 80.0,
+         "timestamp": datetime(2026, 1, 1, 0, 0, 1)},
+    ])
+    pg = pd.DataFrame([   # same evals, clocks repaired in opposite directions
+        {"eval_id": "X", "agent": "A", "overall_score": 95.0,
+         "timestamp": datetime(2026, 1, 1, 0, 0, 2)},
+        {"eval_id": "X", "agent": "A", "overall_score": 80.0,
+         "timestamp": datetime(2026, 1, 1, 0, 0, 0)},
+    ])
+    # both 95-overall rows (row 0 in each) must land on the same key
+    assert shadow.key_series(sheet)[0] == shadow.key_series(pg)[0]
+
+
 def test_log_shadow_never_raises_on_empty():
     # empty pg frame must not blow up the request path
     shadow.log_shadow("sales", _frame([("A", "Star Rep", 1, 90)]), pd.DataFrame())

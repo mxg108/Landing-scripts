@@ -38,11 +38,19 @@ def strip_accents(s: str) -> str:
 
 def key_series(df: pd.DataFrame) -> list[str]:
     """Row key eval_id|agent|ordinal — agent accent-stripped (roster
-    spellings drift), ordinal disambiguates D2 re-eval pairs
-    deterministically by (timestamp, overall_score)."""
+    spellings drift), ordinal disambiguates D2 re-eval pairs sharing an
+    eval_id.
+
+    The ordinal sorts by ``overall_score`` FIRST, timestamp second: the
+    two sources' clocks differ by up to ~a second (B2 repaired the DB
+    clock from Dialpad), so a timestamp-first tiebreak would flip the
+    order of a same-eval_id pair and mis-pair their rows across sources
+    (observed: two adjacent MS evals whose section scores looked swapped).
+    overall_score is identical across sources for a given eval, so it
+    pairs the rows stably; timestamp only breaks the rare same-score tie."""
     base = (df["eval_id"].astype(str) + "|"
             + df["agent"].str.strip().str.lower().map(strip_accents))
-    order = df.assign(_b=base).sort_values(["_b", "timestamp", "overall_score"])
+    order = df.assign(_b=base).sort_values(["_b", "overall_score", "timestamp"])
     ordinal = order.groupby("_b").cumcount()
     return (base + "|" + ordinal.reindex(df.index).astype(str)).tolist()
 

@@ -41,6 +41,7 @@ import sys
 from datetime import datetime, time, timedelta
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -101,25 +102,79 @@ def frame_parity(sub_sheet, sub_pg_recon, config, diffs) -> dict:
         ja, jb = _safe(lambda: fn(sub_sheet)), _safe(lambda: fn(sub_pg_recon))
         if ja != jb:
             compute_diffs[name] = {"sheet_len": len(ja), "pg_len": len(jb)}
-    return {
+
+    result = {
         "cell_diff_count": len(diffs),
         "classified": {k: len(v) for k, v in buckets.items()},
         "classified_samples": {k: v[:5] for k, v in buckets.items() if v},
         "unexplained": buckets["other"][:50],
+        # Column-set mismatch is invisible to cell diffs (they compare only
+        # shared columns) but drives compute_long_form (it emits per-column).
+        "col_only_sheet": sorted(set(sub_sheet.columns) - set(sub_pg_recon.columns)),
+        "col_only_pg": sorted(set(sub_pg_recon.columns) - set(sub_sheet.columns)),
         "compute_diffs": compute_diffs,
     }
+    if "long_form" in compute_diffs:
+        result["long_form_detail"] = _long_form_detail(sub_sheet, sub_pg_recon, config)
+    return result
+
+
+def _long_form_detail(sub_sheet, sub_pg, config) -> dict:
+    """Pinpoint the long_form divergence: row counts, the first differing
+    record as RAW json (so a number-vs-string serialization shows), and
+    the score-column dtypes per source (the dtype smoking gun)."""
+    ra = ts.compute_long_form(sub_sheet, config).to_dict("records")
+    rb = ts.compute_long_form(sub_pg, config).to_dict("records")
+    sec_ids = list(config.numeric_history_ids)
+    detail = {
+        "sheet_rows": len(ra), "pg_rows": len(rb),
+        "sheet_dtypes": {c: str(sub_sheet[c].dtype) for c in sec_ids if c in sub_sheet},
+        "pg_dtypes": {c: str(sub_pg[c].dtype) for c in sec_ids if c in sub_pg},
+    }
+    for i in range(min(len(ra), len(rb))):
+        ja = json.dumps(ra[i], default=_json_default, sort_keys=True)
+        jb = json.dumps(rb[i], default=_json_default, sort_keys=True)
+        if ja != jb:
+            detail["first_diff_index"] = i
+            detail["sheet_rec_json"] = ja
+            detail["pg_rec_json"] = jb
+            break
+    return detail
 
 
 # ---------------------------------------------------------------------------
 # B. Endpoint parity — mirror routes/team.py filter pipelines exactly
 # ---------------------------------------------------------------------------
 
+def _json_default(o):
+    """Serialization normalizer for the compute-parity comparison, matching
+    the cell comparison's granularity (read_path_shadow.norm_cell):
+
+    - datetimes/Timestamps → second-ISO. compute_long_form (the only
+      compute that emits RAW frame timestamps, unaggregated) otherwise
+      serializes the DB's microsecond value (e.g. ...:21.479) against the
+      sheet's strftime-truncated ...:21 → a spurious diff on every row,
+      even when cell_diffs (already second-granular) sees none. This is
+      the Sales long_form divergence: 0 cell diffs, yet long_form differed.
+    - numpy scalars → Python equivalents so np.float64(4.0) and float(4.0)
+      compare EQUAL rather than "4.0" (str) vs 4.0 (number).
+    """
+    if hasattr(o, "isoformat"):
+        try:
+            return o.isoformat(timespec="seconds")
+        except TypeError:  # a date (no timespec) — still stable
+            return o.isoformat()
+    if isinstance(o, np.generic):
+        return o.item()
+    return str(o)
+
+
 def _safe(thunk) -> str:
     """JSON-serialize a computation, capturing exceptions as a stable
     signature so an identical raise on both sides reads as parity, not a
     harness crash."""
     try:
-        return json.dumps(thunk(), default=str, sort_keys=True)
+        return json.dumps(thunk(), default=_json_default, sort_keys=True)
     except Exception as e:  # noqa: BLE001 — signature comparison, not handling
         return f"__exc__:{type(e).__name__}:{e}"
 
@@ -301,6 +356,21 @@ async def run_team(team_id: str) -> int:
               f"{' …' if len(roster_agents) > 8 else ''}")
     if cls["other"]:
         print(f"  UNEXPLAINED diffs (investigate): {frame['unexplained'][:5]}")
+    if frame["col_only_sheet"] or frame["col_only_pg"]:
+        print(f"  COLUMN MISMATCH — sheet-only={frame['col_only_sheet']} "
+              f"pg-only={frame['col_only_pg']}")
+    if "long_form_detail" in frame:
+        d = frame["long_form_detail"]
+        print(f"  long_form: sheet_rows={d['sheet_rows']} pg_rows={d['pg_rows']} "
+              f"first_diff@{d.get('first_diff_index')}")
+        if d["sheet_dtypes"] != d["pg_dtypes"]:
+            mism = {c: (d["sheet_dtypes"].get(c), d["pg_dtypes"].get(c))
+                    for c in d["sheet_dtypes"]
+                    if d["sheet_dtypes"].get(c) != d["pg_dtypes"].get(c)}
+            print(f"    DTYPE MISMATCH (sheet,pg): {mism}")
+        if "sheet_rec_json" in d:
+            print(f"    sheet_rec={d['sheet_rec_json']}")
+            print(f"    pg_rec   ={d['pg_rec_json']}")
     print(f"  report: {report_path}")
 
     # Green = every divergence is a KNOWN class (clock/name_accent/roster)
