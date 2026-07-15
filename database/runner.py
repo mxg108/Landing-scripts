@@ -398,10 +398,37 @@ def _action_label(args: argparse.Namespace) -> str:
     raise ValueError(f"unexpected mutating command: {args.command}")
 
 
-async def main_async(args: argparse.Namespace) -> int:
+def _resolve_dsn() -> str | None:
+    """DATABASE_URL from the environment, falling back to the repo's
+    canonical .env (qa-automation/AI-Scoring/.env — the one every other
+    script load_dotenv()s). The runner stays shell-driven first: an
+    exported DATABASE_URL always wins; the fallback only fills the gap
+    when invoked from a fresh shell. python-dotenv also parses values
+    that a plain `source` mangles (e.g. unquoted values with spaces)."""
     dsn = os.environ.get("DATABASE_URL")
+    if dsn:
+        return dsn
+    env_path = REPO_ROOT / "qa-automation" / "AI-Scoring" / ".env"
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return None
+    if env_path.exists():
+        load_dotenv(env_path)
+        dsn = os.environ.get("DATABASE_URL")
+        if dsn:
+            print(f"(DATABASE_URL loaded from {env_path})", file=sys.stderr)
+    return dsn
+
+
+async def main_async(args: argparse.Namespace) -> int:
+    dsn = _resolve_dsn()
     if not dsn:
-        print("ERROR: DATABASE_URL not set in environment.", file=sys.stderr)
+        print(
+            "ERROR: DATABASE_URL not set in environment "
+            "(and not found in qa-automation/AI-Scoring/.env).",
+            file=sys.stderr,
+        )
         return 1
 
     # Mutating commands: show what we're about to do and prompt for y/N.
