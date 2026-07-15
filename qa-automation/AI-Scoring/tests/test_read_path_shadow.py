@@ -57,6 +57,26 @@ def test_cell_diff_detected_on_common_row():
     result = shadow.compare(sheet, pg)
     assert result["cell_diff_count"] == 1
     assert result["cell_diff_sample"][0]["col"] == "overall_score"
+    # a score divergence is genuinely unexplained → 'other'
+    assert result["classified"]["other"] == 1
+
+
+def test_classify_clock_and_roster_deltas():
+    """clock (±seconds on a timestamp col) and roster (is_active/supervisor)
+    are KNOWN source-of-truth deltas, not 'other' failures."""
+    sheet = pd.DataFrame([{
+        "eval_id": "A", "agent": "Star Rep",
+        "timestamp": datetime(2026, 4, 1, 9, 0, 0), "overall_score": 90.0,
+        "is_active": True, "supervisor": "Max",
+    }])
+    pg = sheet.copy()
+    pg.loc[0, "timestamp"] = datetime(2026, 4, 1, 9, 0, 1)   # B2 clock repair
+    pg.loc[0, "is_active"] = False                            # stale roster
+    pg.loc[0, "supervisor"] = ""
+    cls = shadow.compare(sheet, pg)["classified"]
+    assert cls["clock"] == 1
+    assert cls["roster"] == 2
+    assert cls["other"] == 0
 
 
 def test_accent_folded_key_aligns_then_surfaces_name_drift():
@@ -72,6 +92,9 @@ def test_accent_folded_key_aligns_then_surfaces_name_drift():
     assert result["membership"]["sheet_only"] == 0
     assert result["cell_diff_count"] == 1               # drift surfaced
     assert result["cell_diff_sample"][0]["col"] == "agent"
+    # classified as name_accent (canonicalization), NOT an unexplained fail
+    assert result["classified"]["name_accent"] == 1
+    assert result["classified"]["other"] == 0
 
 
 def test_log_shadow_never_raises_on_empty():

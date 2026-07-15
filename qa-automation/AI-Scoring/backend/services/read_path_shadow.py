@@ -75,9 +75,9 @@ def align(sheet_df: pd.DataFrame, pg_df: pd.DataFrame):
     return membership, s.loc[common].reset_index(drop=True), p.loc[common].reset_index(drop=True)
 
 
-def cell_diffs(sub_sheet: pd.DataFrame, sub_pg: pd.DataFrame, limit: int = 50):
-    """Column-by-column diff of the aligned common rows (shared columns
-    only). Returns the full count plus up to *limit* samples."""
+def cell_diffs(sub_sheet: pd.DataFrame, sub_pg: pd.DataFrame) -> list[dict]:
+    """Full column-by-column diff of the aligned common rows (shared
+    columns only). Returns every differing cell — callers slice/classify."""
     cols = [c for c in sub_sheet.columns if c in sub_pg.columns]
     diffs = []
     for i in range(len(sub_sheet)):
@@ -86,15 +86,58 @@ def cell_diffs(sub_sheet: pd.DataFrame, sub_pg: pd.DataFrame, limit: int = 50):
             va, vb = norm_cell(a[c]), norm_cell(b[c])
             if va != vb:
                 diffs.append({"row": i, "col": c, "sheet": va, "pg": vb})
-    return len(diffs), diffs[:limit]
+    return diffs
+
+
+# Cell-diff classes for the read-path flip. The first three are KNOWN
+# source-of-truth differences between the sheet and qa.*, NOT row-source
+# bugs — so the sweep verdict (and the live-shadow alarm) key on 'other'.
+_CLOCK_COLS = {"timestamp", "eval_approved_at"}
+_ROSTER_COLS = {"is_active", "supervisor"}
+
+
+def classify_cell_diff(d: dict) -> str:
+    """Bucket one cell diff:
+
+    - ``clock``       timestamp column; B2 repaired the DB clock from
+      Dialpad while the sheet kept the stale value — DB is authoritative.
+    - ``name_accent`` the agent name is equal once accents are folded;
+      qa.agents stores the canonical (accent-stripped) spelling.
+    - ``roster``      is_active / supervisor; qa.agents roster is stale vs
+      the Mails tab — the one ACTIONABLE class (refresh qa.agents before
+      flipping so the dashboard's active/supervisor columns stay correct).
+    - ``other``       anything else: a genuine row-source divergence that
+      must be zero for parity.
+    """
+    col = d["col"]
+    if col in _CLOCK_COLS:
+        return "clock"
+    if col == "agent":
+        if (strip_accents(str(d["sheet"])).strip().lower()
+                == strip_accents(str(d["pg"])).strip().lower()):
+            return "name_accent"
+        return "other"
+    if col in _ROSTER_COLS:
+        return "roster"
+    return "other"
+
+
+def classify_diffs(diffs: list[dict]) -> dict:
+    """Group diffs by class → {class: [diffs]}."""
+    buckets: dict[str, list] = {"clock": [], "name_accent": [], "roster": [], "other": []}
+    for d in diffs:
+        buckets[classify_cell_diff(d)].append(d)
+    return buckets
 
 
 def compare(sheet_df: pd.DataFrame, pg_df: pd.DataFrame) -> dict:
-    """Membership + common-row cell-diff summary (no compute_*)."""
+    """Membership + classified common-row cell-diff summary (no compute_*)."""
     membership, sub_sheet, sub_pg = align(sheet_df, pg_df)
-    count, samples = cell_diffs(sub_sheet, sub_pg)
-    return {"membership": membership, "cell_diff_count": count,
-            "cell_diff_sample": samples}
+    diffs = cell_diffs(sub_sheet, sub_pg)
+    buckets = classify_diffs(diffs)
+    return {"membership": membership, "cell_diff_count": len(diffs),
+            "classified": {k: len(v) for k, v in buckets.items()},
+            "cell_diff_sample": diffs[:50]}
 
 
 def log_shadow(team_id: str, sheet_df: pd.DataFrame, pg_df: pd.DataFrame) -> None:
@@ -110,12 +153,19 @@ def log_shadow(team_id: str, sheet_df: pd.DataFrame, pg_df: pd.DataFrame) -> Non
             return
         summary = compare(sheet_df, pg_df)
         m = summary["membership"]
-        level = logging.WARNING if summary["cell_diff_count"] else logging.INFO
+        cls = summary["classified"]
+        # Only genuinely-unexplained ('other') diffs are an alarm; clock /
+        # name_accent / roster are known source-of-truth deltas.
+        others = [d for d in summary["cell_diff_sample"]
+                  if classify_cell_diff(d) == "other"]
+        level = logging.WARNING if cls["other"] else logging.INFO
         logger.log(
             level,
-            "read-path shadow[%s]: common=%d sheet_only=%d db_only=%d cell_diffs=%d %s",
+            "read-path shadow[%s]: common=%d sheet_only=%d db_only=%d "
+            "cell_diffs=%d (other=%d clock=%d name_accent=%d roster=%d) %s",
             team_id, m["common"], m["sheet_only"], m["db_only"],
-            summary["cell_diff_count"], summary["cell_diff_sample"][:3] or "",
+            summary["cell_diff_count"], cls["other"], cls["clock"],
+            cls["name_accent"], cls["roster"], others[:3] or "",
         )
     except Exception:  # noqa: BLE001 — shadow must never break the request
         logger.warning("read-path shadow[%s] failed", team_id, exc_info=True)

@@ -53,7 +53,8 @@ if str(_AI_SCORING) not in sys.path:
 from backend.config.team_config import get_team_config  # noqa: E402
 from backend.services import team_stats as ts  # noqa: E402
 from backend.services.read_path_shadow import (  # noqa: E402
-    align, cell_diffs as _cell_diffs, norm_cell as _norm,
+    align, cell_diffs as _cell_diffs, classify_cell_diff, classify_diffs,
+    norm_cell as _norm,
 )
 from backend.services.team_source import fetch_history_frame  # noqa: E402
 
@@ -64,8 +65,24 @@ _ALL_TEAMS = ["member_support", "sales"]
 # A. Frame parity — cell diffs + compute_* on the common subset
 # ---------------------------------------------------------------------------
 
-def frame_parity(sub_sheet, sub_pg, config) -> dict:
-    cell_diff_count, cell_diff_sample = _cell_diffs(sub_sheet, sub_pg)
+def reconcile_benign(sub_sheet, sub_pg, diffs):
+    """Return a copy of sub_pg with every KNOWN source-of-truth cell
+    (clock / name_accent / roster) overwritten by the sheet value, leaving
+    'other' cells intact. Running compute_* / endpoints on this isolates
+    genuine row-source divergence from the classified deltas — so the
+    verdict measures the flip's correctness, not qa.*'s clock/roster
+    currency (those are reported separately as data actions)."""
+    out = sub_pg.copy()
+    for d in diffs:
+        if classify_cell_diff(d) != "other":
+            out.at[d["row"], d["col"]] = sub_sheet.at[d["row"], d["col"]]
+    return out
+
+
+def frame_parity(sub_sheet, sub_pg_recon, config, diffs) -> dict:
+    """compute_* parity on the reconciled frames + the cell-diff
+    classification. `diffs` are the RAW (pre-reconcile) cell diffs."""
+    buckets = classify_diffs(diffs)
     stats = config.stats
     computations = {
         "monthly_summary": lambda d: ts.compute_monthly_summary(d),
@@ -81,11 +98,16 @@ def frame_parity(sub_sheet, sub_pg, config) -> dict:
     }
     compute_diffs = {}
     for name, fn in computations.items():
-        ja, jb = _safe(lambda: fn(sub_sheet)), _safe(lambda: fn(sub_pg))
+        ja, jb = _safe(lambda: fn(sub_sheet)), _safe(lambda: fn(sub_pg_recon))
         if ja != jb:
             compute_diffs[name] = {"sheet_len": len(ja), "pg_len": len(jb)}
-    return {"cell_diffs": cell_diff_sample, "cell_diff_count": cell_diff_count,
-            "compute_diffs": compute_diffs}
+    return {
+        "cell_diff_count": len(diffs),
+        "classified": {k: len(v) for k, v in buckets.items()},
+        "classified_samples": {k: v[:5] for k, v in buckets.items() if v},
+        "unexplained": buckets["other"][:50],
+        "compute_diffs": compute_diffs,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -240,26 +262,52 @@ async def run_team(team_id: str) -> int:
         return 2
 
     membership, sub_sheet, sub_pg = align(sheet_df, pg_df)
-    frame = frame_parity(sub_sheet, sub_pg, config)
+    diffs = _cell_diffs(sub_sheet, sub_pg)
+    # Reconcile the KNOWN source-of-truth deltas so compute_* + endpoint
+    # parity measure the FLIP's correctness, not qa.*'s clock/roster
+    # currency (reported separately below as data actions).
+    sub_pg_recon = reconcile_benign(sub_sheet, sub_pg, diffs)
+    frame = frame_parity(sub_sheet, sub_pg_recon, config, diffs)
     # Fixed reference time so both frames see the same days-cutoffs.
-    endpoints = endpoint_parity(sub_sheet, sub_pg, config, datetime.now())
+    endpoints = endpoint_parity(sub_sheet, sub_pg_recon, config, datetime.now())
 
-    report = {"membership": membership, "frame": frame, "endpoints": endpoints}
+    # Agents whose roster cells (is_active/supervisor) are stale in qa.* —
+    # the actionable list: import_agents.py --team <id> refreshes them.
+    roster_agents = sorted({
+        str(sub_sheet.at[d["row"], "agent"]) for d in diffs
+        if classify_cell_diff(d) == "roster"
+    })
+    cls = frame["classified"]
+
+    report = {"membership": membership, "frame": frame, "endpoints": endpoints,
+              "roster_stale_agents": roster_agents}
     report_path = _STAGING_DIR / f"report_{team_id}_parity.json"
     report_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
 
     m = membership
     print(f"[parity:{team_id}] sheet={m['sheet']} pg={m['pg']} common={m['common']} "
           f"sheet_only={m['sheet_only']} db_only={m['db_only']}")
-    print(f"  A/frame:    cell_diffs={frame['cell_diff_count']} "
-          f"compute_diffs={list(frame['compute_diffs']) or 'NONE'}")
-    print(f"  B/endpoint: {endpoints['combos_run']} combos, "
+    print(f"  cell diffs: {frame['cell_diff_count']} → "
+          f"clock={cls['clock']} name_accent={cls['name_accent']} "
+          f"roster={cls['roster']} | OTHER (unexplained)={cls['other']}")
+    print(f"  A/frame (reconciled):    compute_diffs="
+          f"{list(frame['compute_diffs']) or 'NONE'}")
+    print(f"  B/endpoint (reconciled): {endpoints['combos_run']} combos, "
           f"{endpoints['failure_count']} failed "
           f"{[f['combo'] for f in endpoints['failures'][:6]] or ''}")
+    if roster_agents:
+        print(f"  ACTION — refresh qa.agents ({len(roster_agents)} stale): "
+              f"import_agents.py --team {team_id}  ⟶  {roster_agents[:8]}"
+              f"{' …' if len(roster_agents) > 8 else ''}")
+    if cls["other"]:
+        print(f"  UNEXPLAINED diffs (investigate): {frame['unexplained'][:5]}")
     print(f"  report: {report_path}")
 
-    ok = (not frame["cell_diff_count"] and not frame["compute_diffs"]
+    # Green = every divergence is a KNOWN class (clock/name_accent/roster)
+    # and the reconciled compute_* + endpoints agree exactly.
+    ok = (not cls["other"] and not frame["compute_diffs"]
           and not endpoints["failure_count"])
+    print(f"  verdict: {'GREEN — row-source correct' if ok else 'RED — unexplained divergence'}")
     return 0 if ok else 2
 
 
