@@ -53,6 +53,13 @@ class DataProvider(ABC):
     def _get_mails_sheet(self) -> list[list[str]]:
         ...
 
+    async def get_by_eval_id(self, call_id: str) -> EvaluationRecord | None:
+        """Fast single-eval lookup for /datapoints/{call_id} (ReadPathFlip
+        §3 W6). Default: unsupported — return None and let the caller fall
+        back to scanning get_all_history. PostgresProvider overrides this
+        with an indexed query; SheetsProvider has no index to exploit."""
+        return None
+
 
 # Per-team provider cache (keyed by team_id) + the read-path mode each
 # cached instance was built for, so a runtime flag flip rebuilds cleanly.

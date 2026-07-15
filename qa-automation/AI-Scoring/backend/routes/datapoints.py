@@ -16,8 +16,16 @@ async def get_datapoint(request: Request, call_id: str):
     """Return a single evaluation record by call_id (extracted from Dialpad link)."""
     team_id = team_id_from_path(request)
     provider = await get_provider(team_id)
-    all_records = await provider.get_all_history(days=365)
 
+    # W6 fast path: indexed single-eval lookup on the Postgres read path.
+    # Returns None on the sheets path (no index) or a junk-link miss, and
+    # we fall back to the 365-day scan below — identical result, and the
+    # scan still produces the diagnostic near-matches on a 404.
+    fast = await provider.get_by_eval_id(call_id)
+    if fast is not None:
+        return fast
+
+    all_records = await provider.get_all_history(days=365)
     for rec in all_records:
         if rec.eval_id == call_id:
             return rec
