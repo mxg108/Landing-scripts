@@ -41,6 +41,7 @@ from tests.conftest import make_history_sheet, make_mails_sheet
 def _eval_row(**over) -> dict:
     row = {
         "id": 1,
+        "agent_id": 1,
         "agent_name_raw": "Star Rep",
         "agent_display": "Star Rep",
         "evaluator_email": "eval@landing.com",
@@ -138,7 +139,8 @@ def test_frame_schema_matches_load_and_clean(config):
 
 def test_departed_agent_degrades(sales):
     """agent_id NULL (LEFT JOIN miss) → inactive, blank supervisor, raw name."""
-    ev = _eval_row(agent_display=None, agent_name_raw="Departed Person",
+    ev = _eval_row(agent_id=None, agent_display=None,
+                   agent_name_raw="Departed Person",
                    is_active=False, supervisor="")
     df = frame_from_rows(sales, [ev], [], _identity_alias(sales))
     assert len(df) == 1
@@ -146,6 +148,64 @@ def test_departed_agent_degrades(sales):
     assert r["agent"] == "Departed Person"
     assert bool(r["is_active"]) is False
     assert r["supervisor"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Read-time identity fallback (ReadPathFlip §4.4 — the 2026-07-15 roster
+# undercount: rows finalized while qa.agents was stale carry agent_id NULL
+# forever; the CURRENT roster must resolve them at read time, like the
+# sheet path always did against the live Mails tab)
+# ---------------------------------------------------------------------------
+
+def _roster_row(name="Alexis López", canonical="", active=True, sup="max@x.com"):
+    return {"name": name, "canonical_name": canonical,
+            "active": active, "supervisor_email": sup}
+
+
+def test_orphaned_row_resolves_via_current_roster(sales):
+    ev = _eval_row(agent_id=None, agent_display=None,
+                   agent_name_raw="Alexis López", is_active=False, supervisor="")
+    df = frame_from_rows(sales, [ev], [], _identity_alias(sales),
+                         agent_rows=[_roster_row()])
+    r = df.iloc[0]
+    assert r["agent"] == "Alexis López"
+    assert bool(r["is_active"]) is True          # active at READ time
+    assert r["supervisor"] == "max@x.com"
+
+
+def test_orphaned_row_matches_accent_stripped(sales):
+    """Dialpad drift: raw name lost the accents; the roster still claims it."""
+    ev = _eval_row(agent_id=None, agent_display=None,
+                   agent_name_raw="Alexis Lopez", is_active=False, supervisor="")
+    df = frame_from_rows(sales, [ev], [], _identity_alias(sales),
+                         agent_rows=[_roster_row(name="Alexis López")])
+    r = df.iloc[0]
+    assert r["agent"] == "Alexis López"          # canonical spelling wins
+    assert bool(r["is_active"]) is True
+
+
+def test_orphaned_row_ignores_inactive_roster_entry(sales):
+    """An INACTIVE qa.agents row is not in the Mails tab — the fallback must
+    degrade exactly like no match (raw name, inactive), not resurrect them."""
+    ev = _eval_row(agent_id=None, agent_display=None,
+                   agent_name_raw="Gone Person", is_active=False, supervisor="")
+    df = frame_from_rows(sales, [ev], [], _identity_alias(sales),
+                         agent_rows=[_roster_row(name="Gone Person", active=False)])
+    r = df.iloc[0]
+    assert r["agent"] == "Gone Person"
+    assert bool(r["is_active"]) is False
+    assert r["supervisor"] == ""
+
+
+def test_joined_rows_ignore_roster_fallback(sales):
+    """Rows with agent_id keep their SQL-joined identity — the fallback is
+    only for orphans (a conflicting roster row must not override the join)."""
+    ev = _eval_row(agent_id=7, agent_display="Star Rep",
+                   is_active=True, supervisor="joined@x.com")
+    df = frame_from_rows(sales, [ev], [], _identity_alias(sales),
+                         agent_rows=[_roster_row(name="Star Rep", sup="other@x.com")])
+    r = df.iloc[0]
+    assert r["supervisor"] == "joined@x.com"
 
 
 def test_excluded_test_agent_dropped(sales):
