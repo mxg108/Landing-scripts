@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from backend.services.data_normalization import strip_accents
 from backend.services.eval_store import get_pool
 
 if TYPE_CHECKING:
@@ -73,12 +74,49 @@ async def _section_alias_map(conn, config: "TeamConfig") -> dict[str, str]:
     return alias
 
 
+def _roster_maps(agent_rows: list) -> tuple[dict, dict, set]:
+    """Read-time identity maps from ACTIVE qa.agents rows, mirroring
+    load_and_clean's Mails canonical_map exactly (ReadPathFlip §4.4):
+    raw-name (verbatim + accent-stripped, lowered) → canonical display;
+    supervisor and active membership keyed by canonical-lower. Inactive
+    qa.agents rows are excluded — the Mails tab only lists active agents,
+    so an inactive match degrades identically to no match."""
+    canonical_map: dict[str, str] = {}
+    supervisor_map: dict[str, str] = {}
+    active_set: set[str] = set()
+    for a in agent_rows:
+        if not a["active"]:
+            continue
+        name = (a["name"] or "").strip()
+        if not name:
+            continue
+        canonical = (a["canonical_name"] or "").strip() or name
+        canonical_map[name.lower()] = canonical
+        canonical_map[strip_accents(name).lower()] = canonical
+        canonical_map[canonical.lower()] = canonical
+        canonical_map[strip_accents(canonical).lower()] = canonical
+        supervisor_map[canonical.lower()] = a["supervisor_email"] or ""
+        active_set.add(canonical.lower())
+    return canonical_map, supervisor_map, active_set
+
+
 def frame_from_rows(config: "TeamConfig", eval_rows: list, section_rows: list,
-                    alias_map: dict[str, str]) -> pd.DataFrame:
-    """Pure assembly: DB rows → the load_and_clean schema."""
+                    alias_map: dict[str, str],
+                    agent_rows: list = ()) -> pd.DataFrame:
+    """Pure assembly: DB rows → the load_and_clean schema.
+
+    Identity is two-tier: rows carry the finalize-time ``agent_id`` join
+    (display/is_active/supervisor pre-resolved in SQL), and rows the stamp
+    missed (``agent_id`` NULL — e.g. finalized while the agent's qa.agents
+    row was stale; 26 such rows caused the 2026-07-15 roster undercount)
+    fall back to READ-time name matching against the CURRENT roster, the
+    way the sheet path always resolved against the live Mails tab. Rows
+    matching nothing degrade as before: inactive, blank supervisor, raw
+    name (true departed agents — §4.3)."""
     numeric_ids = set(config.numeric_history_ids)
     yn_ids = set(config.yn_history_ids)
     excluded = {a.strip().lower() for a in config.excluded_test_agents}
+    canonical_map, supervisor_map, active_set = _roster_maps(list(agent_rows))
 
     # section values per evaluation, keyed by resolved history_id
     by_eval: dict[int, dict[str, object]] = {}
@@ -95,6 +133,16 @@ def frame_from_rows(config: "TeamConfig", eval_rows: list, section_rows: list,
     records = []
     for ev in eval_rows:
         agent = (ev["agent_display"] or ev["agent_name_raw"] or "").strip()
+        is_active = bool(ev["is_active"])
+        supervisor = ev["supervisor"] or ""
+        if ev["agent_id"] is None and agent:
+            # read-time fallback for identity-orphaned rows
+            canonical = (canonical_map.get(agent.lower())
+                         or canonical_map.get(strip_accents(agent).lower()))
+            if canonical is not None:
+                agent = canonical
+                is_active = canonical.lower() in active_set
+                supervisor = supervisor_map.get(canonical.lower(), "")
         if not agent or agent.lower() in excluded:
             continue
         ts = ev["ts"]
@@ -113,8 +161,8 @@ def frame_from_rows(config: "TeamConfig", eval_rows: list, section_rows: list,
                                  if approved is not None else pd.NaT),
             "overall_score": float(ev["overall_score"]),
             "manager_email": (ev["evaluator_email"] or "").lower(),
-            "is_active": bool(ev["is_active"]),
-            "supervisor": ev["supervisor"] or "",
+            "is_active": is_active,
+            "supervisor": supervisor,
             "eval_id": eval_id,
         }
         sections = by_eval.get(ev["id"], {})
@@ -140,7 +188,8 @@ async def fetch_history_frame(config: "TeamConfig") -> pd.DataFrame:
     async with pool.acquire() as conn:
         alias_map = await _section_alias_map(conn, config)
         eval_rows = await conn.fetch(
-            "SELECT e.id, e.agent_name_raw, e.evaluator_email, e.overall_score, "
+            "SELECT e.id, e.agent_id, e.agent_name_raw, e.evaluator_email, "
+            "  e.overall_score, "
             "  e.dialpad_link, e.dialpad_entry_point_call_id, e.dialpad_call_metadata, "
             "  COALESCE(e.call_connected_at, e.approved_at) AS ts, e.approved_at, "
             "  COALESCE(a.canonical_name, a.name, e.agent_name_raw) AS agent_display, "
@@ -156,4 +205,8 @@ async def fetch_history_frame(config: "TeamConfig") -> pd.DataFrame:
             "JOIN qa.evaluations e ON e.id = es.evaluation_id "
             "WHERE e.team_id = $1 AND e.state = 'finalized'",
             config.team_id)
-    return frame_from_rows(config, eval_rows, section_rows, alias_map)
+        agent_rows = await conn.fetch(
+            "SELECT name, canonical_name, active, supervisor_email "
+            "FROM qa.agents WHERE team_id = $1",
+            config.team_id)
+    return frame_from_rows(config, eval_rows, section_rows, alias_map, agent_rows)
