@@ -206,6 +206,7 @@ class FakeConn:
         self.existing_id = existing_id
         self.inserts: list[tuple] = []
         self.updates: list[tuple] = []
+        self.update_queries: list[str] = []
         self.deletes: list[tuple] = []
 
     @asynccontextmanager
@@ -222,6 +223,7 @@ class FakeConn:
     async def execute(self, query, *args):
         if query.startswith("UPDATE"):
             self.updates.append(args)
+            self.update_queries.append(query)
         elif query.startswith("DELETE"):
             self.deletes.append(args)
         else:
@@ -265,6 +267,41 @@ class TestRecordDraftEvaluation:
         assert len(self.conn.updates) == 1
         assert self.conn.deletes == [(77,)]
         assert not [i for i in self.conn.inserts if i[0] == "evaluations"]
+
+    async def test_rescore_resets_previous_cycle_lifecycle_columns(self, ms_config):
+        """Re-scoring an already-approved/finalized eval must return the row
+        to a CLEAN draft. Regression for the 2026-07-14 prod failure: the
+        old cycle's human_review_completed_at survived the overwrite while
+        the fresh draft set required_at=NULL → evaluations_human_review_
+        pair_check violation. The stale evaluator_email/approved_at were
+        worse than cosmetic — the finalize writer COALESCEs them, so the
+        re-eval would have kept the OLD approval clock and evaluator."""
+        self.conn.existing_id = 77
+        await record_draft_evaluation(_scorecard(ms_config), ms_config)
+
+        (query,) = self.conn.update_queries
+        (args,) = self.conn.updates
+        # parse "col = $N" assignments back into a column -> value map
+        import re
+        col_by_pos = {int(m.group(2)): m.group(1)
+                      for m in re.finditer(r"(\w+) = \$(\d+)", query)}
+        # $1 is the WHERE id; assignment params start at $2 == args[1]
+        values = {col: args[pos - 1] for pos, col in col_by_pos.items()}
+
+        for col in eval_store._RESCORE_RESET:
+            assert col in values, f"UPDATE must reset {col}"
+            assert values[col] is None, f"{col} must reset to NULL, got {values[col]!r}"
+        # the fresh Stage-1 columns still land
+        assert values["state"] == "draft"
+
+    async def test_insert_does_not_carry_reset_columns(self, ms_config):
+        """The reset is an UPDATE-arm concern: a fresh INSERT's dict stays
+        exactly build_draft_row's shape (no explicit NULL lifecycle cols)."""
+        row = eval_store.build_draft_row(_scorecard(ms_config), ms_config)
+        assert not set(eval_store._RESCORE_RESET) & set(row), (
+            "build_draft_row grew a column that _RESCORE_RESET overrides — "
+            "decide the re-score precedence explicitly"
+        )
 
     async def test_db_failure_is_swallowed(self, ms_config, monkeypatch):
         async def exploding_pool():

@@ -269,10 +269,36 @@ async def record_draft_evaluation(
         return None
 
 
+# Stage-1 re-score over an existing row must return it to a CLEAN draft.
+# build_draft_row only carries the Stage-1 columns, so without this reset
+# the previous approve/finalize cycle's outputs survive the overwrite:
+#
+# - human_review_completed_at outlives the fresh required_at=NULL →
+#   evaluations_human_review_pair_check violation (observed 2026-07-14
+#   re-scoring a v4-flagged, review-resolved eval under the new formula);
+# - the finalize writer COALESCEs evaluator_email/approved_at, so stale
+#   values would pin the OLD evaluator and approval clock on the re-eval;
+# - overall_score/formula_version/rubric_version are re-stamped by
+#   finalize_evaluation_scoring from the versions active at re-approval.
+#
+# needs_coaching/action_plan are deliberately NOT reset: no writer exists
+# yet (VP-review UI pending) — that re-score semantic belongs to its design.
+_RESCORE_RESET: dict[str, Any] = {
+    "evaluator_email": None,
+    "approved_at": None,
+    "finalized_at": None,
+    "overall_score": None,
+    "formula_version": None,
+    "rubric_version": None,
+    "human_review_completed_at": None,
+}
+
+
 async def _upsert_draft(conn: Any, row: dict[str, Any], sections: list[EvaluationSection]) -> int:
     """INSERT the draft, or UPDATE the existing row matched by
-    (team_id, dialpad_link) — the Stage-1 re-score overwrite. Section rows
-    are replaced wholesale either way, in one transaction."""
+    (team_id, dialpad_link) — the Stage-1 re-score overwrite, which also
+    resets the previous cycle's lifecycle columns (_RESCORE_RESET). Section
+    rows are replaced wholesale either way, in one transaction."""
     async with conn.transaction():
         evaluation_id = None
         if row["dialpad_link"]:
@@ -281,9 +307,9 @@ async def _upsert_draft(conn: Any, row: dict[str, Any], sections: list[Evaluatio
                 row["team_id"], row["dialpad_link"],
             )
 
-        columns = list(row)
-        values = [row[c] for c in columns]
         if evaluation_id is None:
+            columns = list(row)
+            values = [row[c] for c in columns]
             placeholders = ", ".join(f"${i + 1}" for i in range(len(columns)))
             evaluation_id = await conn.fetchval(
                 f"INSERT INTO qa.evaluations ({', '.join(columns)}) "
@@ -291,6 +317,9 @@ async def _upsert_draft(conn: Any, row: dict[str, Any], sections: list[Evaluatio
                 *values,
             )
         else:
+            merged = {**row, **_RESCORE_RESET}
+            columns = list(merged)
+            values = [merged[c] for c in columns]
             assignments = ", ".join(f"{c} = ${i + 2}" for i, c in enumerate(columns))
             await conn.execute(
                 f"UPDATE qa.evaluations SET {assignments} WHERE id = $1",
