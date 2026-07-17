@@ -15,6 +15,14 @@ Usage:
 Upserts on the uq_agents_team_lower_name index — re-running refreshes
 emails/supervisors without duplicating rows. Rows without an email are
 skipped (qa.agents.email is NOT NULL).
+
+Departures: an agent absent from the Mails tab is marked ``active=FALSE``
+— never deleted; their evals keep the identity link and the dashboards
+degrade them to the departed treatment. (Temporary flow: qa.agents CRUD
+moves to the dashboard frontend later; until then the Mails tab remains
+the roster source and this script is the sync.) As a safety rail, a
+non-dry run REFUSES to proceed when the Mails read comes back empty —
+an empty read would otherwise deactivate the whole team.
 """
 
 from __future__ import annotations
@@ -45,6 +53,20 @@ ON CONFLICT (team_id, LOWER(name)) DO UPDATE SET
     updated_at       = NOW()
 """
 
+# Departure sync: active rows whose name no longer appears in the Mails tab.
+# Soft-deactivate only — deleting would orphan evals' agent_id links.
+_SELECT_DEPARTED = """
+SELECT name FROM qa.agents
+WHERE team_id = $1 AND active AND LOWER(name) != ALL($2::text[])
+ORDER BY name
+"""
+
+_DEACTIVATE = """
+UPDATE qa.agents SET active = FALSE, updated_at = NOW()
+WHERE team_id = $1 AND active AND LOWER(name) != ALL($2::text[])
+RETURNING name
+"""
+
 
 def _read_mails_rows(team_id: str) -> list[tuple[str, str | None, str, str | None]]:
     config = get_team_config(team_id)
@@ -68,15 +90,35 @@ def _read_mails_rows(team_id: str) -> list[tuple[str, str | None, str, str | Non
 async def _run(team_id: str, dry_run: bool) -> int:
     agents = _read_mails_rows(team_id)
     print(f"team={team_id}: {len(agents)} agent row(s) from the Mails tab")
+    lower_names = [name.lower() for name, _, _, _ in agents]
+
+    dsn = os.environ.get("DATABASE_URL", "")
+
     if dry_run:
         for name, canonical, email, supervisor in agents[:10]:
             print(f"  {name} <{email}>" + (f" (canonical: {canonical})" if canonical else ""))
+        if dsn and agents:
+            import asyncpg
+            conn = await asyncpg.connect(dsn, timeout=10)
+            try:
+                departed = await conn.fetch(_SELECT_DEPARTED, team_id, lower_names)
+            finally:
+                await conn.close()
+            if departed:
+                print(f"would deactivate {len(departed)} departed agent(s): "
+                      f"{[r['name'] for r in departed]}")
         print("dry-run: nothing written")
         return 0
 
-    dsn = os.environ.get("DATABASE_URL", "")
     if not dsn:
         print("DATABASE_URL not set", file=sys.stderr)
+        return 2
+    if not agents:
+        # An empty Mails read + the departure sync below would deactivate
+        # the entire team. Whatever caused it (wrong tab, API hiccup),
+        # nothing good comes from proceeding.
+        print("Mails tab read came back EMPTY — refusing to sync "
+              "(would deactivate every agent)", file=sys.stderr)
         return 2
 
     import asyncpg
@@ -86,11 +128,15 @@ async def _run(team_id: str, dry_run: bool) -> int:
         async with conn.transaction():
             for name, canonical, email, supervisor in agents:
                 await conn.execute(_UPSERT, team_id, name, canonical, email, supervisor)
+            departed = await conn.fetch(_DEACTIVATE, team_id, lower_names)
         total = await conn.fetchval(
             "SELECT COUNT(*) FROM qa.agents WHERE team_id = $1 AND active", team_id
         )
     finally:
         await conn.close()
+    if departed:
+        print(f"deactivated {len(departed)} departed agent(s): "
+              f"{[r['name'] for r in departed]}")
     print(f"qa.agents upserted; {total} active agent(s) for {team_id}")
     return 0
 
