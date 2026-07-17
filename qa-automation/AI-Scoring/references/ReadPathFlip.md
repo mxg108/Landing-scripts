@@ -154,15 +154,23 @@ treats `shadow` as `sheets` for Path-1 (the shadow window is a /team-trio
 concern); the promotion sequence is `sheets → shadow → postgres`, and
 rollback is any step leftward.
 
-**Implementation status (2026-07-14):** F2 ✅ (row-source + pytest +
-golden/endpoint parity harness), F3 ✅ (factory + lifecycle behind the
-flag), F4 ✅ (trio flag-aware + shadow, shared comparator in
-`services/read_path_shadow.py` used by both the harness and live shadow),
-F5 **partial** — W6 ✅ (indexed datapoint lookup, migration 014); the
-terminal cleanup (delete the trio's `_ws` sheet-read, drop gspread,
-W2/W3 as SQL views) is **deferred to post-cutover** — doing it now breaks
-the shadow window and the env-flip rollback (§6 sheet-retention). Prod
-flag stays `sheets` until the shadow window is validated on live traffic.
+**Implementation status (2026-07-16): ALL SLICES COMPLETE.** F2 ✅, F3 ✅,
+F4 ✅ (flipped to `postgres` in prod 2026-07-15 after a clean shadow
+window — silent cutover), F5 ✅: W6 (indexed datapoint lookup, migration
+014) + terminal cleanup — the trio's `_ws` sheet-read, the `QA_READ_PATH`
+flag, and the shadow machinery are DELETED (rollback = git revert +
+redeploy; reads produce no data), `get_provider` is Postgres-only, no
+gspread in the /team read path — + W2/W3 as real views (migration 015):
+`qa.v_history_long` backs team_source's section query; `qa.v_monthly_scores`
+is the UNFILTERED month rollup for CC/ad-hoc/export consumers — the
+dashboard chiclets deliberately keep the pandas path because they honor
+per-request active_only/supervisor filters, which a team-level view
+cannot. Post-flip fixes folded in: read-time identity fallback (§4.4,
+PR #113), importer departure sync + identity repair (PRs #114–115).
+`SheetsProvider` survives only for `scripts/parity_readpath.py`, which
+stays runnable while the sheet is written as a projection (§6). Remaining
+sheet retirement (stop the write-side projection) is out of scope here —
+CutoverDesign §7's retention rule, post one bonus cycle.
 
 ## 6. Explicitly out of scope
 
