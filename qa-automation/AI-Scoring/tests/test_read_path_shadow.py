@@ -1,21 +1,17 @@
-"""F4 — read-path shadow comparator + mode-aware /team frame helper.
+"""Parity comparator tests (read_path_shadow).
 
-Two layers (ReadPathFlip §5 F4):
-- read_path_shadow.align/compare: key alignment, membership classification
-  (sheet-only / db-only / common are deltas, not failures), and common-row
-  cell diffing — the SAME comparator the offline harness uses.
-- routes.team._team_history_frame: QA_READ_PATH dispatch — postgres serves
-  the row-source (no provider._ws), shadow serves the sheet AND logs the
-  delta, sheets serves the sheet with no shadow work.
+read_path_shadow.align/compare: key alignment, membership classification
+(sheet-only / db-only / common are deltas, not failures), and common-row
+cell diffing — the comparator the golden-parity harness layers compute_*
+and endpoint permutations on. The F4 shadow-dispatch tests were deleted
+with the shadow path in F5.
 """
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime
 
 import pandas as pd
-import pytest
 
 from backend.services import read_path_shadow as shadow
 
@@ -153,87 +149,3 @@ def test_key_content_pairing_cannot_mask_real_divergence():
     d = result["cell_diff_sample"][0]
     assert d["col"] == "matching_the_moment"
     assert (d["sheet"], d["pg"]) == (4.0, 3.0)   # 5s paired; 4 vs 3 surfaces
-
-
-def test_log_shadow_never_raises_on_empty():
-    # empty pg frame must not blow up the request path
-    shadow.log_shadow("sales", _frame([("A", "Star Rep", 1, 90)]), pd.DataFrame())
-
-
-# ---------------------------------------------------------------------------
-# Mode-aware /team frame helper
-# ---------------------------------------------------------------------------
-
-class _FakeSheetsProvider:
-    def __init__(self):
-        self._ws = self
-    def get_all_values(self):
-        return [["header"]]
-    def _get_mails_sheet(self):
-        return [["Agent Name"]]
-
-
-@pytest.fixture
-def _patch_team(monkeypatch):
-    import backend.routes.team as team
-
-    sheet_df = _frame([("S", "Star Rep", 1, 90)])
-    pg_df = _frame([("P", "Star Rep", 1, 90)])
-    calls = {"log_shadow": [], "fetch": 0, "get_provider": 0}
-
-    async def _fake_fetch(config):
-        calls["fetch"] += 1
-        return pg_df
-
-    async def _fake_get_provider(team_id):
-        calls["get_provider"] += 1
-        return _FakeSheetsProvider()
-
-    monkeypatch.setattr(team, "fetch_history_frame", _fake_fetch)
-    monkeypatch.setattr(team, "get_provider", _fake_get_provider)
-    monkeypatch.setattr(team, "load_and_clean", lambda *a, **k: sheet_df)
-    monkeypatch.setattr(team, "log_shadow",
-                        lambda tid, s, p: calls["log_shadow"].append((tid, len(s), len(p))))
-    monkeypatch.delenv("QA_READ_PATH", raising=False)
-    return team, sheet_df, pg_df, calls
-
-
-def test_helper_postgres_serves_rowsource(_patch_team, monkeypatch):
-    team, sheet_df, pg_df, calls = _patch_team
-    monkeypatch.setenv("QA_READ_PATH", "postgres")
-    df = asyncio.run(team._team_history_frame("sales", config=None))
-    assert df is pg_df
-    assert calls["fetch"] == 1
-    assert calls["get_provider"] == 0  # no _ws access on the postgres path
-    assert calls["log_shadow"] == []
-
-
-def test_helper_sheets_serves_sheet_no_shadow(_patch_team, monkeypatch):
-    team, sheet_df, pg_df, calls = _patch_team
-    monkeypatch.setenv("QA_READ_PATH", "sheets")
-    df = asyncio.run(team._team_history_frame("sales", config=None))
-    assert df is sheet_df
-    assert calls["fetch"] == 0
-    assert calls["log_shadow"] == []
-
-
-def test_helper_shadow_serves_sheet_and_logs(_patch_team, monkeypatch):
-    team, sheet_df, pg_df, calls = _patch_team
-    monkeypatch.setenv("QA_READ_PATH", "shadow")
-    df = asyncio.run(team._team_history_frame("sales", config=None))
-    assert df is sheet_df           # sheet is still the served source of truth
-    assert calls["fetch"] == 1      # but the pg frame was computed
-    assert calls["log_shadow"] == [("sales", 1, 1)]  # and the delta logged
-
-
-def test_helper_shadow_survives_pg_failure(_patch_team, monkeypatch):
-    team, sheet_df, pg_df, calls = _patch_team
-
-    async def _boom(config):
-        raise RuntimeError("db down")
-
-    monkeypatch.setattr(team, "fetch_history_frame", _boom)
-    monkeypatch.setenv("QA_READ_PATH", "shadow")
-    df = asyncio.run(team._team_history_frame("sales", config=None))
-    assert df is sheet_df           # request still served despite pg failure
-    assert calls["log_shadow"] == []

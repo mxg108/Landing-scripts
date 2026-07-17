@@ -47,9 +47,7 @@ async def _lifespan(app: FastAPI):
         strict=os.environ.get("QA_VERSION_SHIP_STRICT", "") == "1",
     )
     yield
-    # Read-path flip (F3): close any connected PostgresProvider pools built
-    # by the get_provider factory under QA_READ_PATH=postgres. No-op for the
-    # default sheets path (SheetsProviders have no pool to close).
+    # Close the PostgresProvider pools built by the get_provider factory.
     from backend.services.data_provider import close_all_providers
     await close_all_providers()
     # Wave 2 Phase 4a: dual-write pool (lazy-created on first Stage 1 write).
