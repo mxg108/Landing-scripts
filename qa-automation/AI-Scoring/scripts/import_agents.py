@@ -99,7 +99,7 @@ async def _run(team_id: str, dry_run: bool) -> int:
             print(f"  {name} <{email}>" + (f" (canonical: {canonical})" if canonical else ""))
         if dsn and agents:
             import asyncpg
-            conn = await asyncpg.connect(dsn, timeout=10)
+            conn = await asyncpg.connect(dsn, timeout=30)
             try:
                 departed = await conn.fetch(_SELECT_DEPARTED, team_id, lower_names)
             finally:
@@ -123,7 +123,7 @@ async def _run(team_id: str, dry_run: bool) -> int:
 
     import asyncpg
 
-    conn = await asyncpg.connect(dsn, timeout=10)
+    conn = await asyncpg.connect(dsn, timeout=30)
     try:
         async with conn.transaction():
             for name, canonical, email, supervisor in agents:
@@ -143,7 +143,9 @@ async def _run(team_id: str, dry_run: bool) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--team", required=True)
+    # --team-id accepted as an alias: the B-series / repair scripts use it,
+    # and the mismatch has already eaten one operator run.
+    ap.add_argument("--team", "--team-id", dest="team", required=True)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     raise SystemExit(asyncio.run(_run(args.team, args.dry_run)))

@@ -55,7 +55,7 @@ async def run(args) -> int:
 
     import asyncpg
 
-    conn = await asyncpg.connect(dsn, timeout=10)
+    conn = await asyncpg.connect(dsn, timeout=30)
     try:
         before = await conn.fetchrow(
             "SELECT COUNT(*) AS total, "
@@ -84,10 +84,13 @@ async def run(args) -> int:
             "FROM qa.evaluations e WHERE team_id = $1", args.team_id)
 
         # The stays-NULL list, explicit (departed agents — B3 §7 treatment).
+        # Excludes rows an apply-run would resolve, so a --dry-run doesn't
+        # mislabel resolvable rows as departed.
         unresolved_names = await conn.fetch(
-            "SELECT agent_name_raw, COUNT(*) AS n FROM qa.evaluations e "
-            "WHERE team_id = $1 AND agent_id IS NULL "
-            "GROUP BY 1 ORDER BY n DESC", args.team_id)
+            f"SELECT agent_name_raw, COUNT(*) AS n FROM qa.evaluations e "
+            f"WHERE team_id = $1 AND agent_id IS NULL "
+            f"AND NOT EXISTS (SELECT 1 FROM qa.agents a WHERE {_MATCH}) "
+            f"GROUP BY 1 ORDER BY n DESC", args.team_id)
     finally:
         await conn.close()
 
@@ -103,30 +106,33 @@ async def run(args) -> int:
             "email_missing_before": before["no_email"],
             "email_missing_after": after["no_email"],
         },
-        "unresolved_names": [{"name": r["agent_name_raw"], "rows": r["n"]}
+        "stays_null_names": [{"name": r["agent_name_raw"], "rows": r["n"]}
                              for r in unresolved_names],
     }
     report_path = _STAGING_DIR / f"report_{args.team_id}_identity_repair.json"
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     c = report["counts"]
+    stays_null_rows = sum(r["n"] for r in unresolved_names)
     tag = " [DRY RUN]" if args.dry_run else ""
     print(f"[identity-repair:{args.team_id}]{tag} rows={c['rows']} "
           f"unresolved={c['unresolved_before']} resolvable={resolvable} "
           f"resolved={c['resolved_this_run']}")
-    print(f"  remaining NULL: {c['unresolved_after']} rows across "
-          f"{len(report['unresolved_names'])} names (departed — stay NULL)")
-    for r in report["unresolved_names"][:10]:
+    print(f"  stays NULL: {stays_null_rows} rows across "
+          f"{len(report['stays_null_names'])} names (departed — no active "
+          f"roster match)")
+    for r in report["stays_null_names"][:10]:
         print(f"    {r['rows']:4d}  {r['name']}")
-    if len(report["unresolved_names"]) > 10:
-        print(f"    ... +{len(report['unresolved_names']) - 10} more (see report)")
+    if len(report["stays_null_names"]) > 10:
+        print(f"    ... +{len(report['stays_null_names']) - 10} more (see report)")
     print(f"  report: {report_path}")
     return 0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--team-id", required=True)
+    # --team accepted as an alias (import_agents.py uses it).
+    ap.add_argument("--team-id", "--team", dest="team_id", required=True)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     return asyncio.run(run(args))
