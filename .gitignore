@@ -43,3 +43,6 @@ database/onepager_*.html
 # B0 staging outputs (backfill_seed_b0.py) — derived from the seed CSVs,
 # same PII surface. Reports included: exclusion rows carry agent names.
 database/backfill_staging/
+# EOM CSV exports (export_eom_csvs.py) — agent names + scores, operator
+# deliverables; never repo content.
+database/eom_exports/

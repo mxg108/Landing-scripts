@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -17,6 +18,8 @@ from backend.models.dashboard import (
     SectionAssessment,
 )
 from backend.prompts.progression_prompt import build_progression_prompt
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from backend.config.team_config import TeamConfig
@@ -124,6 +127,57 @@ async def get_progression(
         _set_cached(agent_name, days, result)
         return result
 
+    try:
+        result = generate_from_records(records, agent_name, days, config,
+                                       data_source=provider.name)
+    except AssessmentParseError:
+        # parse-failure placeholder — cached (avoids hammering Gemini) but
+        # never persisted (§Q4.a: only genuine AI output lands).
+        result = ProgressionAssessment(
+            overall_assessment=(
+                f"Assessment generation for {agent_name} produced a partial response. "
+                "Try a shorter time window or retry."
+            ),
+            section_assessments={},
+            evaluation_count=len(records),
+            time_range_days=days,
+            data_source=provider.name,
+        )
+        _set_cached(agent_name, days, result)
+        return result
+
+    # R3 (JulyR2R3 §2): persist every FRESH generation — cache hits above
+    # never reach here, and the two placeholder results return early, so
+    # only genuine AI output lands in qa.assessments. Failures are logged
+    # and swallowed: the dashboard card renders regardless.
+    try:
+        from backend.services.assessment_store import persist_assessment
+        await persist_assessment(result, agent_name=agent_name, config=config)
+    except Exception:  # noqa: BLE001 — persistence must not break the card
+        logger.exception(
+            "progression: assessment persist failed for %r — card served "
+            "without a durable row", agent_name,
+        )
+
+    _set_cached(agent_name, days, result)
+    return result
+
+
+class AssessmentParseError(Exception):
+    """Gemini's response wasn't valid JSON — no genuine assessment exists."""
+
+
+def generate_from_records(
+    records: list[EvaluationRecord],
+    agent_name: str,
+    days: int,
+    config: TeamConfig,
+    data_source: str = "PostgreSQL",
+) -> ProgressionAssessment:
+    """The generation core: serialize → prompt → Gemini → parse. Shared by
+    the dashboard path (get_progression, rolling window) and the EOM
+    one-pager (calendar-month records). No caching, no persistence —
+    callers own both. Raises AssessmentParseError on unparseable output."""
     evaluations_json = _serialize_records(records)
     prompt = build_progression_prompt(config, agent_name, evaluations_json, days)
 
@@ -144,19 +198,8 @@ async def get_progression(
     raw_text = _strip_markdown_fences(response.text)
     try:
         parsed = json.loads(raw_text)
-    except json.JSONDecodeError:
-        result = ProgressionAssessment(
-            overall_assessment=(
-                f"Assessment generation for {agent_name} produced a partial response. "
-                "Try a shorter time window or retry."
-            ),
-            section_assessments={},
-            evaluation_count=len(records),
-            time_range_days=days,
-            data_source=provider.name,
-        )
-        _set_cached(agent_name, days, result)
-        return result
+    except json.JSONDecodeError as exc:
+        raise AssessmentParseError(str(exc)) from exc
 
     # Convert list response to dict keyed by internal history IDs
     section_name_map = config.section_name_to_history_id
@@ -170,13 +213,10 @@ async def get_progression(
             coaching_tip=sa["coaching_tip"],
         )
 
-    result = ProgressionAssessment(
+    return ProgressionAssessment(
         overall_assessment=parsed["overall_assessment"],
         section_assessments=section_assessments,
         evaluation_count=len(records),
         time_range_days=days,
-        data_source=provider.name,
+        data_source=data_source,
     )
-
-    _set_cached(agent_name, days, result)
-    return result

@@ -1,31 +1,38 @@
 #!/usr/bin/env python3
-"""Landing-branded agent one-pager — print-ready HTML (July R2/R3 groundwork).
+"""Landing-branded agent one-pager — print-ready HTML (JulyR2R3 §3).
 
-Reads an Analyst_History-shaped CSV export, filters to one agent + one month,
-and renders a single-page, print-to-PDF HTML artifact: overall score with
-call count and standard deviation, per-section averages and trends, and a
-per-call score sparkline. R3 swaps the CSV for qa.evaluations and enriches
-with the qa.assessments AI Assessment at end of month — the layout reserves
-its slot.
+Sources qa.evaluations through the post-flip row-source (same bucket-TZ
+month semantics as the dashboard) and fills the AI-Assessment slot from
+qa.assessments — generating + persisting a calendar-month assessment via
+the R3 writer when none exists (``--no-generate`` skips that for
+cost-free re-renders). One HTML per agent, print-to-PDF ready (Letter
+portrait).
 
 Usage:
     cd qa-automation/AI-Scoring
-    python scripts/export_onepager.py \
-        --csv ../../database/export_document_test_data.csv \
-        --month 2026-06 [--agent "Name"] [--out path.html]
-
-Print to PDF from any browser (the page is sized for Letter portrait).
+    python3 scripts/export_onepager.py --team member_support --month 2026-06 \\
+        [--agent "Name"] [--no-generate] [--include-departed] \\
+        [--out-dir ../../database/eom_exports]
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import html
 import statistics
+import sys
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+from dotenv import load_dotenv
+
+_AI_SCORING = Path(__file__).resolve().parent.parent
+_DEFAULT_OUT = _AI_SCORING.parent.parent / "database" / "eom_exports"
+load_dotenv(_AI_SCORING / ".env")
+if str(_AI_SCORING) not in sys.path:
+    sys.path.insert(0, str(_AI_SCORING))
 
 # Landing brand palette (qa-automation/teams/*/Branding.js)
 NAVY = "#15192D"
@@ -36,27 +43,58 @@ AMBER = "#E8A317"
 RED = "#D9534F"
 GRAY = "#4A4A4A"
 
-_PREFIX = 6          # agent, email, timestamp, evaluator, link, overall
-_N_SECTIONS = 10     # MS layout; sections occupy cols 6..15
-
 _YN_VALUES = {"Yes": 1.0, "Y": 1.0, "No": 0.0, "N": 0.0}
 
 
-def _parse(csv_path: Path, month: str, agent: str | None):
-    df = pd.read_csv(csv_path)
-    df.columns = [c.strip() for c in df.columns]
-    df["_ts"] = pd.to_datetime(df["Timestamp"], errors="coerce")
-    df = df[df["_ts"].dt.strftime("%Y-%m") == month]
-    if agent:
-        df = df[df["Agent Name"].str.strip().str.lower() == agent.strip().lower()]
-    else:
-        agent = df["Agent Name"].str.strip().mode().iat[0]
-        df = df[df["Agent Name"].str.strip() == agent]
-    if df.empty:
-        raise SystemExit(f"no rows for agent={agent!r} month={month}")
-    df = df.sort_values("_ts")
-    section_cols = list(df.columns[_PREFIX:_PREFIX + _N_SECTIONS])
-    return df, agent, section_cols
+def frame_to_render(df_month: pd.DataFrame, agent: str, config):
+    """One agent's month slice of the analytics frame → the render shape
+    (display-label columns, canonical section order). The frame's yn cells
+    are already the Y/N/NA/'' vocabulary _section_stats understands;
+    numeric NAs arrive as NaN (the frame collapses the sheet-era
+    'Not Applicable' string — the NA count column reflects yn sections
+    only, a known fidelity trade)."""
+    g = df_month[df_month["agent"] == agent].sort_values("timestamp")
+    out = pd.DataFrame({
+        "Agent Name": g["agent"].values,
+        "_ts": g["timestamp"].values,
+        "Overall Score": g["overall_score"].values,
+    })
+    section_cols = []
+    for sec in config.sections_by_number:
+        h = sec.history_id
+        if h in g.columns:
+            out[sec.name] = g[h].values
+            section_cols.append(sec.name)
+    return out, section_cols
+
+
+def assessment_html(assessment: dict | None) -> str:
+    """The AI-Assessment slot: the persisted qa.assessments row, or the
+    reserved-slot placeholder when none exists."""
+    if assessment is None:
+        return (
+            '<div class="assessment"><strong>AI Assessment</strong><br>'
+            '<span class="muted">No persisted assessment for this window — '
+            "run without --no-generate to create one.</span></div>"
+        )
+    lines = []
+    for s in assessment.get("sections", []):
+        arrow = {"improving": ("▲", GREEN), "declining": ("▼", RED)}.get(
+            s["trend"], ("→", GRAY))
+        lines.append(
+            f'<div class="a-sec"><span style="color:{arrow[1]}">{arrow[0]}</span> '
+            f"<strong>{html.escape(s['section_name'])}</strong> — "
+            f"{html.escape(s['coaching_tip'])}</div>"
+        )
+    gen = assessment.get("generated_at")
+    stamp = gen.strftime("%Y-%m-%d") if hasattr(gen, "strftime") else ""
+    return (
+        '<div class="assessment"><strong>AI Assessment</strong> '
+        f'<span class="muted">({assessment.get("evaluations_included", "?")} evaluations'
+        f'{" · " + stamp if stamp else ""} · {html.escape(str(assessment.get("rubric_version", "")))})</span>'
+        f'<p style="margin:6px 0 8px">{html.escape(assessment["overall_assessment"])}</p>'
+        f"{''.join(lines)}</div>"
+    )
 
 
 def _section_stats(df: pd.DataFrame, col: str) -> dict:
@@ -129,7 +167,8 @@ def _bar(stat: dict) -> str:
     )
 
 
-def render(df: pd.DataFrame, agent: str, month: str, section_cols: list[str]) -> str:
+def render(df: pd.DataFrame, agent: str, month: str, section_cols: list[str],
+           assessment: dict | None = None) -> str:
     overall = pd.to_numeric(df["Overall Score"], errors="coerce").dropna().tolist()
     n = len(overall)
     mean = statistics.fmean(overall)
@@ -185,6 +224,7 @@ def render(df: pd.DataFrame, agent: str, month: str, section_cols: list[str]) ->
   .fill {{ height: 100%; border-radius: 4px; }}
   .assessment {{ border: 1.5px dashed {BLUE}; border-radius: 10px; padding: 14px 16px;
                  margin-top: 16px; color: {NAVY}; background: #fbfcff; }}
+  .a-sec {{ font-size: 11.5px; margin: 2px 0; }}
   footer {{ margin-top: 18px; font-size: 10.5px; color: #9aa3af; }}
 </style></head><body>
 <header>
@@ -209,34 +249,67 @@ def render(df: pd.DataFrame, agent: str, month: str, section_cols: list[str]) ->
 {chr(10).join(rows)}
 </tbody></table>
 
-<div class="assessment">
-  <strong>AI Assessment</strong><br>
-  <span class="muted">Generated at end of month from the evaluation record —
-  per-section trends, coaching focus, and progression summary land here
-  automatically (arrives with the July close).</span>
-</div>
+{assessment_html(assessment)}
 
-<footer>Generated {datetime.now().strftime("%Y-%m-%d %H:%M")} · Source: Analyst_History
+<footer>Generated {datetime.now().strftime("%Y-%m-%d %H:%M")} · Source: qa.evaluations
 ({n} finalized evaluations, {month_label}) · Trend = second-half vs first-half average
 · Scores computed by the Landing QA engine</footer>
 </body></html>"""
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--csv", required=True)
-    ap.add_argument("--month", required=True, help="YYYY-MM")
-    ap.add_argument("--agent", default=None)
-    ap.add_argument("--out", default=None)
-    args = ap.parse_args()
+async def run(args) -> int:
+    from backend.config.team_config import get_team_config
+    from backend.services.assessment_store import get_or_generate_month_assessment
+    from backend.services.team_source import fetch_history_frame
+    from backend.services.team_stats import _months_in_bucket_tz
 
-    df, agent, section_cols = _parse(Path(args.csv), args.month, args.agent)
-    out = Path(args.out) if args.out else Path(args.csv).parent / (
-        f"onepager_{agent.replace(' ', '_')}_{args.month}.html"
-    )
-    out.write_text(render(df, agent, args.month, section_cols), encoding="utf-8")
-    print(f"wrote {out}  ({len(df)} evaluations for {agent}, {args.month})")
+    config = get_team_config(args.team)
+    df = await fetch_history_frame(config)
+    dm = df[_months_in_bucket_tz(df["timestamp"]) == args.month] if not df.empty else df
+    if not args.include_departed and not dm.empty:
+        dm = dm[dm["is_active"]]
+    if dm.empty:
+        print(f"[onepager:{args.team}] no rows for {args.month}")
+        return 2
+
+    agents = [args.agent] if args.agent else sorted(dm["agent"].unique())
+    out_dir = Path(args.out_dir) / args.team / args.month / "onepagers"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    written = 0
+    for agent in agents:
+        rdf, section_cols = frame_to_render(dm, agent, config)
+        if rdf.empty:
+            print(f"  {agent}: no rows — skipped")
+            continue
+        assessment = await get_or_generate_month_assessment(
+            config, agent, args.month, generate=not args.no_generate)
+        slug = "_".join(agent.replace("/", " ").split())
+        out = out_dir / f"onepager_{slug}_{args.month}.html"
+        out.write_text(render(rdf, agent, args.month, section_cols, assessment),
+                       encoding="utf-8")
+        written += 1
+        print(f"  {agent}: {len(rdf)} evals"
+              + (", assessment ✓" if assessment else ", assessment —")
+              + f" → {out.name}")
+
+    print(f"[onepager:{args.team}] {args.month}: {written} page(s) → {out_dir}")
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--team", "--team-id", dest="team", required=True)
+    ap.add_argument("--month", required=True, help="YYYY-MM (bucket-TZ month)")
+    ap.add_argument("--agent", default=None, help="one agent; omit for all")
+    ap.add_argument("--no-generate", action="store_true",
+                    help="never call Gemini — reserved slot shows a note when "
+                         "no assessment is persisted")
+    ap.add_argument("--include-departed", action="store_true")
+    ap.add_argument("--out-dir", default=str(_DEFAULT_OUT))
+    args = ap.parse_args()
+    return asyncio.run(run(args))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
