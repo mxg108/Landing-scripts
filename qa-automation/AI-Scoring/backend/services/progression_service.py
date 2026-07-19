@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -17,6 +18,8 @@ from backend.models.dashboard import (
     SectionAssessment,
 )
 from backend.prompts.progression_prompt import build_progression_prompt
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from backend.config.team_config import TeamConfig
@@ -177,6 +180,19 @@ async def get_progression(
         time_range_days=days,
         data_source=provider.name,
     )
+
+    # R3 (JulyR2R3 §2): persist every FRESH generation — cache hits above
+    # never reach here, and the two placeholder results return early, so
+    # only genuine AI output lands in qa.assessments. Failures are logged
+    # and swallowed: the dashboard card renders regardless.
+    try:
+        from backend.services.assessment_store import persist_assessment
+        await persist_assessment(result, agent_name=agent_name, config=config)
+    except Exception:  # noqa: BLE001 — persistence must not break the card
+        logger.exception(
+            "progression: assessment persist failed for %r — card served "
+            "without a durable row", agent_name,
+        )
 
     _set_cached(agent_name, days, result)
     return result
