@@ -152,6 +152,61 @@ async def persist_assessment(
     return assessment_id
 
 
+def month_bounds(month: str) -> tuple[datetime, datetime, int]:
+    """[start, end) of a YYYY-MM calendar month in the project bucket TZ,
+    as aware UTC datetimes, plus the month's day count (time_range_days).
+    Same TZ seam as the dashboard's month bucketing."""
+    from backend.services.team_stats import _BUCKET_TZ
+    year, mon = (int(p) for p in month.split("-"))
+    start_local = datetime(year, mon, 1, tzinfo=_BUCKET_TZ)
+    end_local = (datetime(year + 1, 1, 1, tzinfo=_BUCKET_TZ) if mon == 12
+                 else datetime(year, mon + 1, 1, tzinfo=_BUCKET_TZ))
+    days = (end_local - start_local).days
+    return (start_local.astimezone(timezone.utc),
+            end_local.astimezone(timezone.utc), days)
+
+
+async def get_or_generate_month_assessment(
+    config: "TeamConfig",
+    agent_name: str,
+    month: str,
+    generate: bool = True,
+) -> Optional[dict]:
+    """The one-pager's assessment source (JulyR2R3 §3): the persisted row
+    for (agent, exact month window), generating + persisting one when
+    absent (``generate=False`` for cost-free re-renders). Returns the
+    fetch_assessment_for_range dict shape, or None."""
+    start, end, days = month_bounds(month)
+    existing = await fetch_assessment_for_range(config, agent_name, start, end)
+    if existing is not None or not generate:
+        return existing
+
+    from backend.services.data_provider import get_provider
+    from backend.services.progression_service import (
+        AssessmentParseError,
+        generate_from_records,
+    )
+    provider = await get_provider(config.team_id)
+    records = await provider.get_agent_history_range(agent_name, start, end)
+    if not records:
+        return None
+    try:
+        result = generate_from_records(records, agent_name, days, config)
+    except AssessmentParseError:
+        logger.warning(
+            "assessment_store: month generation unparseable for %r (%s %s) — "
+            "no row persisted", agent_name, config.team_id, month,
+        )
+        return None
+    persisted = await persist_assessment(
+        result, agent_name=agent_name, config=config,
+        range_start=start, range_end=end,
+    )
+    if persisted is None:
+        return None
+    return await fetch_assessment_for_range(config, agent_name, start, end)
+
+
 async def fetch_assessment_for_range(
     config: "TeamConfig",
     agent_name: str,

@@ -97,6 +97,39 @@ class PostgresProvider(DataProvider):
     async def get_agent_history(self, agent_name: str, days: int = 30) -> list[EvaluationRecord]:
         return await self._fetch_records(days=days, agent_name=agent_name)
 
+    async def get_agent_history_range(
+        self, agent_name: str, start: datetime, end: datetime
+    ) -> list[EvaluationRecord]:
+        """Explicit [start, end) window — the EOM one-pager's calendar-month
+        fetch (JulyR2R3 §3); the rolling `days` cutoff can't express a
+        closed month."""
+        await self._refresh_roster_if_stale()
+        async with self._pool.acquire() as conn:
+            evals = await conn.fetch(
+                f"SELECT {_EVAL_COLUMNS} FROM qa.evaluations "
+                "WHERE team_id = $1 AND state = 'finalized' "
+                "AND LOWER(agent_name_raw) = LOWER($2) "
+                "AND COALESCE(call_connected_at, created_at) >= $3 "
+                "AND COALESCE(call_connected_at, created_at) < $4 "
+                "ORDER BY COALESCE(call_connected_at, created_at)",
+                self._team_id, agent_name.strip(), start, end,
+            )
+            if not evals:
+                return []
+            sections = await conn.fetch(
+                "SELECT evaluation_id, section_id, numeric_score, binary_value, "
+                "confidence, reasoning "
+                "FROM qa.evaluation_sections WHERE evaluation_id = ANY($1::bigint[])",
+                [ev["id"] for ev in evals],
+            )
+        sections_by_eval: dict[int, list] = {}
+        for s in sections:
+            sections_by_eval.setdefault(s["evaluation_id"], []).append(s)
+        return [
+            self._record_from_rows(ev, sections_by_eval.get(ev["id"], []))
+            for ev in evals
+        ]
+
     async def get_all_history(self, days: int = 90) -> list[EvaluationRecord]:
         return await self._fetch_records(days=days)
 
