@@ -29,7 +29,7 @@
 | Item | Doc | The undecided piece |
 |---|---|---|
 | SopRag R1–R6 | #99 (pending Ops VP) | bge-m3 hosting (container vs sidecar — decide in R3 with latency numbers); Stage-A prompt's lean on the Dialpad transcript hint; long-call embedding strategy |
-| Read-path flip F1–F5 | ReadPathFlip.md | none — ready to build |
+| ~~Read-path flip F1–F5~~ | ReadPathFlip.md | **COMPLETE 2026-07-16** (PRs #108–#116; prod on Postgres since 07-15) — struck per registry rule |
 | Nightly `reproject` sweep | CutoverDesign (mentioned, never built) | projection-drift repair job: scope, cadence, alerting |
 | Analyst_History sheet retirement ("Phase D") | CutoverDesign §7 tab-retention rule | after read-path flip + one full bonus cycle: what (if anything) still reads the sheet? GAS email does — retirement needs an email-source decision |
 | LandGPT v1 pilot | LandGPT.md (living) | its own open-questions table: runtime (MLX/llama.cpp/Ollama), annotated-transcript schema fields, Stage-2 hardware, pilot go/no-go |
@@ -46,6 +46,7 @@
 | **In-memory `_jobs` store** | PhaseOne tech debt (real: `routes/scoring.py` module dict) | restart loses in-flight scorecards; decide: table in qa.* vs accept (jobs are minutes-long) |
 | **Duplicate-call version picker** | PRD-MultiTeam §7 ("v1 shows all versions; future: choose which persists") | interacts with D2 re-eval semantics now in the DB |
 | **Call-duration analytics dimension** | CallTimeOnAnalystHistory (`compute_call_duration` wired, unconsumed); B2 backfilled `call_duration_ms` on ~1,900 rows | data now exists — a dashboard axis away |
+| **Dialpad call disposition → scoring/RAG primer** | Owner mandate 2026-07-19: rework scoring prompt + prompt injection to include the agent-selected end-of-call disposition as a RAG primer. Sequenced AFTER packaging (R2/R3), BEFORE the Sandy re-platform | Schema: NO disposition column exists in `qa.evaluations` or `command_center.calls` (verified vs live schema 2026-07-19) → migration adds one (which table(s)?). KEY FACT: the data already flows — `call_disposition` is a Dialpad *moment type* the scoring fetch receives and deliberately strips (`dialpad_client.FILTERED_MOMENT_TYPES`); persistence = stop discarding + store at Stage 1, no new API call. Doc must decide: column placement (eval vs CC vs both), moment→text extraction shape, prompt-injection position vs SopRag Stage-A ([[project_rag_coach_cards]] — scoring prompt is RAG consumer #1), and historic backfill (moments were fetched but NOT persisted — `raw_call_details` is empty on recent CC rows; re-fetch under rate limits vs forward-only) |
 | **Explicit-NA vs missing in analytics** | NumericNAOption out-of-scope note; standing `xfail` in test_analytics | becomes tractable post-read-path-flip: the DB distinguishes `binary_value='NA'` from absent rows natively — fold into F5 or its own doc |
 | **TeamStatsBoard §11 extensions** | change-point detection, mixed-effects, predictive risk, GMM, CUSUM | park until Local-AI 100% coverage; `coverage_regime` per-row tagging is the prerequisite ([[project_predictive_groundwork]]) |
 | **LandGPT v2 employee surfaces** | LandGPT.md v2 (chat sessions, storage, RBAC, branded frontend) | post-v1-pilot only |
