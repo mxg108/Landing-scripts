@@ -305,8 +305,12 @@ def endpoint_parity(sub_sheet, sub_pg, config, now) -> dict:
 
 async def run_team(team_id: str) -> int:
     config = get_team_config(team_id)
-    from backend.services.data_provider import get_provider
-    provider = await get_provider(team_id)
+    # Direct SheetsProvider — the get_provider factory is Postgres-only
+    # since F5; the sheet side of this comparison is exactly the retired
+    # read path, kept alive here while the sheet is still written as a
+    # projection.
+    from backend.services.history_service import SheetsProvider
+    provider = SheetsProvider(config=config)
     sheet_df = ts.load_and_clean(
         provider._ws.get_all_values(), provider._get_mails_sheet(), config)
     pg_df = await fetch_history_frame(config)

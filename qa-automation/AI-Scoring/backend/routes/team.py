@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import date, datetime, time, timedelta, timezone
 
 import pandas as pd
@@ -10,8 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from backend.config.team_config import get_team_config
 from backend.middleware.auth import team_id_from_path
-from backend.services.data_provider import _read_path_mode, get_provider
-from backend.services.read_path_shadow import log_shadow
+from backend.services.data_provider import get_provider
 from backend.services.team_source import fetch_history_frame
 from backend.models.team_stats import (
     LongFormResponse,
@@ -35,41 +33,20 @@ from backend.services.team_stats import (
     compute_outliers,
     compute_section_analysis,
     compute_supervisor_stats,
-    load_and_clean,
 )
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/team", tags=["team"])
 
 
 async def _team_history_frame(team_id: str, config) -> pd.DataFrame:
     """The load_and_clean-shaped analytics frame for the /team trio,
-    sourced per QA_READ_PATH (ReadPathFlip §5 F4):
-
-    - ``sheets``   → read Analyst_History via the SheetsProvider (today).
-    - ``shadow``   → serve the SHEET frame but also build the Postgres
-      frame and log the delta on live traffic (validation window).
-    - ``postgres`` → serve the Postgres row-source (team_source), which
-      already joins qa.agents for is_active/supervisor — no _ws access,
-      so it works when get_provider hands back a PostgresProvider.
-    """
-    mode = _read_path_mode()
-    if mode == "postgres":
-        return await fetch_history_frame(config)
-
-    provider = await get_provider(team_id)
-    sheet_df = load_and_clean(
-        provider._ws.get_all_values(), provider._get_mails_sheet(), config)
-    if mode == "shadow":
-        try:
-            pg_df = await fetch_history_frame(config)
-        except Exception:  # noqa: BLE001 — shadow must not break the response
-            logger.warning("read-path shadow[%s]: pg fetch failed",
-                           team_id, exc_info=True)
-        else:
-            log_shadow(team_id, sheet_df, pg_df)
-    return sheet_df
+    from the Postgres row-source (ReadPathFlip §5, flipped 2026-07-15).
+    The sheet-read path and its QA_READ_PATH/shadow machinery were
+    deleted in F5 — rollback is git revert, not an env flip. The
+    Analyst_History sheet remains a write-side projection until its
+    retirement window closes; scripts/parity_readpath.py can still
+    compare the two sources on demand."""
+    return await fetch_history_frame(config)
 
 
 # Coverage regime is hardcoded until Local AI scores 100% of calls

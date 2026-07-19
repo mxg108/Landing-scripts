@@ -199,11 +199,11 @@ async def fetch_history_frame(config: "TeamConfig") -> pd.DataFrame:
             "LEFT JOIN qa.agents a ON a.id = e.agent_id "
             "WHERE e.team_id = $1 AND e.state = 'finalized'",
             config.team_id)
+        # W3: a parameterized slice of qa.v_history_long (migration 015) —
+        # the view owns the finalized-evals × sections join.
         section_rows = await conn.fetch(
-            "SELECT es.evaluation_id, es.section_id, es.numeric_score, es.binary_value "
-            "FROM qa.evaluation_sections es "
-            "JOIN qa.evaluations e ON e.id = es.evaluation_id "
-            "WHERE e.team_id = $1 AND e.state = 'finalized'",
+            "SELECT evaluation_id, section_id, numeric_score, binary_value "
+            "FROM qa.v_history_long WHERE team_id = $1",
             config.team_id)
         agent_rows = await conn.fetch(
             "SELECT name, canonical_name, active, supervisor_email "

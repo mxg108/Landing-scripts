@@ -1,30 +1,18 @@
-"""Abstract data provider with the Sheets↔Postgres read-path factory.
+"""Abstract data provider + the Postgres provider factory.
 
-The read path is selected by the ``QA_READ_PATH`` env var (ReadPathFlip
-§5), default ``sheets``:
-
-- ``sheets``   → ``SheetsProvider`` (today's path; reads Analyst_History).
-- ``postgres`` → ``PostgresProvider``, ``connect()``-ed before it is
-  handed out so its pool + roster snapshot are live.
-
-Flip and rollback are a single env change + redeploy — reads are
-stateless, so no per-team column is warranted. The factory re-checks the
-env on every call and rebuilds a team's provider if the mode changed, so
-the flag is honored without a process restart when Railway does an
-in-place env edit.
-
-NOTE (F3 scope): this flips **Path 1** (the provider-based endpoints —
-/agents, /datapoints, …). The /team analytics trio still reaches into
-``SheetsProvider._ws`` directly and is NOT yet safe under
-``QA_READ_PATH=postgres``; F4 makes that trio flag-aware via the Postgres
-row-source. Until F4 lands, keep the prod flag on ``sheets``.
+Every read serves from qa.* via a ``connect()``-ed ``PostgresProvider``
+(pool open, roster snapshot loaded). The flip completed 2026-07-15; the
+``QA_READ_PATH`` flag and its Sheets/shadow branches were deleted in F5
+(ReadPathFlip §5) — rollback is git revert + redeploy, and the
+Analyst_History sheet remains a write-side projection until retirement.
+``SheetsProvider`` survives in history_service for the parity harness,
+which instantiates it directly; the factory never returns it.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from abc import ABC, abstractmethod
 
 from backend.models.dashboard import EvaluationRecord
@@ -61,59 +49,31 @@ class DataProvider(ABC):
         return None
 
 
-# Per-team provider cache (keyed by team_id) + the read-path mode each
-# cached instance was built for, so a runtime flag flip rebuilds cleanly.
+# Per-team provider cache (keyed by team_id).
 _providers: dict[str, DataProvider] = {}
-_provider_modes: dict[str, str] = {}
 _build_lock = asyncio.Lock()
 
 
-def _read_path_mode() -> str:
-    """Current read-path selection — ``postgres`` or ``sheets`` (default)."""
-    return os.environ.get("QA_READ_PATH", "sheets").strip().lower()
-
-
 async def get_provider(team_id: str = "member_support") -> DataProvider:
-    """Return a cached, ready-to-use provider for *team_id*.
-
-    On the ``postgres`` path the returned instance is already
-    ``connect()``-ed (pool open, roster snapshot loaded). Reuses the same
-    instance across requests; rebuilds only when ``QA_READ_PATH`` changed
-    since the instance was cached.
-    """
-    mode = _read_path_mode()
+    """Return the cached, ``connect()``-ed PostgresProvider for *team_id*
+    (pool open, roster snapshot loaded), building it on first use."""
     cached = _providers.get(team_id)
-    if cached is not None and _provider_modes.get(team_id) == mode:
+    if cached is not None:
         return cached
 
     # Build under a lock so two concurrent first-hits don't each open a
     # Postgres pool. Re-check inside — another coroutine may have won.
     async with _build_lock:
         cached = _providers.get(team_id)
-        if cached is not None and _provider_modes.get(team_id) == mode:
+        if cached is not None:
             return cached
 
         from backend.config.team_config import get_team_config
-        config = get_team_config(team_id)
-
-        if mode == "postgres":
-            from backend.services.db_provider import PostgresProvider
-            provider: DataProvider = PostgresProvider(config=config)
-            await provider.connect()
-        else:
-            from backend.services.history_service import SheetsProvider
-            provider = SheetsProvider(config=config)
-
-        previous = _providers.get(team_id)
+        from backend.services.db_provider import PostgresProvider
+        provider = PostgresProvider(config=get_team_config(team_id))
+        await provider.connect()
         _providers[team_id] = provider
-        _provider_modes[team_id] = mode
-        logger.info("get_provider[%s] → %s (QA_READ_PATH=%s)",
-                    team_id, provider.name, mode)
-
-        # Best-effort close of a superseded provider (e.g. a Postgres pool
-        # left over from a mode flip) so we don't leak connections.
-        if previous is not None and previous is not provider:
-            await _close_provider(previous)
+        logger.info("get_provider[%s] → %s", team_id, provider.name)
         return provider
 
 
@@ -135,4 +95,3 @@ async def close_all_providers() -> None:
     for provider in list(_providers.values()):
         await _close_provider(provider)
     _providers.clear()
-    _provider_modes.clear()
