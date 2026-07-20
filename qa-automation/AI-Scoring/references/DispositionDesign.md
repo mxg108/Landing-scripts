@@ -1,115 +1,166 @@
-# Call Dispositions — persistence, ingestion, and the scoring-prompt primer
+# Command Center v1 — webhook ingestion, dispositions, holds & AI-CSAT grounding
 
-> Owner mandate (2026-07-19): the agent-selected end-of-call disposition
-> must stop being dropped and become a primer for scoring-prompt RAG.
-> Sequenced after July packaging (R2/R3, PR #118), before the Sandy
-> re-platform. First question asked by the owner: should moment data be
-> stripped as noise at all, or persisted for analysis and prompting?
+> v2 (2026-07-19) — reframed per owner directive: this is the **first
+> live version of the Command Center project**, not merely a disposition
+> column. The webhook stream becomes a continuously-documented source of
+> per-call truth; `command_center.calls` grows a column whenever a new
+> event field earns one (cheap now, by design); and the /score pipeline
+> grounds Gemini with that truth — dispositions first, hold intervals
+> and AI-CSAT alongside. Prompt-level RAG proper lands later this month
+> after the Sandy re-platform (unless re-specified); until then the
+> prompt gets EMPHASIZED plain injection.
 
 | | |
 |---|---|
-| **Status** | v1 draft — 2026-07-19, evidence-gathering complete |
-| **Registry** | LateStageDesign Tier 3 row → this doc |
-| **Related** | [[project_rag_coach_cards]] (scoring prompt = RAG consumer #1); August webhook automation (LateStageDesign Tier 3) |
+| **Status** | v2 — evidence complete (API probes, taxonomy payload, one-day Stats export analyzed) |
+| **Supersedes** | v1's phase gating (P2 Stats-interim / P3-August webhooks). Webhooks are NOW — they are this project |
+| **Related** | LandingOpsCommandCenter.md (CC phases; this implements the ingestion base), SQLMigration.md §4 (webhook_events / calls / the hold_intervals scrapping clause), [[project_rag_coach_cards]] |
 
 ---
 
-## 1. Evidence — where disposition data actually lives (probed 2026-07-19)
+## 1. Evidence base (all probed 2026-07-19)
 
-| Source | What it carries | Verdict |
-|---|---|---|
-| `GET /transcripts/{id}` "moment" lines | **Occurrence markers only**: `content` holds the moment TYPE name (`call_disposition`, `call_purpose_category`, `ai_csat_reboot`, …), `moment_type` is None, `name` is the AGENT. No values. | already fetched per scored call; proves *that* a disposition was set + when — never *what* |
-| `GET /call/{id}` | direction/duration/recordings/MOS/state… | **no disposition/CSAT/label keys** across 12 probed scored calls |
-| `command_center.calls.raw_call_details` | empty on recent rows | no free lunch |
-| Webhook **call events** | documented `call_dispositions` field in the event payload | the clean source — arrives with the **August webhook work** (`webhook_events` table is live but empty today) |
-| **Stats API** (async batch export) | per-call-center exports including dispositions | available TODAY: backfill + interim forward pull |
+- **Transcript "moments" are occurrence markers** — type name in
+  `content`, no values, `name` = the agent. The current
+  `FILTERED_MOMENT_TYPES` filter is rotted for this payload shape and
+  leaks `[<AgentName>] at <ts>` noise into every scoring prompt (D1).
+- **`GET /call/{id}` carries no disposition/CSAT/label keys** (12 scored
+  calls probed). Webhook **call events** carry `call_dispositions`; the
+  **Stats API** exports them batch-wise.
+- **Dispositions — List** (MS call center `4716644561813504`, office
+  `4839600547790848`; targets: Member Support Line `ERT` + Flight X):
+  9 categories × ~50 subdispositions, admin-editable. Policy: selection
+  REQUIRED 100% — but an agent pulled into a new call from the
+  disposition-select screen leaves that call undispositioned. Absence is
+  expected-normal, not an error.
+- **One-day Stats export (2026-07-15, 229 calls)**: join key `call_id`
+  (same id-space as our `dialpad_call_id`); disposition format
+  **`Category~Subdisposition`**, bare `Category` when the agent stopped
+  at level 1; **83% coverage** (38 empty — the back-to-back edge +
+  outbound); 43 distinct labels that day; also carries `date_queued`,
+  operator identity/email, per-agent `timezone`, `salesforce_activity_id`,
+  `note` — fields worth columns later, logged here per the
+  document-as-we-go rule. Sales onboards after the MS roadmap is robust.
 
-**Bonus finding — the current filter is rotted.** `FILTERED_MOMENT_TYPES`
-matches `moment_type` / `name`, but current payloads put the type in
-`content` — so marker lines sail PAST the filter and reach the scoring
-prompt as `[<AgentName>] at <timestamp>` lines (~10–40 per call of pure
-noise, plus the agent's name repeated). Whatever else this design does,
-fixing that is an immediate prompt-hygiene win.
+## 2. Principles
 
-## 2. The strip-vs-persist question (owner's framing)
-
-Strip-as-noise conflated two concerns; they get different answers:
-
-- **Prompt**: the markers carry no values, so un-filtering them buys the
-  model nothing — keep the scoring prompt lean. Exceptions once VALUES
-  exist (§5): the disposition and call-purpose values are context the
-  model should see. Verbatim marker spam stays out.
-- **Persistence**: keep EVERYTHING. Markers are ~40 tiny rows per call we
-  already hold in memory at Stage 1 — persisting them to
-  `dialpad_call_metadata.moments` (typed, timestamped) costs nothing and
-  unlocks analysis the sheet era never had: *did the agent set a
-  disposition* (compliance %), moment-density vs score, AI-CSAT
-  occurrence vs `csat_score` (a column waiting empty since 006).
-
-**Principle going forward: nothing Dialpad hands us gets discarded;
-filtering is a PROMPT decision, not a storage decision.**
+1. **Nothing Dialpad hands us gets discarded.** Filtering is a prompt
+   decision, never a storage decision. Markers →
+   `dialpad_call_metadata.moments`; webhook payloads → `webhook_events`
+   (append-only, already schema'd §4.1); per-call truths → columns.
+2. **`command_center.calls` is the per-call truth surface** the scoring
+   pipeline reads. New webhook fields that prove useful get columns as
+   they appear — the table is young; column adds are cheap NOW.
+3. **Ground the model with facts it otherwise guesses.** Disposition
+   (what the agent said the call WAS), hold intervals (Gemini
+   demonstrably hallucinates holds today), AI-CSAT. Emphasized plain
+   injection now; full RAG keying post-Sandy.
 
 ## 3. Schema (migration 016)
 
-- `qa.evaluations.dialpad_disposition TEXT` — the value the scoring/RAG/
-  one-pager surface consumes. NULL = never captured.
-- `command_center.calls.dialpad_disposition TEXT` — the ops-side copy
-  (CC dashboards, ratio queries), stamped by webhook ingestion.
-- No enum CHECK: disposition labels are Dialpad-admin-configured and
-  will drift; a CHECK would turn every ops edit into a migration.
-- Marker list → existing `dialpad_call_metadata` JSONB (`moments` key),
-  no schema change.
+**`command_center.calls`** gains:
+- `disposition_category TEXT`, `disposition TEXT` — split from the
+  `Category~Sub` form; bare-category selections leave `disposition`
+  NULL. No enum CHECK (admin-editable labels drift).
+- `ai_csat NUMERIC(3,1)` — Dialpad Ai CSAT. **Distinct from the
+  user-survey CSAT** (which has a `survey_id` and stays out of scope);
+  do NOT conflate with `qa.evaluations.csat_score`.
+- `disposition_source TEXT` — `webhook` / `stats_pull` (provenance for
+  the backfill-vs-live seam).
 
-## 4. Ingestion — three phases
+**`qa.evaluations`** gains `dialpad_disposition_category TEXT`,
+`dialpad_disposition TEXT`, `ai_csat NUMERIC(3,1)` — stamped at Stage 1
+from the CC match (§5) so the eval row is self-contained for analytics/
+one-pagers (same reproducibility instinct as formula/rubric stamps).
 
-- **P1 (now): Stage-1 marker persistence + filter fix.** Correct the
-  moment parse for the current payload shape (type in `content`), keep
-  markers out of the prompt, persist all of them to
-  `dialpad_call_metadata.moments`.
-- **P2 (now): Stats-API disposition puller.** Operator-run/nightly
-  script: initiate a stats export per call center + date range, join per
-  call, fill `dialpad_disposition` on both tables. Doubles as the HISTORIC
-  BACKFILL (answering the re-fetch-vs-forward-only question: the Stats
-  API makes backfill batch-cheap — no per-call re-fetch under rate
-  limits).
-- **P3 (August): webhook ingestion.** The call-event `call_dispositions`
-  field stamps both tables at event time — synchronous availability,
-  which is what makes the prompt primer reliable (§5).
+**`command_center.hold_intervals` RETURNS.** Scrapped in SQLMigration
+§4.4 with an explicit clause — *"bring it back the day a real query
+needs the per-cycle detail"* — and that day is here: the consumer is
+scoring-prompt grounding (per-cycle timing, not just the
+`total_hold_seconds` rollup, because the prompt says WHERE in the call
+holds happened). Shape: `id, team_id, dialpad_call_id, call_id FK→
+calls, started_at, ended_at, seconds, ended_by ('connected'|'hangup')`.
+Derivation rule (§4.1, tested): **no `unhold` event exists — a hold
+cycle ends at the next `connected` or `hangup`.** Rows materialize at
+ingest time; `total_hold_seconds` stays as the rollup.
 
-## 5. Scoring-prompt primer (the RAG rework)
+## 4. Webhook ingestion (the CC v1 core)
 
-Timing is the crux: scoring runs minutes-to-hours after the call.
-Stats-API pulls are batch/next-day, so under P2 the disposition often
-does NOT exist yet at scoring time — injection would silently cover only
-late-scored calls. Therefore:
+- FastAPI receiver on the existing app (Railway). Verifies Dialpad's
+  JWT signature (secret in env), appends to `webhook_events` verbatim,
+  then folds into `calls` (upsert by `(team_id, dialpad_call_id)`):
+  state transitions, `call_dispositions` → the two columns +
+  `disposition_source='webhook'`, AI-CSAT when present, hold-cycle
+  materialization into `hold_intervals`.
+- **Sandy portability**: the receiver is one route + pure fold
+  functions; at re-platform the only Dialpad-side change is updating the
+  subscription URL (one API call). Keep the fold logic free of
+  FastAPI/Railway specifics.
+- Subscription setup (operator, one-time): create the event subscription
+  for the MS call center; document id + secret in `.env`.
+- **Event documentation discipline**: every observed `event_kind`/field
+  we don't yet consume gets a line in this doc's appendix as it
+  appears — the constantly-documented catalog the owner asked for.
 
-- The prompt primer ships gated on P3 (webhooks), when the value is
-  present at scoring time deterministically.
-- Injection shape: a `Call context` block ahead of the transcript —
-  disposition + call purpose (when captured) — priming section relevance
-  (e.g. disposition "Lockout resolved" primes Process Adherence and Call
-  Resolution expectations) and, in the SopRag cascade, keying retrieval
-  toward the disposition's SOP family before Stage-A embedding search.
-- Until P3, the persisted value serves analytics, the one-pager, and
-  coaching views — no silent partial prompt coverage.
+## 5. /score integration — the grounding block
 
-## 6. Open questions (owner/ops)
+At Stage 1, after the transcript fetch:
 
-1. Is disposition selection REQUIRED for MS agents in the Dialpad admin
-   config, and what is the configured label list? (Drives how much
-   compliance signal the marker data carries, and the primer's wording.)
-2. Verify the Stats export's per-call join key + disposition field names
-   on a real export before building P2 (docs are thin; one manual export
-   from the admin UI settles it).
-3. Should `csat_score` ride along? The AI-CSAT marker exists per call and
-   the column has waited since 006 — same Stats/webhook sources; near-zero
-   marginal cost inside P2/P3.
+1. **Match**: `command_center.calls` by
+   `dialpad_entry_point_call_id OR dialpad_call_id OR
+   dialpad_master_call_id` (in that order — entry-point id is what the
+   eval usually carries; indexes exist: `uq_calls_team_call_id`, 014's
+   entry-point index pattern extends to CC in 016).
+2. **Pull**: disposition pair, `ai_csat`, `total_hold_seconds`, and the
+   call's `hold_intervals` rows.
+3. **Inject** a `Call context (verified system data)` block ahead of the
+   transcript, EMPHASIZED:
+   - *"The agent classified this call as: Access & Entry — Smart-lock
+     failure. Score the call within reason FOR that disposition — the
+     expectations of each section apply as they pertain to this call
+     type."*
+   - *"Verified hold record: 2 holds (1:42 at 03:15, 0:58 at 11:02).
+     Do NOT infer holds beyond this record."* — or *"Verified: no holds
+     occurred on this call."* (kills the hallucinated-hold class)
+   - Absence path: *"No disposition was captured for this call
+     (back-to-back handling) — score on transcript evidence alone."*
+4. Stamp the three `qa.evaluations` columns in the same Stage-1 write.
 
-## 7. Slices
+This is deliberately plain-injection: the RAG rework (disposition keying
+into SopRag retrieval, coach-cards corpus) follows the Sandy re-platform
+later this month per the owner's sequencing.
+
+## 6. AI-CSAT surfacing
+
+`ai_csat` rides the same webhook/stats sources into both tables. Frontend:
+the `/scorecard` route's stale X/5 badge (not SOT for anything) is
+replaced by AI-CSAT — clearly labeled as Dialpad Ai's estimate, not a
+member survey. (Frontend swap is its own small slice, C5.)
+
+## 7. Historic backfill — Stats API
+
+`scripts/pull_dispositions.py` (B-series conventions): initiate a Stats
+export per call center + date range, poll, download, join on
+`dialpad_call_id`, fill both tables' columns with
+`disposition_source='stats_pull'` for rows the webhook era predates.
+Batch-cheap; the 2026-07-15 sample proves fields + join. Also serves as
+the catch-up sweep if the receiver ever drops events.
+
+## 8. Slices
 
 | # | Slice | Checkpoint |
 |---|---|---|
-| D1 | filter fix + marker persistence (`dialpad_client` parse, Stage-1 metadata write) | pytest on the parse against the REAL payload shape; prompt contains zero marker lines; metadata carries the full set |
-| D2 | migration 016 + Stats-API puller (`scripts/pull_dispositions.py`, B-series conventions) + backfill run | dry-run join coverage report; spot-check vs Dialpad UI |
-| D3 | webhook stamp (folds into the August webhook slice) | event → both columns, idempotent |
-| D4 | prompt primer + SopRag keying (gated on D3) | prompt-build pytest; before/after scoring comparison on a sampled week |
+| C0 | D1 from v1: moment-parse fix + marker persistence | prompt has zero marker lines; `dialpad_call_metadata.moments` populated |
+| C1 | migration 016 (CC columns, qa.evaluations columns, hold_intervals) | runner up/down clean on prod |
+| C2 | webhook receiver + fold (events→calls/holds/disposition/ai_csat) + subscription setup | replayed synthetic event fixtures → exact rows; pytest on fold + hold-cycle derivation (incl. reconnect flush); signature verify |
+| C3 | /score triple-key match + grounding block + eval-row stamps | prompt-build pytest (disposition present / absent / holds / no-holds); shadow week: log-only compare of scored calls with vs without context |
+| C4 | Stats-API backfill puller | coverage report; spot-check vs Dialpad UI |
+| C5 | AI-CSAT frontend swap on /scorecard | stale X/5 gone; labeled Ai estimate |
+
+## 9. Appendix — webhook event/field catalog (living)
+
+| Field / event | Seen | Consumed by | Notes |
+|---|---|---|---|
+| states: ringing, connected, hold, hangup, recording, call_transcription, recap_summary | §4.1 (design-era) | calls fold, hold_intervals | no `unhold` — cycle ends on next connected/hangup |
+| `call_dispositions` | docs (Call Events) | disposition columns | verify exact payload shape on first live event |
+| Stats export: `date_queued`, operator identity, per-agent `timezone`, `salesforce_activity_id`, `note` | 07-15 export | — (candidates) | columns when a consumer appears |
