@@ -1,0 +1,10 @@
+{
+  "teams": {
+    "member_support": {
+      "dialpad": {
+        "target_call_center_ids": ["4716644561813504", "5699048497577984"],
+        "office_id": "4839600547790848"
+      }
+    }
+  }
+}
