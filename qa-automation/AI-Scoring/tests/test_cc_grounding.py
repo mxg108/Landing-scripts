@@ -136,6 +136,27 @@ def test_no_context_renders_nothing():
     assert build_call_context_block(None) == ""
 
 
+def test_stats_row_never_claims_verified_no_holds():
+    """A stats_pull-created row carries total_hold_seconds=0 by schema
+    DEFAULT — that is NOT hold truth (the dispositions export has no
+    hold data). The block must forbid fabrication without asserting
+    absence."""
+    block = build_call_context_block(
+        _ctx(has_hold_truth=False, holds=[], total_hold_seconds=0)
+    )
+    assert "no holds occurred" not in block
+    assert "No verified hold record is available" in block
+    assert "Do NOT state specific hold counts" in block
+
+
+def test_stats_row_ignores_any_hold_fields():
+    """has_hold_truth=False wins even if hold fields are somehow set —
+    the provenance flag is the gate, not the data."""
+    block = build_call_context_block(_ctx(has_hold_truth=False))
+    assert "Verified hold record" not in block
+    assert "No verified hold record is available" in block
+
+
 # ---------------------------------------------------------------------------
 # build_prompt — placement ahead of the transcript
 # ---------------------------------------------------------------------------

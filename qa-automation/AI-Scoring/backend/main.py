@@ -81,7 +81,24 @@ async def _lifespan(app: FastAPI):
         os.environ.get("DATABASE_URL"),
         strict=os.environ.get("QA_VERSION_SHIP_STRICT", "") == "1",
     )
+    # Interim CC ingestion: Stats-API dispositions pull on a loop, gated
+    # by CC_STATS_PULL_INTERVAL_MIN (Railway env). Off when unset — local
+    # dev and tests never hit the Stats API.
+    import asyncio
+    from backend.services import disposition_pull
+    _pull_task = None
+    _pull_interval = disposition_pull.periodic_interval_minutes()
+    if _pull_interval is not None:
+        _pull_task = asyncio.create_task(
+            disposition_pull.run_periodic_pull(_pull_interval)
+        )
     yield
+    if _pull_task is not None:
+        _pull_task.cancel()
+        try:
+            await _pull_task
+        except asyncio.CancelledError:
+            pass
     # Close the PostgresProvider pools built by the get_provider factory.
     from backend.services.data_provider import close_all_providers
     await close_all_providers()

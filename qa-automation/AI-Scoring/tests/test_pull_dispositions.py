@@ -1,8 +1,16 @@
-"""Unit tests for the C4 Stats-export parse (pure helpers)."""
+"""Unit tests for the Stats-export parse + pull-loop gating (pure
+helpers in backend/services/disposition_pull.py; the CLI re-exports)."""
 
 from __future__ import annotations
 
-from scripts.pull_dispositions import parse_export_csv, split_disposition
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+from backend.services.disposition_pull import (
+    parse_export_csv,
+    periodic_interval_minutes,
+    split_disposition,
+)
 
 # Mirrors the 2026-07-15 sample export header exactly.
 _HEADER = (
@@ -64,3 +72,29 @@ def test_parse_real_sample_shape():
     assert record.call_id == "6529997769220096"
     assert record.disposition_category == "Reservation & Stay Changes"
     assert record.disposition is None
+
+
+def test_parse_localizes_naive_clocks_via_row_timezone():
+    """Export timestamps are NAIVE in the row's own `timezone` column
+    (America/Mexico_City in the sample) — the parse localizes them so
+    the created calls row carries UTC-aware clocks."""
+    text = "\n".join([_HEADER, _row("111", "Billing")])
+    (record,) = parse_export_csv(text)
+    expected = datetime(2026, 7, 15, 0, 6, 4,
+                        tzinfo=ZoneInfo("America/Mexico_City"))
+    assert record.connected_at == expected
+    assert record.connected_at.astimezone(timezone.utc).tzinfo is timezone.utc
+    assert record.direction == "inbound"
+    assert record.agent_name == "Andrei Trejo"
+
+
+def test_periodic_interval_gating(monkeypatch):
+    """The in-app loop only runs when CC_STATS_PULL_INTERVAL_MIN is a
+    positive number — local dev and tests never hit the Stats API."""
+    monkeypatch.delenv("CC_STATS_PULL_INTERVAL_MIN", raising=False)
+    assert periodic_interval_minutes() is None
+    for bad in ("", "abc", "0", "-5"):
+        monkeypatch.setenv("CC_STATS_PULL_INTERVAL_MIN", bad)
+        assert periodic_interval_minutes() is None
+    monkeypatch.setenv("CC_STATS_PULL_INTERVAL_MIN", "30")
+    assert periodic_interval_minutes() == 30.0

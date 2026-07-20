@@ -25,13 +25,14 @@ def _at(seconds: int) -> datetime:
 
 @pytest_asyncio.fixture
 async def pg_ctx(clean_pg: asyncpg.Connection, pg_dsn: str, monkeypatch):
-    """004/005/006/016 + the eval_store pool (cc_context reads through it)
-    pointed at the container DB."""
+    """004/005/006/016/017 + the eval_store pool (cc_context reads
+    through it) pointed at the container DB."""
     for name in (
         "004_create_schemas_and_teams.sql",
         "005_command_center_tables.sql",
         "006_qa_tables.sql",
         "016_cc_dispositions_ai_csat_holds.sql",
+        "017_calls_seen_via_stats_pull.sql",
     ):
         await clean_pg.execute((MIGRATIONS_DIR / name).read_text(encoding="utf-8"))
     monkeypatch.setenv("DATABASE_URL", pg_dsn)
@@ -146,3 +147,28 @@ async def test_holds_pulled_in_order(pg_ctx: asyncpg.Connection) -> None:
     assert ctx is not None
     assert [(h.seconds,) for h in ctx.holds] == [(102,), (58,)]
     assert ctx.holds[0].started_at == _at(195)
+
+
+@pytest.mark.asyncio
+async def test_webhook_row_has_hold_truth(pg_ctx: asyncpg.Connection) -> None:
+    await _seed_call(pg_ctx)
+    ctx = await fetch_call_context("member_support", dialpad_call_id="DP-LEG")
+    assert ctx is not None
+    assert ctx.has_hold_truth is True
+
+
+@pytest.mark.asyncio
+async def test_stats_pull_row_lacks_hold_truth(
+    pg_ctx: asyncpg.Connection,
+) -> None:
+    """A stats_pull-created row (migration 017) grounds dispositions but
+    NOT holds — total_hold_seconds=0 there is a schema default, and the
+    block must not render it as a verified no-holds claim."""
+    await _seed_call(
+        pg_ctx, seen_via="stats_pull",
+        disposition_source="stats_pull", total_hold_seconds=0,
+    )
+    ctx = await fetch_call_context("member_support", dialpad_call_id="DP-LEG")
+    assert ctx is not None
+    assert ctx.has_hold_truth is False
+    assert ctx.disposition_category == "Access & Entry"
