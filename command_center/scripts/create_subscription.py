@@ -66,44 +66,82 @@ def _api_key() -> str:
     return key
 
 
+def _check(resp: httpx.Response, doing: str) -> dict:
+    """raise_for_status, but PRINT the response body first — Dialpad's 4xx
+    bodies name the offending field, and losing them costs a debug cycle."""
+    if resp.is_error:
+        print(f"\nERROR while {doing}: HTTP {resp.status_code}", file=sys.stderr)
+        print(resp.text, file=sys.stderr)
+        resp.raise_for_status()
+    return resp.json()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--url", required=True,
+    parser.add_argument("--url",
                         help="Public receiver URL (…/api/webhooks/dialpad)")
     parser.add_argument("--call-center-id", default=MS_CALL_CENTER_ID,
                         help=f"Dialpad call center id (default: MS {MS_CALL_CENTER_ID})")
     parser.add_argument("--secret", default=None,
                         help="Signing secret; generated when omitted")
+    parser.add_argument("--webhook-id", default=None,
+                        help="Reuse an existing webhook (whose secret you "
+                             "have) instead of creating a new one")
+    parser.add_argument("--delete-webhook", default=None, metavar="ID",
+                        help="Delete a webhook by id and exit (cleanup for "
+                             "orphaned/lost-secret webhooks)")
     args = parser.parse_args()
 
-    secret = args.secret or _secrets.token_urlsafe(32)
     headers = {"Authorization": f"Bearer {_api_key()}"}
 
-    with httpx.Client(headers=headers, timeout=20) as client:
-        resp = client.post(
-            f"{BASE_URL}/webhooks",
-            json={"hook_url": args.url, "secret": secret},
-        )
-        resp.raise_for_status()
-        webhook = resp.json()
-        webhook_id = webhook.get("id")
-        print(f"webhook_id: {webhook_id}")
+    if args.delete_webhook:
+        with httpx.Client(headers=headers, timeout=20) as client:
+            resp = client.delete(f"{BASE_URL}/webhooks/{args.delete_webhook}")
+            _check(resp, f"deleting webhook {args.delete_webhook}")
+        print(f"webhook {args.delete_webhook} deleted")
+        return
 
-        resp = client.post(
-            f"{BASE_URL}/subscriptions/call",
-            json={
-                "webhook_id": webhook_id,
-                "target_id": int(args.call_center_id),
-                "target_type": "callcenter",
-                "call_states": CALL_STATES,
-            },
+    if not args.url and not args.webhook_id:
+        parser.error("--url is required (unless --delete-webhook)")
+    if args.webhook_id and not args.secret:
+        parser.error("--webhook-id requires --secret (the webhook's existing secret)")
+
+    secret = args.secret or _secrets.token_urlsafe(32)
+    # Printed BEFORE any API call: if a later step fails, the webhook that
+    # was already created is still usable — a lost secret orphans it.
+    print(f"DIALPAD_WEBHOOK_SECRET={secret}")
+
+    with httpx.Client(headers=headers, timeout=20) as client:
+        if args.webhook_id:
+            webhook_id = args.webhook_id
+            print(f"webhook_id: {webhook_id} (reused)")
+        else:
+            webhook = _check(
+                client.post(
+                    f"{BASE_URL}/webhooks",
+                    json={"hook_url": args.url, "secret": secret},
+                ),
+                "creating webhook",
+            )
+            webhook_id = webhook.get("id")
+            print(f"webhook_id: {webhook_id}")
+
+        sub = _check(
+            client.post(
+                f"{BASE_URL}/subscriptions/call",
+                json={
+                    "webhook_id": webhook_id,
+                    "target_id": int(args.call_center_id),
+                    "target_type": "callcenter",
+                    "call_states": CALL_STATES,
+                },
+            ),
+            "creating call-event subscription",
         )
-        resp.raise_for_status()
-        sub = resp.json()
         print(f"subscription_id: {sub.get('id')}")
 
     print()
-    print("Add to qa-automation/AI-Scoring/.env:")
+    print("Add to qa-automation/AI-Scoring/.env (and Railway env):")
     print(f"  DIALPAD_WEBHOOK_SECRET={secret}")
     print(f"  # dialpad webhook_id={webhook_id} subscription_id={sub.get('id')}")
 
