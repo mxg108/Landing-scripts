@@ -177,6 +177,9 @@ def build_draft_row(scorecard: "ScorecardWithMeta", config: "TeamConfig") -> dic
         "dialpad_call_metadata": json.dumps({
             "sop_used": scorecard.sop_used,
             "stage1_flags": sorted({f for s in scorecard.sections for f in s.flags}),
+            # Full Dialpad marker set, typed + timestamped (DispositionDesign
+            # C0: filtering is a prompt decision, never a storage decision).
+            "moments": scorecard.moments_display,
         }),
     }
 

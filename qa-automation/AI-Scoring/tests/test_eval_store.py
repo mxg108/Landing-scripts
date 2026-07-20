@@ -109,6 +109,28 @@ class TestBuildDraftRow:
         assert meta["stage1_flags"] == ["long_hold"]
         assert meta["sop_used"] == "Billing SOP"
 
+    def test_full_marker_set_persisted_to_metadata(self, ms_config):
+        """DispositionDesign C0 checkpoint: dialpad_call_metadata.moments
+        carries the FULL marker set, including types the old prompt filter
+        used to strip — typed, timestamped, with the agent name."""
+        moments = [
+            {"timestamp": "0:30", "time": "2026-07-15T10:00:30Z",
+             "type": "call_purpose", "agent": "Jane Agent"},
+            {"timestamp": "1:00", "time": "2026-07-15T10:01:00Z",
+             "type": "whole_call_summary_fragment", "agent": "Jane Agent"},
+            {"timestamp": "5:12", "time": "2026-07-15T10:05:12Z",
+             "type": "call_disposition", "agent": "Jane Agent"},
+        ]
+        row = build_draft_row(_scorecard(ms_config, moments_display=moments), ms_config)
+        meta = json.loads(row["dialpad_call_metadata"])
+        assert meta["moments"] == moments
+
+    def test_no_markers_persists_empty_list(self, ms_config):
+        """Transcript-fetch failures hand the writer an empty marker list —
+        metadata records [] (we looked and found none), not a missing key."""
+        meta = json.loads(build_draft_row(_scorecard(ms_config), ms_config)["dialpad_call_metadata"])
+        assert meta["moments"] == []
+
 
 # ---------------------------------------------------------------------------
 # build_draft_sections
