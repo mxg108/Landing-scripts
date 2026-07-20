@@ -1,0 +1,59 @@
+{
+  "description": "Synthetic MS call lifecycle for the C2 replay checkpoint: ringing → connected → hold → connected (reconnect flush, 102s) → hold → hangup on hold (58s), disposition + AI-CSAT on the hangup event. Timestamps are epoch-ms from 2026-07-15T10:00:00Z.",
+  "team_id": "member_support",
+  "events": [
+    {
+      "call_id": "DP-C2-1",
+      "master_call_id": "DP-C2-M",
+      "entry_point_call_id": "DP-C2-E",
+      "state": "ringing",
+      "event_timestamp": 1784109605000,
+      "date_started": 1784109600000,
+      "date_rang": 1784109605000,
+      "direction": "inbound",
+      "external_number": "+15550100",
+      "internal_number": "+15550999",
+      "target": {"id": 4716644561813504, "type": "callcenter", "name": "Member Support Line"},
+      "contact": {"name": "Pat Caller", "email": "pat@example.com"}
+    },
+    {
+      "call_id": "DP-C2-1",
+      "master_call_id": "DP-C2-M",
+      "state": "connected",
+      "event_timestamp": 1784109630000,
+      "date_started": 1784109600000,
+      "date_connected": 1784109630000,
+      "target": {"id": 8123, "type": "user", "name": "Jane Agent"}
+    },
+    {
+      "call_id": "DP-C2-1",
+      "state": "hold",
+      "event_timestamp": 1784109795000,
+      "date_started": 1784109600000
+    },
+    {
+      "call_id": "DP-C2-1",
+      "state": "connected",
+      "event_timestamp": 1784109897000,
+      "date_started": 1784109600000,
+      "date_connected": 1784109630000,
+      "target": {"id": 8123, "type": "user", "name": "Jane Agent"}
+    },
+    {
+      "call_id": "DP-C2-1",
+      "state": "hold",
+      "event_timestamp": 1784110262000,
+      "date_started": 1784109600000
+    },
+    {
+      "call_id": "DP-C2-1",
+      "state": "hangup",
+      "event_timestamp": 1784110320000,
+      "date_started": 1784109600000,
+      "date_ended": 1784110320000,
+      "duration": 720000,
+      "call_dispositions": "Access & Entry~Smart-lock failure",
+      "ai_csat": 4.5
+    }
+  ]
+}

@@ -27,6 +27,15 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+# Make `command_center.*` (top-level repo package) importable — same
+# walk-up-to-repo-root pattern tests/integration/conftest.py uses for
+# `database.runner`.
+_p = _REPO_ROOT
+while _p.parent != _p and not (_p / "database" / "migrations").is_dir():
+    _p = _p.parent
+if str(_p) not in sys.path:
+    sys.path.insert(0, str(_p))
+
 from backend.config import history_layout  # noqa: E402
 from backend.config.team_config import TeamConfig, _assemble_rubric_block  # noqa: E402
 from backend.services import eval_store  # noqa: E402
