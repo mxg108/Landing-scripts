@@ -223,10 +223,6 @@ TRANSCRIPT_CONTEXT_BLOCK = """
 Use this alongside the audio to improve accuracy. Speaker labels and content are from Dialpad.
 
 {transcript_text}
-
-=== DIALPAD SIGNAL MOMENTS ===
-These are events automatically detected by Dialpad during the call:
-{moments_text}
 """
 
 
@@ -243,11 +239,11 @@ def _build_sop_missing_note(config: TeamConfig) -> str:
 def build_prompt(
     config: TeamConfig,
     transcript_text: str = "",
-    moments_text: str = "",
     sop_title: str = "",
     sop_content: str = "",
     agent_name: str = "",
     extra_notes: str = "",
+    call_context_text: str = "",
 ) -> str:
     """Assemble the full user prompt for a scoring request."""
     parts = [build_scoring_rubric(config)]
@@ -263,12 +259,14 @@ def build_prompt(
     else:
         parts.append(_build_sop_missing_note(config))
 
+    # DispositionDesign §5: the verified-system-data grounding block rides
+    # AHEAD of the transcript.
+    if call_context_text:
+        parts.append(call_context_text)
+
     if transcript_text:
-        moments_str = moments_text if moments_text else "No moments detected."
         parts.append(
-            TRANSCRIPT_CONTEXT_BLOCK.format(
-                transcript_text=transcript_text, moments_text=moments_str
-            )
+            TRANSCRIPT_CONTEXT_BLOCK.format(transcript_text=transcript_text)
         )
 
     if agent_name:

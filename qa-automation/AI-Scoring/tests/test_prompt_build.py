@@ -150,6 +150,21 @@ def test_numeric_non_na_section_schema_unchanged(sales: TeamConfig):
     assert '"yn_value": null' in block
 
 
+def test_prompt_has_zero_dialpad_marker_lines(config: TeamConfig):
+    """DispositionDesign C0 checkpoint: Dialpad moments are occurrence
+    markers with no values — the SIGNAL MOMENTS block is gone from the
+    prompt entirely. Markers persist to dialpad_call_metadata.moments
+    instead (filtering is a prompt decision, never a storage decision)."""
+    p = build_prompt(
+        config,
+        transcript_text="Speaker A: hello\nSpeaker B: hi",
+        sop_title="",
+        sop_content="",
+    )
+    assert "SIGNAL MOMENTS" not in p
+    assert "] at " not in p
+
+
 def test_full_prompt_assembles_without_error(config: TeamConfig):
     p = build_prompt(
         config,

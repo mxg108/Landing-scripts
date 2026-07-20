@@ -26,19 +26,6 @@ class DialpadRateLimited(Exception):
 class NoRecordingAvailable(Exception):
     """Raised when a call has no associated recording to download."""
 
-# Dialpad moment types to strip before passing to the scoring model (noise)
-FILTERED_MOMENT_TYPES = {
-    "whole_call_summary_fragment",
-    "whole_call_summary",
-    "ner",
-    "action_item_v2",
-    "ai_csat_reboot",
-    "call_disposition",
-    "call_purpose",
-    "question",
-}
-
-
 def _headers() -> Optional[dict]:
     token = os.getenv("DIALPAD_API_KEY")
     if not token:
@@ -507,17 +494,86 @@ async def get_call_details(call_id: str) -> dict:
 # Transcript + moments
 # ---------------------------------------------------------------------------
 
+def parse_transcript_payload(data: dict) -> dict:
+    """
+    Parse a GET /transcripts/{id} payload. Pure — testable without HTTP.
+
+    Moment lines are occurrence markers: the moment TYPE arrives in
+    `content` (`moment_type` is None in current payloads) and `name` is
+    the AGENT, not the type. Markers carry no values, so none reach the
+    scoring prompt; ALL of them are kept in `moments_display` for the
+    frontend and Stage-1 persistence to `dialpad_call_metadata.moments`
+    (filtering is a prompt decision, never a storage decision —
+    DispositionDesign §2).
+    """
+    lines = data.get("lines", [])
+    transcript_lines = []        # flat text for the prompt
+    transcript_display = []      # structured list for the frontend
+    moments_display = []         # full marker set: frontend + Stage-1 persistence
+    call_start = None            # first timestamp, used to compute relative mm:ss
+
+    def _mmss(ts_raw: str) -> str:
+        try:
+            ts_dt = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return ""
+        if call_start is None:
+            return ""
+        elapsed = (ts_dt - call_start).total_seconds()
+        mins, secs = divmod(int(elapsed), 60)
+        return f"{mins}:{secs:02d}"
+
+    for line in lines:
+        line_type = line.get("type", "")
+        ts_raw = line.get("time", "")
+
+        if line_type == "transcript":
+            name = line.get("name", "Unknown")
+            content = line.get("content", "").strip()
+            if not content:
+                continue
+
+            if ts_raw and call_start is None:
+                try:
+                    call_start = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                except (ValueError, TypeError):
+                    pass
+
+            transcript_lines.append(f"{name}: {content}")
+            transcript_display.append({
+                "timestamp": _mmss(ts_raw) if ts_raw else "",
+                "speaker": name,
+                "text": content,
+            })
+
+        elif line_type in ("moment", "real_time_moment", "custom_moment"):
+            moment_type = line.get("moment_type") or line.get("content", "").strip()
+            if not moment_type:
+                continue
+
+            moments_display.append({
+                "timestamp": _mmss(ts_raw) if ts_raw else "",
+                "time": ts_raw,
+                "type": moment_type,
+                "agent": line.get("name", ""),
+            })
+
+    return {
+        "transcript_text": "\n".join(transcript_lines),
+        "transcript_display": transcript_display,
+        "moments_display": moments_display,
+    }
+
+
 async def get_transcript(call_id: str) -> dict:
     """
-    Fetch the full transcript for a call.
-    Returns a dict with 'transcript_text' and 'moments_text' ready for the prompt.
-    Returns empty strings if DIALPAD_API_KEY is not configured.
+    Fetch the full transcript for a call and parse it via
+    `parse_transcript_payload`. On any failure (no API key, HTTP error,
+    network error) returns empty shapes — scoring proceeds from audio only.
     """
+    empty = {"transcript_text": "", "transcript_display": [], "moments_display": []}
     if not os.getenv("DIALPAD_API_KEY"):
-        return {
-            "transcript_text": "",
-            "moments_text": "Dialpad not configured — transcript unavailable.",
-        }
+        return empty
 
     try:
         async with _SEMAPHORE, httpx.AsyncClient() as client:
@@ -530,83 +586,12 @@ async def get_transcript(call_id: str) -> dict:
             data = response.json()
     except httpx.HTTPStatusError as e:
         print(f"[dialpad_client] Transcript fetch failed ({e.response.status_code}): {e}")
-        return {
-            "transcript_text": "",
-            "moments_text": f"Transcript unavailable (HTTP {e.response.status_code}). Scoring from audio only.",
-        }
+        return empty
     except httpx.RequestError as e:
         print(f"[dialpad_client] Transcript request error: {e}")
-        return {
-            "transcript_text": "",
-            "moments_text": "Transcript unavailable (network error). Scoring from audio only.",
-        }
+        return empty
 
-    lines = data.get("lines", [])
-    transcript_lines = []        # flat text for the prompt
-    transcript_display = []      # structured list for the frontend
-    moments = []                 # flat text for the prompt
-    moments_display = []         # structured list for the frontend
-    call_start = None            # first timestamp, used to compute relative mm:ss
-
-    for line in lines:
-        line_type = line.get("type", "")
-        ts_raw = line.get("time", "")
-
-        if line_type == "transcript":
-            name = line.get("name", "Unknown")
-            content = line.get("content", "").strip()
-            if not content:
-                continue
-
-            # Parse timestamp to compute mm:ss offset from call start
-            ts_display = ""
-            if ts_raw:
-                try:
-                    from datetime import datetime as dt
-                    ts_dt = dt.fromisoformat(ts_raw.replace("Z", "+00:00"))
-                    if call_start is None:
-                        call_start = ts_dt
-                    elapsed = (ts_dt - call_start).total_seconds()
-                    mins, secs = divmod(int(elapsed), 60)
-                    ts_display = f"{mins}:{secs:02d}"
-                except (ValueError, TypeError):
-                    ts_display = ""
-
-            transcript_lines.append(f"{name}: {content}")
-            transcript_display.append({
-                "timestamp": ts_display,
-                "speaker": name,
-                "text": content,
-            })
-
-        elif line_type in ("moment", "real_time_moment", "custom_moment"):
-            moment_type = line.get("moment_type") or line.get("name", "")
-            if not moment_type or moment_type in FILTERED_MOMENT_TYPES:
-                continue
-
-            ts_display = ""
-            if ts_raw and call_start is not None:
-                try:
-                    from datetime import datetime as dt
-                    ts_dt = dt.fromisoformat(ts_raw.replace("Z", "+00:00"))
-                    elapsed = (ts_dt - call_start).total_seconds()
-                    mins, secs = divmod(int(elapsed), 60)
-                    ts_display = f"{mins}:{secs:02d}"
-                except (ValueError, TypeError):
-                    ts_display = ""
-
-            moments.append(f"[{moment_type}] at {ts_raw}")
-            moments_display.append({
-                "timestamp": ts_display,
-                "type": moment_type,
-            })
-
-    return {
-        "transcript_text": "\n".join(transcript_lines),
-        "moments_text": "\n".join(moments) if moments else "No relevant moments detected.",
-        "transcript_display": transcript_display,
-        "moments_display": moments_display,
-    }
+    return parse_transcript_payload(data)
 
 
 # ---------------------------------------------------------------------------

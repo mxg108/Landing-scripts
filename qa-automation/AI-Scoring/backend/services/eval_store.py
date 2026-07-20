@@ -174,9 +174,18 @@ def build_draft_row(scorecard: "ScorecardWithMeta", config: "TeamConfig") -> dic
         "ai_provider_primary": "gemini",
         "scoring_status": scoring_status,
         "human_review_required_at": datetime.now(timezone.utc) if flagged_review else None,
+        # DispositionDesign §5 step 4 — CC-match stamps (migration 016).
+        # Self-contained on the eval row for analytics/one-pagers, same
+        # reproducibility instinct as the formula/rubric stamps.
+        "dialpad_disposition_category": scorecard.dialpad_disposition_category,
+        "dialpad_disposition": scorecard.dialpad_disposition,
+        "ai_csat": scorecard.ai_csat,
         "dialpad_call_metadata": json.dumps({
             "sop_used": scorecard.sop_used,
             "stage1_flags": sorted({f for s in scorecard.sections for f in s.flags}),
+            # Full Dialpad marker set, typed + timestamped (DispositionDesign
+            # C0: filtering is a prompt decision, never a storage decision).
+            "moments": scorecard.moments_display,
         }),
     }
 
