@@ -393,12 +393,13 @@ function renderPanel(data) {
 function buildScorecardPanel(jobId, sc, filename, callId, sheetsRow) {
   _scorecardData[jobId] = sc;
 
-  const numericScores = sc.sections
-    .filter(s => s.score_type === 'numeric' && s.score !== null)
-    .map(s => s.score);
-  const avg = numericScores.length
-    ? (numericScores.reduce((a, b) => a + b, 0) / numericScores.length).toFixed(2)
-    : 'N/A';
+  // C5 (DispositionDesign §6): the old badge here averaged the numeric
+  // sections into an X/5 that was SOT for nothing. It is replaced by
+  // Dialpad's AI-CSAT estimate — clearly labeled as Ai, NOT a member
+  // survey — and omitted entirely when Dialpad produced none.
+  const aiCsatBadge = (sc.ai_csat !== null && sc.ai_csat !== undefined)
+    ? `<span class="scorecard-avg" title="Dialpad Ai CSAT — model estimate, not a member survey">${sc.ai_csat}<span style="font-family:'DM Mono'; font-size:0.75rem; color:rgba(255,255,255,0.7);">/5 Ai CSAT</span></span>`
+    : '';
 
   const flagged = sc.flagged_long_call;
   const panel = document.createElement('div');
@@ -419,7 +420,7 @@ function buildScorecardPanel(jobId, sc, filename, callId, sheetsRow) {
       </div>
       <div style="display:flex; gap:0.5rem; align-items:center;">
         ${flagged ? '<span class="long-call-flag">Long call — manager review</span>' : ''}
-        <span class="scorecard-avg">${avg}<span style="font-family:'DM Mono'; font-size:0.75rem; color:rgba(255,255,255,0.7);">/5</span></span>
+        ${aiCsatBadge}
       </div>
     </div>
   `;
