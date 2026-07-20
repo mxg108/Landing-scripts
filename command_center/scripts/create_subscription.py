@@ -33,15 +33,21 @@ import httpx
 
 BASE_URL = "https://dialpad.com/api/v2"
 
-# §4.1.1 monitored call states.
+# §4.1.1 monitored call states, spelled in the REAL subscription enum —
+# observed 2026-07-19 on engineering's production comms subscription
+# (id 4859989923299328): the design-era "call_transcription" is
+# `transcription`, and `dispositions` / `csat` are dedicated states (the
+# likely carriers of call_dispositions and AI-CSAT payloads).
 CALL_STATES = [
     "ringing",
     "connected",
     "hold",
     "hangup",
     "recording",
-    "call_transcription",
+    "transcription",
     "recap_summary",
+    "dispositions",
+    "csat",
 ]
 
 MS_CALL_CENTER_ID = "4716644561813504"

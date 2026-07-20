@@ -22,17 +22,22 @@ from typing import Any, Optional
 
 import jwt
 
-# §4.1.1 monitored call states (webhook_events.state is free TEXT; this
-# vocabulary is what the fold understands — unknown states still append
-# to webhook_events, they just don't fold).
+# §4.1.1 monitored call states in the real subscription enum (audited
+# 2026-07-19 against engineering's prod subscription — `transcription`,
+# not the design-era "call_transcription"; `dispositions`/`csat` are
+# dedicated states). webhook_events.state is free TEXT; this vocabulary
+# is what the fold understands — unknown states still append to
+# webhook_events, they just don't fold.
 MONITORED_CALL_STATES = (
     "ringing",
     "connected",
     "hold",
     "hangup",
     "recording",
-    "call_transcription",
+    "transcription",
     "recap_summary",
+    "dispositions",
+    "csat",
 )
 
 # event_timestamp resolution: an explicit event clock always beats the
