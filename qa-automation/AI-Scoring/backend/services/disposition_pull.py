@@ -256,6 +256,12 @@ written AS (
 SELECT count(*) FROM written
 """
 
+# The export's call_id is the ENTRY-POINT id (verified live 2026-07-20).
+# Historical evals stored only the per-leg id in dialpad_call_id and
+# NULL in dialpad_entry_point_call_id — but dialpad_link embeds the
+# entry-point id verbatim (build_dialpad_link prefers it), so the link
+# equality is what actually joins the historic backfill. Newly scored
+# evals carry the entry-point id in its own column.
 _EVALS_FILL_BATCH = """
 WITH data AS (
     SELECT * FROM unnest($2::text[], $3::text[], $4::text[])
@@ -268,7 +274,9 @@ FROM data d
 WHERE e.team_id = $1 AND e.dialpad_disposition_category IS NULL
   AND (e.dialpad_call_id = d.call_id
        OR e.dialpad_entry_point_call_id = d.call_id
-       OR e.dialpad_master_call_id = d.call_id)
+       OR e.dialpad_master_call_id = d.call_id
+       OR e.dialpad_link =
+          'https://dialpad.com/callhistory/callreview/' || d.call_id)
 """
 
 # Dry-run: calls the export would write = not already carrying a
@@ -307,7 +315,9 @@ SET dialpad_disposition_category = $3,
 WHERE team_id = $1 AND dialpad_disposition_category IS NULL
   AND (dialpad_call_id = $2
        OR dialpad_entry_point_call_id = $2
-       OR dialpad_master_call_id = $2)
+       OR dialpad_master_call_id = $2
+       OR dialpad_link =
+          'https://dialpad.com/callhistory/callreview/' || $2)
 """
 
 

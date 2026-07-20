@@ -164,6 +164,8 @@ def build_draft_row(scorecard: "ScorecardWithMeta", config: "TeamConfig") -> dic
         "call_ended_at": scorecard.call_ended_at_utc,
         "call_duration_ms": duration_ms,
         "dialpad_call_id": scorecard.call_id,
+        "dialpad_entry_point_call_id": scorecard.dialpad_entry_point_call_id,
+        "dialpad_master_call_id": scorecard.dialpad_master_call_id,
         "dialpad_link": scorecard.dialpad_link,
         "caller_name": scorecard.caller_name,
         "caller_phone": scorecard.caller_phone,

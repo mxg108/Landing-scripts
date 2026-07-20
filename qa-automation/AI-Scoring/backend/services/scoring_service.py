@@ -234,4 +234,9 @@ async def score_call(
         dialpad_disposition_category=cc_ctx.disposition_category if cc_ctx else None,
         dialpad_disposition=cc_ctx.disposition if cc_ctx else None,
         ai_csat=cc_ctx.ai_csat if cc_ctx else None,
+        # Durable join keys for the eval row — Dialpad id-spaces cross
+        # (the Stats export keys by entry-point id), so the eval must
+        # carry every id it was scored under, not just the per-leg one.
+        dialpad_entry_point_call_id=call_details.get("entry_point_call_id") or None,
+        dialpad_master_call_id=call_details.get("master_call_id") or None,
     )

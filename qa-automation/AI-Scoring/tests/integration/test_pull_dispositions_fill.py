@@ -46,19 +46,25 @@ async def pg_fill(clean_pg: asyncpg.Connection, pg_dsn: str, monkeypatch):
                 'Billing', 'Refund', 'webhook')
         """
     )
-    # Evals: one already stamped at Stage 1, one pre-C3 (NULL), the latter
-    # carrying the export's id in its ENTRY-POINT column (the usual case).
+    # Evals: one already stamped at Stage 1; one post-fix (entry-point id
+    # in its own column); one HISTORICAL (per-leg id only, entry NULL —
+    # the pre-fix Stage-1 writer) whose dialpad_link embeds the
+    # entry-point id, the only join key those rows have.
     await clean_pg.execute(
         f"""
         INSERT INTO qa.evaluations
             (team_id, agent_name_raw, state, source, models_used,
-             dialpad_call_id, dialpad_entry_point_call_id,
+             dialpad_call_id, dialpad_entry_point_call_id, dialpad_link,
              dialpad_disposition_category, dialpad_disposition)
         VALUES
             ('member_support', 'A', 'draft', 'ai', '{_MODELS}'::jsonb,
-             'CALL-WEBHOOK', NULL, 'Billing', 'Refund'),
+             'CALL-WEBHOOK', NULL, NULL, 'Billing', 'Refund'),
             ('member_support', 'B', 'draft', 'ai', '{_MODELS}'::jsonb,
-             'LEG-OLD', 'CALL-NEW', NULL, NULL)
+             'LEG-OLD', 'CALL-NEW', NULL, NULL, NULL),
+            ('member_support', 'C', 'draft', 'ai', '{_MODELS}'::jsonb,
+             'LEG-HISTORIC', NULL,
+             'https://dialpad.com/callhistory/callreview/CALL-NEW',
+             NULL, NULL)
         """
     )
     try:
@@ -91,7 +97,9 @@ async def test_fill_creates_rows_and_respects_webhook_seam(
     assert report["rows_in_export"] == 3
     assert report["with_disposition"] == 2
     assert report["calls_written"] == 2       # CALL-NEW + CALL-PENDING
-    assert report["evals_filled"] == 1        # eval B via entry-point id
+    # eval B via its entry-point column + eval C via its dialpad_link
+    # (historic rows carry the entry-point id ONLY there).
+    assert report["evals_filled"] == 2
     assert report["row_failures"] == 0
 
     # Webhook stamp untouched.
@@ -125,13 +133,15 @@ async def test_fill_creates_rows_and_respects_webhook_seam(
     assert pending["disposition_category"] is None
     assert pending["disposition_source"] is None
 
-    # Eval B joined via its entry-point id; stamped eval A untouched.
-    filled = await pg_fill.fetchrow(
-        "SELECT dialpad_disposition_category, dialpad_disposition "
-        "FROM qa.evaluations WHERE agent_name_raw = 'B'"
-    )
-    assert filled["dialpad_disposition_category"] == "Access & Entry"
-    assert filled["dialpad_disposition"] == "Smart-lock failure"
+    # Eval B joined via its entry-point column, eval C via its
+    # dialpad_link (historic shape); stamped eval A untouched.
+    for name in ("B", "C"):
+        filled = await pg_fill.fetchrow(
+            "SELECT dialpad_disposition_category, dialpad_disposition "
+            "FROM qa.evaluations WHERE agent_name_raw = $1", name,
+        )
+        assert filled["dialpad_disposition_category"] == "Access & Entry"
+        assert filled["dialpad_disposition"] == "Smart-lock failure"
     stamped = await pg_fill.fetchval(
         "SELECT dialpad_disposition_category FROM qa.evaluations "
         "WHERE agent_name_raw = 'A'"

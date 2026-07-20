@@ -68,11 +68,26 @@ class CallContext:
     has_hold_truth: bool = True
 
 
-_MATCH_KEYS = (
-    ("entry_point", "dialpad_entry_point_call_id"),
-    ("call_id", "dialpad_call_id"),
-    ("master", "dialpad_master_call_id"),
-)
+# Probe order only — every id is checked against ALL THREE id columns.
+# Dialpad's id-spaces cross: the Stats dispositions export keys rows by
+# the ENTRY-POINT id (verified live 2026-07-20 — scored leg
+# 6517394311946240 was absent from cc.calls while its entry-point
+# 6750284618604544 sat there WITH a disposition), so a stats-created
+# row holds an entry-point id in dialpad_call_id and NULL in
+# dialpad_entry_point_call_id. Like-named-column-only matching grounded
+# nothing all day.
+_MATCH_ORDER = ("entry_point", "call_id", "master")
+
+_MATCH_SQL = """
+SELECT id, disposition_category, disposition, ai_csat,
+       total_hold_seconds, connected_at, started_at, seen_via
+FROM command_center.calls
+WHERE team_id = $1
+  AND (dialpad_call_id = $2
+       OR dialpad_entry_point_call_id = $2
+       OR dialpad_master_call_id = $2)
+LIMIT 1
+"""
 
 
 async def fetch_call_context(
@@ -97,19 +112,10 @@ async def fetch_call_context(
             return None
         async with pool.acquire() as conn:
             row, matched_by = None, ""
-            for key, column in _MATCH_KEYS:
+            for key in _MATCH_ORDER:
                 if not ids[key]:
                     continue
-                row = await conn.fetchrow(
-                    f"""
-                    SELECT id, disposition_category, disposition, ai_csat,
-                           total_hold_seconds, connected_at, started_at,
-                           seen_via
-                    FROM command_center.calls
-                    WHERE team_id = $1 AND {column} = $2
-                    """,
-                    team_id, ids[key],
-                )
+                row = await conn.fetchrow(_MATCH_SQL, team_id, ids[key])
                 if row is not None:
                     matched_by = key
                     break

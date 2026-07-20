@@ -172,3 +172,31 @@ async def test_stats_pull_row_lacks_hold_truth(
     assert ctx is not None
     assert ctx.has_hold_truth is False
     assert ctx.disposition_category == "Access & Entry"
+
+
+@pytest.mark.asyncio
+async def test_cross_column_match_stats_row_by_entry_point_id(
+    pg_ctx: asyncpg.Connection,
+) -> None:
+    """THE id-space bug (found live 2026-07-20): a stats-created row
+    holds the ENTRY-POINT id in dialpad_call_id (entry column NULL).
+    The score-time caller passes that id as entry_point_call_id — the
+    match must try every id against every id column, not like-named
+    columns only."""
+    await _seed_call(
+        pg_ctx,
+        dialpad_call_id="6750284618604544",     # entry-point id-space
+        dialpad_entry_point_call_id=None,
+        dialpad_master_call_id=None,
+        seen_via="stats_pull",
+        disposition_source="stats_pull",
+        total_hold_seconds=0,
+    )
+    ctx = await fetch_call_context(
+        "member_support",
+        entry_point_call_id="6750284618604544",  # from get_call_details
+        dialpad_call_id="6517394311946240",      # the scored agent leg
+    )
+    assert ctx is not None
+    assert ctx.matched_by == "entry_point"
+    assert ctx.disposition_category == "Access & Entry"
