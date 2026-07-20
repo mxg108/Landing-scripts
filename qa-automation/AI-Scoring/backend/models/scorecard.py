@@ -120,3 +120,9 @@ class ScorecardWithMeta(Scorecard):
     future-project decision."""
     transcript_display: List[dict] = []  # [{timestamp, speaker, text}, ...]
     moments_display: List[dict] = []     # [{timestamp, time, type, agent}, ...]
+    # DispositionDesign §5 step 4 — verified CC facts stamped onto the
+    # qa.evaluations row at Stage 1. None = CC never saw the call, or the
+    # call was undispositioned (absence is expected-normal).
+    dialpad_disposition_category: Optional[str] = None
+    dialpad_disposition: Optional[str] = None
+    ai_csat: Optional[float] = None

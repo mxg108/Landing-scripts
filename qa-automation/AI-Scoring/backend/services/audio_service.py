@@ -66,6 +66,7 @@ async def score_audio(
     sop_content: str = "",
     agent_name: str = "",
     extra_notes: str = "",
+    call_context_text: str = "",
 ) -> Scorecard:
     """
     Upload audio to Gemini and score it.
@@ -92,6 +93,7 @@ async def score_audio(
             sop_content=sop_content,
             agent_name=agent_name,
             extra_notes=extra_notes,
+            call_context_text=call_context_text,
         )
 
         response = client.models.generate_content(
