@@ -61,6 +61,11 @@ class CallContext:
     connected_at: Optional[datetime]
     started_at: Optional[datetime]
     holds: list[HoldCycle] = field(default_factory=list)
+    # Only webhook-observed calls carry hold truth. A stats_pull-created
+    # row has total_hold_seconds=0 by schema DEFAULT — rendering that as
+    # "verified: no holds" would be a FALSE verified claim (the
+    # dispositions export carries no hold data).
+    has_hold_truth: bool = True
 
 
 _MATCH_KEYS = (
@@ -98,7 +103,8 @@ async def fetch_call_context(
                 row = await conn.fetchrow(
                     f"""
                     SELECT id, disposition_category, disposition, ai_csat,
-                           total_hold_seconds, connected_at, started_at
+                           total_hold_seconds, connected_at, started_at,
+                           seen_via
                     FROM command_center.calls
                     WHERE team_id = $1 AND {column} = $2
                     """,
@@ -135,6 +141,7 @@ async def fetch_call_context(
             HoldCycle(r["started_at"], r["ended_at"], r["seconds"])
             for r in hold_rows
         ],
+        has_hold_truth=row["seen_via"] == "webhook",
     )
 
 
@@ -198,7 +205,14 @@ def build_call_context_block(
         lines.append(f"- {_absence_sentence(language)}")
 
     anchor = ctx.connected_at or ctx.started_at
-    if ctx.holds:
+    if not ctx.has_hold_truth:
+        # Stats-era row: no hold data exists either way — forbid
+        # fabrication without asserting absence.
+        lines.append(
+            "- No verified hold record is available for this call. Do NOT "
+            "state specific hold counts or durations as verified fact."
+        )
+    elif ctx.holds:
         described = []
         for hold in ctx.holds:
             duration = _mmss(hold.seconds)
