@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import sys
 from pathlib import Path
 
@@ -32,6 +33,10 @@ from dotenv import load_dotenv
 _AI_SCORING = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_AI_SCORING))
 load_dotenv(_AI_SCORING / ".env")
+
+# Surface the service's progress logs (export polling, chunk N/M) — a
+# 20-day backfill takes minutes and silence reads as a hang.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 from backend.services.disposition_pull import (  # noqa: E402
     StatsRecord,
@@ -74,7 +79,9 @@ async def _run(args: argparse.Namespace) -> int:
                 days_start=args.days_start,
                 days_end=args.days_end,
             )
-            records.extend(parse_export_csv(text))
+            parsed = parse_export_csv(text)
+            print(f"  parsed {len(parsed)} rows")
+            records.extend(parsed)
 
     report = await fill_records(team_id, records, dry_run=args.dry_run)
     print_report(team_id, report, dry_run=args.dry_run)
