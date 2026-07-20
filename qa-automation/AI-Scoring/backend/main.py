@@ -25,6 +25,17 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s — %(message)s",
 )
 
+# Command Center mount (LandingOpsCommandCenter.md §6): the top-level
+# command_center/ package lives at the repo root, two levels above this
+# app's import root — put the repo root on sys.path before importing it.
+import sys
+_cc_repo_root = Path(__file__).resolve().parents[3]
+if str(_cc_repo_root) not in sys.path:
+    sys.path.insert(0, str(_cc_repo_root))
+
+from command_center.routes.webhooks import router as cc_webhooks_router
+from command_center.services.store import close_pool as cc_close_pool
+
 from backend.services.version_ship import run_startup_ship
 from backend.routes.scoring import router as scoring_router
 from backend.routes.dashboard import router as dashboard_router
@@ -53,6 +64,8 @@ async def _lifespan(app: FastAPI):
     # Wave 2 Phase 4a: dual-write pool (lazy-created on first Stage 1 write).
     from backend.services.eval_store import close_pool
     await close_pool()
+    # Command Center webhook-ingest pool (lazy-created on first event).
+    await cc_close_pool()
 
 
 app = FastAPI(
@@ -84,6 +97,12 @@ for r in (scoring_router, dashboard_router, team_router, datapoints_router, look
 # Events + hr-bonus routers intentionally excluded — both are new and team-scoped only.
 for r in (scoring_router, dashboard_router, team_router, datapoints_router, lookup_router):
     app.include_router(r, prefix="/api", dependencies=AUTH_DEPENDENCY)
+
+
+# Command Center webhook ingress — NO API-key dependency: Dialpad is the
+# caller and the JWT body signature is the authentication (DispositionDesign
+# §4). Distinct URL space from the QA routers above.
+app.include_router(cc_webhooks_router)
 
 
 @app.get("/api/health")

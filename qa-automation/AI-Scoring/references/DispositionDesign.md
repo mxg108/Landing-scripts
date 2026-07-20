@@ -170,5 +170,8 @@ the catch-up sweep if the receiver ever drops events.
 | Field / event | Seen | Consumed by | Notes |
 |---|---|---|---|
 | states: ringing, connected, hold, hangup, recording, call_transcription, recap_summary | §4.1 (design-era) | calls fold, hold_intervals | no `unhold` — cycle ends on next connected/hangup |
-| `call_dispositions` | docs (Call Events) | disposition columns | verify exact payload shape on first live event |
+| `call_dispositions` | docs (Call Events) | disposition columns | verify exact payload shape on first live event; the C2 extractor accepts string / list-of-strings (last wins) / dict with name/value |
+| `event_timestamp` / `date_updated` | C2 synthetic (verify live) | webhook_events.event_timestamp | explicit event clock beats lifecycle dates — `date_connected` on a post-hold `connected` event may still carry the ORIGINAL connect time; fold clamps inverted cycles to zero-length |
+| `ai_csat` | C2 synthetic (verify live) | ai_csat columns | extractor accepts number / numeric string / {score: n} |
+| agent-status events (`target.type == 'user'`, no call_id) | C2 synthetic | — (appended verbatim, not folded) | fold is call-events-only in C2; agent-status columns when a consumer appears |
 | Stats export: `date_queued`, operator identity, per-agent `timezone`, `salesforce_activity_id`, `note` | 07-15 export | — (candidates) | columns when a consumer appears |

@@ -46,3 +46,7 @@ database/backfill_staging/
 # EOM CSV exports (export_eom_csvs.py) — agent names + scores, operator
 # deliverables; never repo content.
 database/eom_exports/
+
+# Python bytecode
+__pycache__/
+*.pyc

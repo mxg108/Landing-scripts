@@ -243,6 +243,7 @@ def build_prompt(
     sop_content: str = "",
     agent_name: str = "",
     extra_notes: str = "",
+    call_context_text: str = "",
 ) -> str:
     """Assemble the full user prompt for a scoring request."""
     parts = [build_scoring_rubric(config)]
@@ -257,6 +258,11 @@ def build_prompt(
         )
     else:
         parts.append(_build_sop_missing_note(config))
+
+    # DispositionDesign §5: the verified-system-data grounding block rides
+    # AHEAD of the transcript.
+    if call_context_text:
+        parts.append(call_context_text)
 
     if transcript_text:
         parts.append(
