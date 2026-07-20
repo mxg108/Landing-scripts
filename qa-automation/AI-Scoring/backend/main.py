@@ -26,15 +26,39 @@ logging.basicConfig(
 )
 
 # Command Center mount (LandingOpsCommandCenter.md §6): the top-level
-# command_center/ package lives at the repo root, two levels above this
-# app's import root — put the repo root on sys.path before importing it.
+# command_center/ package lives at the repo root — WALK UP to find it,
+# never count parents. The Railway service builds from the
+# qa-automation/AI-Scoring subtree (service Root Directory), so in that
+# container /app/backend/main.py has only three ancestors and the repo
+# root — command_center/ included — is not in the image at all;
+# parents[3] crash-looped the 2026-07-20 deploy. Until the service
+# builds from the repo root, the app must boot WITHOUT the CC webhook
+# routes, loudly.
 import sys
-_cc_repo_root = Path(__file__).resolve().parents[3]
-if str(_cc_repo_root) not in sys.path:
+_cc_repo_root = next(
+    (p for p in Path(__file__).resolve().parents
+     if (p / "command_center").is_dir()),
+    None,
+)
+if _cc_repo_root is not None and str(_cc_repo_root) not in sys.path:
     sys.path.insert(0, str(_cc_repo_root))
 
-from command_center.routes.webhooks import router as cc_webhooks_router
-from command_center.services.store import close_pool as cc_close_pool
+try:
+    from command_center.routes.webhooks import router as cc_webhooks_router
+    from command_center.services.store import close_pool as cc_close_pool
+except ImportError:
+    cc_webhooks_router = None
+
+    async def cc_close_pool() -> None:
+        return None
+
+    logging.getLogger(__name__).error(
+        "command_center package not found — /api/webhooks/dialpad NOT "
+        "mounted. The build root excludes the repo root (Railway Root "
+        "Directory = qa-automation/AI-Scoring); switch the service to "
+        "build from the repo root before going live with the Dialpad "
+        "subscription."
+    )
 
 from backend.services.version_ship import run_startup_ship
 from backend.routes.scoring import router as scoring_router
@@ -101,8 +125,10 @@ for r in (scoring_router, dashboard_router, team_router, datapoints_router, look
 
 # Command Center webhook ingress — NO API-key dependency: Dialpad is the
 # caller and the JWT body signature is the authentication (DispositionDesign
-# §4). Distinct URL space from the QA routers above.
-app.include_router(cc_webhooks_router)
+# §4). Distinct URL space from the QA routers above. Absent when the build
+# root excludes the top-level package (see the import guard above).
+if cc_webhooks_router is not None:
+    app.include_router(cc_webhooks_router)
 
 
 @app.get("/api/health")
