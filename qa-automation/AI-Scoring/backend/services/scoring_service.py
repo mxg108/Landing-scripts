@@ -47,7 +47,6 @@ async def score_call(
     if transcript_data is None:
         transcript_data = await get_transcript(call_id)
     transcript_text = transcript_data["transcript_text"]
-    moments_text = transcript_data["moments_text"]
 
     # Step 2: Notion SOP
     sop_data = await fetch_sop_for_call(transcript_text)
@@ -83,7 +82,6 @@ async def score_call(
         filename=filename,
         config=config,
         transcript_text=transcript_text,
-        moments_text=moments_text,
         sop_title=sop_data["sop_title"],
         sop_content=sop_data["sop_content"],
         agent_name=agent_name,

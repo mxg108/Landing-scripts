@@ -119,4 +119,4 @@ class ScorecardWithMeta(Scorecard):
     `compute_call_duration` stub. Writing it to a dedicated column is a
     future-project decision."""
     transcript_display: List[dict] = []  # [{timestamp, speaker, text}, ...]
-    moments_display: List[dict] = []     # [{timestamp, type}, ...]
+    moments_display: List[dict] = []     # [{timestamp, time, type, agent}, ...]

@@ -62,7 +62,6 @@ async def score_audio(
     filename: str,
     config: TeamConfig,
     transcript_text: str = "",
-    moments_text: str = "",
     sop_title: str = "",
     sop_content: str = "",
     agent_name: str = "",
@@ -89,7 +88,6 @@ async def score_audio(
         prompt = build_prompt(
             config=config,
             transcript_text=transcript_text,
-            moments_text=moments_text,
             sop_title=sop_title,
             sop_content=sop_content,
             agent_name=agent_name,
