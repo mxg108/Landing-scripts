@@ -12,7 +12,7 @@
 
 | | |
 |---|---|
-| **Status** | v2 — evidence complete (API probes, taxonomy payload, one-day Stats export analyzed) |
+| **Status** | v2.1 — MERGED 2026-07-19 (PR #120 + owner amendment: Spanish-call audio SOT). Build starts at C0 |
 | **Supersedes** | v1's phase gating (P2 Stats-interim / P3-August webhooks). Webhooks are NOW — they are this project |
 | **Related** | LandingOpsCommandCenter.md (CC phases; this implements the ingestion base), SQLMigration.md §4 (webhook_events / calls / the hold_intervals scrapping clause), [[project_rag_coach_cards]] |
 
@@ -126,6 +126,13 @@ At Stage 1, after the transcript fetch:
      (back-to-back handling) — score on transcript evidence alone
      OR audio content if call is in Spanish."*
 4. Stamp the three `qa.evaluations` columns in the same Stage-1 write.
+
+**Language rule (owner, 2026-07-19):** for Spanish calls the source of
+truth is the AUDIO, not the transcript (Dialpad transcription is
+English-biased). Every grounding-block sentence that references
+"transcript evidence" must carry the audio alternative — C3's prompt
+builder branches the wording on the eval's `language`, it does not
+hardcode transcript-first phrasing.
 
 This is deliberately plain-injection: the RAG rework (disposition keying
 into SopRag retrieval, coach-cards corpus) follows the Sandy re-platform
