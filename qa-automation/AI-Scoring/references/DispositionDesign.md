@@ -123,7 +123,8 @@ At Stage 1, after the transcript fetch:
      Do NOT infer holds beyond this record."* — or *"Verified: no holds
      occurred on this call."* (kills the hallucinated-hold class)
    - Absence path: *"No disposition was captured for this call
-     (back-to-back handling) — score on transcript evidence alone."*
+     (back-to-back handling) — score on transcript evidence alone
+     OR audio content if call is in Spanish."*
 4. Stamp the three `qa.evaluations` columns in the same Stage-1 write.
 
 This is deliberately plain-injection: the RAG rework (disposition keying
