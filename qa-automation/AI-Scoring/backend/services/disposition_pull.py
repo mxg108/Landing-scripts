@@ -175,6 +175,10 @@ async def fetch_export(
         resp = await client.post(f"{BASE_URL}/stats", json=payload)
         resp.raise_for_status()
         request_id = resp.json()["request_id"]
+        logger.info(
+            "disposition_pull: export initiated request_id=%s target=%s",
+            request_id, call_center_id,
+        )
 
         deadline = asyncio.get_event_loop().time() + POLL_TIMEOUT_S
         while True:
@@ -190,21 +194,95 @@ async def fetch_export(
                 raise TimeoutError(
                     f"stats export {request_id} not complete after {POLL_TIMEOUT_S}s"
                 )
+            logger.info(
+                "disposition_pull: export %s status=%s — polling",
+                request_id, body.get("status"),
+            )
             await asyncio.sleep(POLL_INTERVAL_S)
 
         download = await client.get(url, follow_redirects=True)
         download.raise_for_status()
+        logger.info(
+            "disposition_pull: export %s downloaded (%d bytes)",
+            request_id, len(download.content),
+        )
         return download.text
 
 
 # ---------------------------------------------------------------------------
-# DB fill — UPSERT, structurally idempotent
+# DB fill — set-based UPSERT, structurally idempotent
 # ---------------------------------------------------------------------------
+#
+# One statement per CHUNK of rows, not per row: the DB is on Railway, so
+# per-row round trips over the WAN turned a 20-day backfill (~4-5k rows)
+# into 15+ silent minutes. Arrays + unnest brings that to a handful of
+# round trips. A chunk that fails falls back to per-row for isolation
+# (the overnight contract: a bad row never kills the batch).
+
+CHUNK_SIZE = 500
 
 # The conditional DO UPDATE only fires when the existing row has no
 # disposition yet (webhook-era stamps and earlier pulls win); the WHERE
 # also stops rewriting identical NULL→NULL rows every half hour.
-_CALLS_UPSERT = """
+# RETURNING counts only rows actually inserted or updated.
+_CALLS_UPSERT_BATCH = """
+WITH data AS (
+    SELECT * FROM unnest(
+        $2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
+        $7::text[], $8::text[],
+        $9::timestamptz[], $10::timestamptz[], $11::timestamptz[]
+    ) AS d(call_id, cat, sub, direction, ext_num, int_num, agent,
+           started, connected, ended)
+),
+written AS (
+    INSERT INTO command_center.calls
+        (team_id, dialpad_call_id, seen_via,
+         disposition_category, disposition, disposition_source,
+         direction, external_number, internal_number, agent_name,
+         started_at, connected_at, ended_at)
+    SELECT $1, call_id, 'stats_pull',
+           cat, sub, CASE WHEN cat IS NULL THEN NULL ELSE 'stats_pull' END,
+           direction, ext_num, int_num, agent, started, connected, ended
+    FROM data
+    ON CONFLICT ON CONSTRAINT uq_calls_team_call_id DO UPDATE SET
+        disposition_category = EXCLUDED.disposition_category,
+        disposition          = EXCLUDED.disposition,
+        disposition_source   = EXCLUDED.disposition_source,
+        last_updated_at      = NOW()
+    WHERE command_center.calls.disposition_source IS NULL
+      AND EXCLUDED.disposition_category IS NOT NULL
+    RETURNING 1
+)
+SELECT count(*) FROM written
+"""
+
+_EVALS_FILL_BATCH = """
+WITH data AS (
+    SELECT * FROM unnest($2::text[], $3::text[], $4::text[])
+        AS d(call_id, cat, sub)
+)
+UPDATE qa.evaluations e
+SET dialpad_disposition_category = d.cat,
+    dialpad_disposition = d.sub
+FROM data d
+WHERE e.team_id = $1 AND e.dialpad_disposition_category IS NULL
+  AND (e.dialpad_call_id = d.call_id
+       OR e.dialpad_entry_point_call_id = d.call_id
+       OR e.dialpad_master_call_id = d.call_id)
+"""
+
+# Dry-run: calls the export would write = not already carrying a
+# disposition stamp (new rows + NULL-source rows).
+_DRY_RUN_COUNT = """
+SELECT count(*) FROM unnest($2::text[]) AS u(call_id)
+WHERE NOT EXISTS (
+    SELECT 1 FROM command_center.calls c
+    WHERE c.team_id = $1 AND c.dialpad_call_id = u.call_id
+      AND c.disposition_source IS NOT NULL
+)
+"""
+
+_CALLS_UPSERT_ROW = """
 INSERT INTO command_center.calls
     (team_id, dialpad_call_id, seen_via,
      disposition_category, disposition, disposition_source,
@@ -222,7 +300,7 @@ WHERE command_center.calls.disposition_source IS NULL
   AND EXCLUDED.disposition_category IS NOT NULL
 """
 
-_EVALS_FILL = """
+_EVALS_FILL_ROW = """
 UPDATE qa.evaluations
 SET dialpad_disposition_category = $3,
     dialpad_disposition = $4
@@ -233,11 +311,59 @@ WHERE team_id = $1 AND dialpad_disposition_category IS NULL
 """
 
 
+def dedupe_records(records: list[StatsRecord]) -> list[StatsRecord]:
+    """One record per call_id (a multi-row upsert cannot touch the same
+    row twice). Last wins — except a dispositioned record is never
+    replaced by an undispositioned one."""
+    by_id: dict[str, StatsRecord] = {}
+    for record in records:
+        prev = by_id.get(record.call_id)
+        if prev is not None and prev.disposition_category and not record.disposition_category:
+            continue
+        by_id[record.call_id] = record
+    return list(by_id.values())
+
+
+def _chunks(items: list, size: int) -> list[list]:
+    return [items[i:i + size] for i in range(0, len(items), size)]
+
+
+async def _fill_chunk_per_row(conn, team_id: str, chunk: list[StatsRecord],
+                              report: dict) -> None:
+    """Fallback isolation path when a batch statement fails: replay the
+    chunk row by row so one bad row costs one row, not five hundred."""
+    for record in chunk:
+        try:
+            result = await conn.execute(
+                _CALLS_UPSERT_ROW,
+                team_id, record.call_id,
+                record.disposition_category, record.disposition,
+                record.direction, record.external_number,
+                record.internal_number, record.agent_name,
+                record.started_at, record.connected_at, record.ended_at,
+            )
+            report["calls_written"] += int(result.split()[-1])
+            if record.disposition_category:
+                ev = await conn.execute(
+                    _EVALS_FILL_ROW,
+                    team_id, record.call_id,
+                    record.disposition_category, record.disposition,
+                )
+                report["evals_filled"] += int(ev.split()[-1])
+        except Exception:
+            report["row_failures"] += 1
+            logger.exception(
+                "disposition_pull: row failed call_id=%s", record.call_id
+            )
+
+
 async def fill_records(
     team_id: str, records: list[StatsRecord], *, dry_run: bool = False
 ) -> dict:
-    """Fill both tables from parsed export records. Row failures are
-    caught, logged, and counted — a bad row never kills the batch."""
+    """Fill both tables from parsed export records, CHUNK_SIZE rows per
+    statement. A failing chunk falls back to per-row so a bad row never
+    kills the batch."""
+    records = dedupe_records(records)
     report = {
         "rows_in_export": len(records),
         "with_disposition": sum(1 for r in records if r.disposition_category),
@@ -249,40 +375,51 @@ async def fill_records(
     if pool is None:
         raise RuntimeError("DATABASE_URL not set — nothing to fill")
 
+    chunks = _chunks(records, CHUNK_SIZE)
     async with pool.acquire() as conn:
-        for record in records:
-            try:
-                if dry_run:
-                    hit = await conn.fetchval(
-                        "SELECT 1 FROM command_center.calls "
-                        "WHERE team_id = $1 AND dialpad_call_id = $2 "
-                        "  AND disposition_source IS NOT NULL",
-                        team_id, record.call_id,
-                    )
-                    if hit is None:
-                        report["calls_written"] += 1
-                    continue
-                result = await conn.execute(
-                    _CALLS_UPSERT,
-                    team_id, record.call_id,
-                    record.disposition_category, record.disposition,
-                    record.direction, record.external_number,
-                    record.internal_number, record.agent_name,
-                    record.started_at, record.connected_at, record.ended_at,
+        for i, chunk in enumerate(chunks, start=1):
+            if dry_run:
+                report["calls_written"] += await conn.fetchval(
+                    _DRY_RUN_COUNT, team_id, [r.call_id for r in chunk],
                 )
-                report["calls_written"] += int(result.split()[-1])
-                if record.disposition_category:
+                continue
+            try:
+                written = await conn.fetchval(
+                    _CALLS_UPSERT_BATCH,
+                    team_id,
+                    [r.call_id for r in chunk],
+                    [r.disposition_category for r in chunk],
+                    [r.disposition for r in chunk],
+                    [r.direction for r in chunk],
+                    [r.external_number for r in chunk],
+                    [r.internal_number for r in chunk],
+                    [r.agent_name for r in chunk],
+                    [r.started_at for r in chunk],
+                    [r.connected_at for r in chunk],
+                    [r.ended_at for r in chunk],
+                )
+                report["calls_written"] += written
+                dispositioned = [r for r in chunk if r.disposition_category]
+                if dispositioned:
                     ev = await conn.execute(
-                        _EVALS_FILL,
-                        team_id, record.call_id,
-                        record.disposition_category, record.disposition,
+                        _EVALS_FILL_BATCH,
+                        team_id,
+                        [r.call_id for r in dispositioned],
+                        [r.disposition_category for r in dispositioned],
+                        [r.disposition for r in dispositioned],
                     )
                     report["evals_filled"] += int(ev.split()[-1])
             except Exception:
-                report["row_failures"] += 1
                 logger.exception(
-                    "disposition_pull: row failed call_id=%s", record.call_id
+                    "disposition_pull: chunk %d/%d batch failed — "
+                    "replaying per-row", i, len(chunks),
                 )
+                await _fill_chunk_per_row(conn, team_id, chunk, report)
+            logger.info(
+                "disposition_pull: chunk %d/%d done (%d/%d rows)",
+                i, len(chunks),
+                min(i * CHUNK_SIZE, len(records)), len(records),
+            )
     return report
 
 

@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from backend.services.disposition_pull import (
+    StatsRecord,
+    dedupe_records,
     parse_export_csv,
     periodic_interval_minutes,
     split_disposition,
@@ -86,6 +88,25 @@ def test_parse_localizes_naive_clocks_via_row_timezone():
     assert record.connected_at.astimezone(timezone.utc).tzinfo is timezone.utc
     assert record.direction == "inbound"
     assert record.agent_name == "Andrei Trejo"
+
+
+def test_dedupe_last_wins_but_never_drops_a_disposition():
+    """The batch upsert cannot touch the same row twice, so exports
+    dedupe by call_id: last record wins, EXCEPT an undispositioned
+    record never replaces a dispositioned one."""
+    records = [
+        StatsRecord("1", "Billing", "Refund"),
+        StatsRecord("1", "Access & Entry", "Lockout"),   # later → wins
+        StatsRecord("2", "Billing", None),
+        StatsRecord("2", None, None),                     # would erase → skipped
+        StatsRecord("3", None, None),
+        StatsRecord("3", "Billing", None),                # late selection wins
+    ]
+    deduped = {r.call_id: r for r in dedupe_records(records)}
+    assert len(deduped) == 3
+    assert deduped["1"].disposition_category == "Access & Entry"
+    assert deduped["2"].disposition_category == "Billing"
+    assert deduped["3"].disposition_category == "Billing"
 
 
 def test_periodic_interval_gating(monkeypatch):
