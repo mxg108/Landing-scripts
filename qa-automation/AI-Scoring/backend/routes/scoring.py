@@ -36,7 +36,6 @@ from backend.services.scoring_service import score_call
 from backend.services.sheets_service import (
     append_score_audit_row,
     trigger_apps_script,
-    write_draft_to_fr_ai,
 )
 from backend.services.dialpad_client import (
     DialpadRateLimited,
@@ -396,14 +395,16 @@ async def score_single_call(
                     transcript_data=transcript_data,
                     call_details=call_details,
                 )
-            row_num = write_draft_to_fr_ai(scorecard, config)
-            # Stage 1 dual-write (§7.3 Phase C): the DB row is truth — DB
-            # errors raise and the whole job errors. The FR-AI sheet write
-            # above is the projection side of the dual-write.
+            # Stage 1 (§7.3 Phase C): the DB row is truth — DB errors
+            # raise and the whole job errors. The FR-AI draft projection
+            # that used to precede this write was retired 2026-07-20:
+            # the tab hit its grid limit and a deprecated Sheets write
+            # took the whole pipeline down with it. Sheets writes are
+            # now Analyst_History (finalize projection) + Score_Audit
+            # ONLY.
             evaluation_id = await record_draft_evaluation(
                 scorecard, config, strict=True
             )
-            _jobs[key]["sheets_row"] = row_num
             _jobs[key]["evaluation_id"] = evaluation_id
             _jobs[key]["scorecard"] = scorecard.model_dump()
             if evaluation_id is not None:
@@ -520,11 +521,9 @@ async def score_batch(
                         config=config,
                         duration_ms=dur,
                     )
-                row_num = write_draft_to_fr_ai(scorecard, config)
                 evaluation_id = await record_draft_evaluation(
                     scorecard, config, strict=True
                 )
-                _jobs[k]["sheets_row"] = row_num
                 _jobs[k]["evaluation_id"] = evaluation_id
                 _jobs[k]["scorecard"] = scorecard.model_dump()
                 if evaluation_id is not None:
@@ -572,13 +571,6 @@ async def approve_scorecard(
         raise HTTPException(
             status_code=409,
             detail=f"Job is '{job['status']}', must be 'complete' to approve",
-        )
-
-    sheets_row = job.get("sheets_row", -1)
-    if sheets_row < 1:
-        raise HTTPException(
-            status_code=500,
-            detail="No valid Sheets row recorded for this job",
         )
 
     job["status"] = "approving"

@@ -6,11 +6,13 @@ the Stage-2/3/4 sheet flow — finalized evaluations land in Analyst_History
 straight from Postgres, the ARRAYFORMULA never runs, and the only Sheets
 reads are row-position lookups for idempotent overwrites.
 
-FR-AI and Analyst_History share the HistoryLayout shape, so one renderer
-serves both tabs; the projection writes every field the DB knows
-(agent_email, evaluator_email, overall_score, eval_approved_at), which is a
-superset of what each legacy stage filled — downstream consumers (GAS email
-pipeline, dashboards via history_service) read the same columns as before.
+Analyst_History is the ONLY projection target (the FR-AI draft tab —
+Sheets-as-DB Stage 1 — was retired 2026-07-20 after its grid limit took
+the pipeline down; drafts live solely in qa.evaluations now). The
+projection writes every field the DB knows (agent_email,
+evaluator_email, overall_score, eval_approved_at) — downstream consumers
+(GAS email pipeline, dashboards via history_service) read the same
+columns as before.
 
 Failure semantics: the DB row is truth, so projection failures are
 retryable — callers log and continue; the nightly reproject sweep
@@ -27,7 +29,6 @@ from backend.config.history_layout import col_index_to_letter
 from backend.services.sheets_service import (
     YN_DISPLAY,
     _find_row_by_dialpad_link,
-    _get_fr_ai_sheet,
     _get_sheet,
     _next_data_row,
     _sheets_configured,
@@ -127,9 +128,10 @@ async def project_evaluation(
     config: "TeamConfig",
     include_history: bool = False,
 ) -> Optional[int]:
-    """Project one evaluation to FR-AI (always) and Analyst_History (when
-    `include_history`, i.e. the row is finalized). Returns the
-    Analyst_History row number when written, for the Apps Script trigger.
+    """Project one evaluation to Analyst_History (when `include_history`,
+    i.e. the row is finalized — drafts are DB-only since the FR-AI tab
+    retired). Returns the Analyst_History row number when written, for
+    the Apps Script trigger.
 
     Raises on DB errors (the row is truth — §7.3 Phase C); logs and
     continues on Sheets errors (projections are retryable)."""
@@ -154,11 +156,6 @@ async def project_evaluation(
     row = build_projection_row(evaluation, sections, config)
     link = evaluation["dialpad_link"] or ""
     history_row_num: Optional[int] = None
-
-    try:
-        _write_row(_get_fr_ai_sheet(config), row, link, config)
-    except Exception:
-        logger.exception("projection: FR-AI write failed for eval %s — retryable", evaluation_id)
 
     if include_history:
         try:

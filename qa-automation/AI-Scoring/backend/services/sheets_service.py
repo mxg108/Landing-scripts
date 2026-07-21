@@ -1,21 +1,21 @@
-"""Google Sheets writer — Stage-1 draft projection + Apps Script trigger.
+"""Google Sheets writer — Score_Audit + Apps Script trigger + helpers.
 
-Post-cutover surface (CutoverDesign §8 slice-5 cleanup): the engine owns
-scoring, so this module keeps only what the engine pipeline still needs
-from Sheets:
+Post-cutover surface (CutoverDesign §8 slice-5 cleanup, FR-AI retirement
+2026-07-20): the engine owns scoring and drafts live solely in
+qa.evaluations, so the ONLY Sheets writes anywhere in the pipeline are:
 
-    Stage 1 — write_draft_to_fr_ai   (AI scoring → FR-AI draft row)
-    Score_Audit append               (action-level audit tab)
-    trigger_apps_script              (email dispatch by AH row number)
+    Analyst_History — finalize-time projection
+                      (``sheets_projection.project_evaluation``, which
+                      borrows this module's worksheet/row helpers)
+    Score_Audit     — action-level audit tab (``append_score_audit_row``)
 
 The pre-cutover four-stage flow (analyst edits → destination write →
-ARRAYFORMULA readback → Analyst_History finalize, plus the Mails
-runtime lookup) was deleted in slice 5; on approve, the DB transitions
-and ``sheets_projection.project_evaluation`` writes the FR-AI overwrite
-and the Analyst_History row from the qa.* record.
+ARRAYFORMULA readback → Analyst_History finalize, plus the Mails runtime
+lookup) was deleted in slice 5. The FR-AI draft write — Sheets-as-DB
+Stage 1 — was retired 2026-07-20 after its tab hit the 965-row grid
+limit and blocked the pipeline.
 
-FR-AI and Analyst_History use the derived layout
-(``config.history_layout``).
+Analyst_History uses the derived layout (``config.history_layout``).
 
 ``trigger_apps_script`` posts the Analyst_History row number to the
 team's Apps Script web app, which reads the populated row and
@@ -41,8 +41,6 @@ from google.oauth2.service_account import Credentials
 
 from backend.config import history_layout
 from backend.config.env import env_for_team
-from backend.config.history_layout import col_index_to_letter, col_letter_to_index
-from backend.models.scorecard import ScorecardWithMeta
 
 if TYPE_CHECKING:
     from backend.config.team_config import TeamConfig
@@ -84,18 +82,14 @@ def _get_spreadsheet(team_id: str):
 
 
 def _get_sheet(config: TeamConfig, tab_name: str | None = None):
-    """Return the named worksheet for *config*'s team. Defaults to FR-AI."""
+    """Return the named worksheet for *config*'s team. Defaults to
+    Analyst_History (the FR-AI draft tab retired 2026-07-20)."""
     tab = (
         tab_name
         or env_for_team("GOOGLE_SHEETS_TAB", config.team_id, legacy_ok=True)
-        or config.sheets.form_responses_ai.tab_name
+        or config.sheets.analyst_history.tab_name
     )
     return _get_spreadsheet(config.team_id).worksheet(tab)
-
-
-def _get_fr_ai_sheet(config: TeamConfig):
-    """Return the Form Responses AI worksheet (where AI drafts land)."""
-    return _get_sheet(config, config.sheets.form_responses_ai.tab_name)
 
 
 def _sheets_configured(team_id: str) -> bool:
@@ -190,106 +184,12 @@ def _next_data_row(sheet) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Stage 1 — AI scoring → FR-AI
-# ---------------------------------------------------------------------------
-
-def write_draft_to_fr_ai(scorecard: ScorecardWithMeta, config: TeamConfig) -> int:
-    """Stage 1: write AI scorecard draft to Form Responses AI.
-
-    Layout uses ``config.history_layout``:
-      * Cols A, C, E filled (agent_name, timestamp, dialpad_link)
-      * Cols B, D, F (agent_email, evaluator_email, overall_score) blank —
-        the post-approve projection fills them from the qa.* record
-      * Section scores in canonical section_number order:
-          - auto_value sections → sec.auto_value (e.g. Sales Q18 = "Yes")
-          - manual sections → blank (analyst fills via dashboard)
-          - AI-scored sections → formatted score / yn_value
-      * Reasoning + confidence per section (blank for manual / auto_value)
-      * Trailing: key_strengths, opportunities, call_summary, caller_name,
-        caller_phone, source="ai"
-
-    Idempotent on dialpad_link (col E): if a row with the same link
-    exists, overwrites it; otherwise appends.
-
-    Returns the FR-AI row number, or -1 if Sheets is not configured.
-    """
-    if not _sheets_configured(config.team_id):
-        print(f"[stage_1] Sheets not configured for team '{config.team_id}' — skipping write.")
-        return -1
-
-    L = config.history_layout
-    sheet = _get_fr_ai_sheet(config)
-
-    sections_by_id = {s.id: s.model_dump() for s in scorecard.sections}
-
-    row = [""] * L.total_width
-    row[history_layout.COL_AGENT_NAME] = scorecard.agent_name or ""
-    # Call-time initiative (PR-1): col C now holds the call's
-    # `date_connected` from Dialpad (when the call actually happened),
-    # not the draft/approval clock. Blank when get_call_details didn't
-    # surface a date_connected — backfill (PR-2) will fill it later.
-    # See references/CallTimeOnAnalystHistory.md.
-    row[history_layout.COL_TIMESTAMP] = _format_call_started(scorecard.call_started_at_utc)
-    row[history_layout.COL_DIALPAD_LINK] = scorecard.dialpad_link or ""
-    # eval_approved_at (trailing column) is filled by the post-approve
-    # projection. Leave blank here.
-
-    for i, sec_def in enumerate(config.sections_by_number):
-        if sec_def.auto_value is not None:
-            row[L.col_score(i)] = sec_def.auto_value
-            # reasoning + confidence stay blank
-        elif sec_def.score_type in ("manual", "manual_yn"):
-            # blank — analyst will fill via dashboard
-            pass
-        else:
-            ai_section = sections_by_id.get(sec_def.id)
-            if ai_section is not None:
-                row[L.col_score(i)] = _format_ai_score(sec_def, ai_section)
-                row[L.col_reasoning(i)] = ai_section.get("reasoning", "")
-                row[L.col_confidence(i)] = ai_section.get("confidence", "")
-
-    row[L.col_key_strengths] = scorecard.key_strengths or ""
-    row[L.col_opportunities] = scorecard.opportunities or ""
-    row[L.col_call_summary] = scorecard.call_summary or ""
-    row[L.col_caller_name] = scorecard.caller_name or ""
-    row[L.col_caller_phone] = scorecard.caller_phone or ""
-    row[L.col_source] = "ai"
-
-    end_letter = col_index_to_letter(L.total_width - 1)
-    existing_row = _find_row_by_dialpad_link(sheet, scorecard.dialpad_link or "")
-    target_row = existing_row if existing_row is not None else _next_data_row(sheet)
-
-    # Colocated FR-AI: col F holds an ARRAYFORMULA whose output range
-    # extends row-by-row. Writing any literal (including '') to col F
-    # would clobber the formula's output for this row, so split the
-    # write into A:E and G:end_letter and leave F untouched.
-    colocated = config.sheets.score_destination.tab_name == config.sheets.form_responses_ai.tab_name
-    if colocated:
-        prefix = row[: history_layout.COL_OVERALL_SCORE]                # cols A-E
-        suffix = row[history_layout.COL_OVERALL_SCORE + 1 :]            # cols G-end
-        sheet.batch_update([
-            {
-                "range": f"A{target_row}:E{target_row}",
-                "values": [prefix],
-            },
-            {
-                "range": f"G{target_row}:{end_letter}{target_row}",
-                "values": [suffix],
-            },
-        ], value_input_option="USER_ENTERED")
-    else:
-        sheet.update(
-            f"A{target_row}:{end_letter}{target_row}",
-            [row],
-            value_input_option="USER_ENTERED",
-        )
-
-    if existing_row is not None:
-        print(f"[stage_1] Overwrote FR-AI row {target_row} for dialpad_link match.")
-    else:
-        print(f"[stage_1] Wrote new FR-AI row {target_row}.")
-    return target_row
-
+# NOTE: `write_draft_to_fr_ai` (Sheets-as-DB Stage 1: AI drafts landing
+# on the Form Responses AI tab ahead of analyst approval) was RETIRED
+# 2026-07-20. The tab hit its 965-row grid limit and — because the write
+# ran ahead of the Postgres dual-write — a deprecated projection blocked
+# the whole scoring pipeline. Drafts live solely in qa.evaluations;
+# Sheets writes are Analyst_History (finalize projection) + Score_Audit.
 
 # ---------------------------------------------------------------------------
 # Score_Audit append (LookupToScore.md design)

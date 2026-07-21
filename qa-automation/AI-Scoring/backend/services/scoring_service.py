@@ -59,8 +59,6 @@ step 2 and honor the constraints listed at the bottom.
                stamps (dialpad_disposition*, ai_csat) for the eval row.
 
 4. PERSIST — back in the route worker `run()`:
-     - `write_draft_to_fr_ai`: FR-AI sheet projection (display side of
-       the dual-write);
      - `record_draft_evaluation(strict=True)`: qa.evaluations draft +
        sections — the DB row is truth (§7.3 Phase C), so DB failure
        fails the JOB, deliberately;
