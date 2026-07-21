@@ -27,7 +27,7 @@ COLUMNS: list[str] = [
     "call_id",           # F — Dialpad call ID
     "target_team",       # G — which team's pipeline ran
     "action",            # H — "scored" / "denied" / "approved"
-    "result_row",        # I — FR-AI row number on success; empty on denial
+    "result_row",        # I — Analyst_History row on approve/finalize; empty otherwise
     "notes",             # J — e.g. "no_recording", "rate_limited"
 ]
 

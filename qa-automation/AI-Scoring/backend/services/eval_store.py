@@ -1,8 +1,9 @@
 """Postgres dual-write for the scoring pipeline — Wave 2 Phase 4a.
 
-Stage 1 (SQLMigration §3.2): when `write_draft_to_fr_ai` lands a draft
-scorecard on the sheet, `record_draft_evaluation()` lands the same content
-as one `qa.evaluations` row (state='draft') + bulk `qa.evaluation_sections`.
+Stage 1 (SQLMigration §3.2): `record_draft_evaluation()` lands the draft
+scorecard as one `qa.evaluations` row (state='draft') + bulk
+`qa.evaluation_sections`. Since the FR-AI tab retired (2026-07-20) this
+is the ONLY Stage-1 write — drafts have no sheet projection.
 
 Failure semantics are §7.3 Phase A: **the Sheets path is truth and must
 never notice Postgres**. Every DB failure here is logged and swallowed —
