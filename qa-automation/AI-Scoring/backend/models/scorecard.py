@@ -126,3 +126,8 @@ class ScorecardWithMeta(Scorecard):
     dialpad_disposition_category: Optional[str] = None
     dialpad_disposition: Optional[str] = None
     ai_csat: Optional[float] = None
+    # Durable join keys from get_call_details — the 006 eval columns
+    # existed but were never populated, which left evals joinable only
+    # by the per-leg id (the Stats export keys by ENTRY-POINT id).
+    dialpad_entry_point_call_id: Optional[str] = None
+    dialpad_master_call_id: Optional[str] = None
