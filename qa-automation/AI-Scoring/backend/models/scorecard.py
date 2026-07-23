@@ -131,3 +131,7 @@ class ScorecardWithMeta(Scorecard):
     # by the per-leg id (the Stats export keys by ENTRY-POINT id).
     dialpad_entry_point_call_id: Optional[str] = None
     dialpad_master_call_id: Optional[str] = None
+    # PulpoConnection §4.2 step 6 — RAG retrieval provenance:
+    # [{id, title, score, score_kind, updated_at, open_flags}, ...].
+    # Stamped in shadow AND on modes; [] when retrieval was off/skipped.
+    pulpo_docs: List[dict] = []

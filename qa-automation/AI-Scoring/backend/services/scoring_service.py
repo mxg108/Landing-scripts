@@ -109,6 +109,7 @@ from backend.services.dialpad_client import (
     get_transcript,
 )
 from backend.services.notion_service import fetch_sop_for_call
+from backend.services.rag.sop_retrieval import fetch_sop_context, pulpo_sop_mode
 
 if TYPE_CHECKING:
     from backend.config.team_config import TeamConfig
@@ -170,8 +171,31 @@ async def score_call(
                 call_id, cc_ctx.matched_by, rendered,
             )
 
-    # Step 2: Notion SOP
-    sop_data = await fetch_sop_for_call(transcript_text)
+    # Step 2: SOP context — PulpoConnection §4.2/§4.3. PULPO_SOP_MODE:
+    #   off     legacy Notion path only (default)
+    #   shadow  Pulpo retrieval runs + logs + stamps provenance; the
+    #           prompt still uses Notion (the log-only compare window)
+    #   on      Pulpo replaces Notion; empty retrieval falls through to
+    #           the sop_context_missing conservative path
+    sop_mode = pulpo_sop_mode()
+    sop_ctx = None
+    if sop_mode != "off":
+        sop_ctx = await fetch_sop_context(
+            disposition_category=cc_ctx.disposition_category if cc_ctx else None,
+            disposition=cc_ctx.disposition if cc_ctx else None,
+            transcript_text=transcript_text,
+        )
+        if sop_mode == "shadow":
+            logger.info(
+                "pulpo_sop[shadow] call=%s query=%r reason=%r would inject %d docs: %s",
+                call_id, sop_ctx.query, sop_ctx.skipped_reason,
+                len(sop_ctx.provenance),
+                [p["title"] for p in sop_ctx.provenance],
+            )
+    if sop_mode == "on" and sop_ctx is not None:
+        sop_data = {"sop_title": sop_ctx.sop_title, "sop_content": sop_ctx.block_text}
+    else:
+        sop_data = await fetch_sop_for_call(transcript_text)
 
     # Step 3: Score
     extra_notes = ""
@@ -237,4 +261,7 @@ async def score_call(
         # carry every id it was scored under, not just the per-leg one.
         dialpad_entry_point_call_id=call_details.get("entry_point_call_id") or None,
         dialpad_master_call_id=call_details.get("master_call_id") or None,
+        # PulpoConnection §4.2 step 6 — retrieval provenance for the eval
+        # row (stamped in shadow AND on: the shadow window's compare data).
+        pulpo_docs=sop_ctx.provenance if sop_ctx else [],
     )
