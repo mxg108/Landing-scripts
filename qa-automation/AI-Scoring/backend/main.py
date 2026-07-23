@@ -107,6 +107,9 @@ async def _lifespan(app: FastAPI):
     await close_pool()
     # Command Center webhook-ingest pool (lazy-created on first event).
     await cc_close_pool()
+    # RAG provider (Pulpo MCP session; lazy-created on first retrieval).
+    from backend.services.rag.factory import close_rag_provider
+    await close_rag_provider()
 
 
 app = FastAPI(

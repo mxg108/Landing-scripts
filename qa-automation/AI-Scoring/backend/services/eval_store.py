@@ -189,6 +189,10 @@ def build_draft_row(scorecard: "ScorecardWithMeta", config: "TeamConfig") -> dic
             # Full Dialpad marker set, typed + timestamped (DispositionDesign
             # C0: filtering is a prompt decision, never a storage decision).
             "moments": scorecard.moments_display,
+            # RAG retrieval provenance (PulpoConnection §4.2) — the
+            # corpus evolves, so the eval records exactly which docs
+            # (id + updated stamp + score) grounded its SOP context.
+            "pulpo_docs": scorecard.pulpo_docs,
         }),
     }
 

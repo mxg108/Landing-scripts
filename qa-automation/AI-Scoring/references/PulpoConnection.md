@@ -292,6 +292,20 @@ label's best-hit score + title. Outputs:
   caveat): compare shadow logs' retrieved titles against what an
   analyst would consider the right SOP before flipping.
 
+**Probe results — 2026-07-22 (P3 checkpoint, benchmark token, τ=0.55):**
+74 distinct disposition labels observed in `command_center.calls`
+(43,323 calls, the 3-month backfill). **73/74 labels covered (99%);
+call-weighted coverage 43,288/43,323 (100%)**. Sole gap: *Unit Issues —
+Pests* (best hit 0.528 and topically wrong — "Replacing Missing &
+Damaged Items"): a genuine corpus gap, first entry on the curation
+worklist. Calibration notes: hits ≥0.7 are strongly on-topic (e.g.
+*OTA reservation change* → "OTA SOP - Shortenings and Cancellations"
+at 0.807); the 0.55–0.60 band contains a few semantically weak matches
+(*Routing & Operational* sub-labels landing on "Admin"/check-in docs) —
+candidates for raising τ to ~0.60 after the shadow window's real-call
+review. Rate-limit learning: the limiter rejects a batch exceeding the
+REMAINING minute allowance — the probe paces 10-query batches 12s apart.
+
 **6.2 Post-migration: trigger-phrase recall** (v1 §7, re-targeted) —
 after §5 lands the cards, the 1,549 labeled (member phrase → card)
 pairs benchmark properly: sampled ~300, batched 20/query-batch, rerank
