@@ -6,11 +6,12 @@ absence fallback), search the RAG provider, threshold, fetch full
 bodies, and render the SOP context block + provenance stamps.
 
 Gated by PULPO_SOP_MODE (off | shadow | on, default OFF):
-  off     no retrieval at all
+  off     no retrieval at all; the prompt takes the
+          sop_context_missing conservative path
   shadow  retrieve + log the would-be block + stamp provenance; the
-          prompt still uses the legacy Notion path
-  on      the rendered block replaces the Notion fetch entirely;
-          empty retrieval → the sop_context_missing conservative path
+          prompt still takes the conservative path (log-only compare)
+  on      the rendered block IS the prompt's SOP context; empty/sub-τ
+          retrieval falls through to sop_context_missing
 
 Never raises: any provider failure logs and returns the empty context —
 retrieval is an enhancement, never a scoring blocker (the cc_context

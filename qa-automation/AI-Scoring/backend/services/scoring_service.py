@@ -47,10 +47,12 @@ step 2 and honor the constraints listed at the bottom.
                transcript). Hold wording only for webhook-observed
                calls (has_hold_truth); Spanish calls follow the
                audio-is-SOT language rule (v2.1).
-     Step 2    SOP context: `fetch_sop_for_call` — keyword classify ->
-               Notion page text. INTERIM: the SopRag cascade (PR #99,
-               open) replaces this with disposition-keyed retrieval
-               over the coach-cards corpus after the Sandy re-platform.
+     Step 2    SOP context (PulpoConnection §4.2): disposition-keyed
+               retrieval from the RAG provider (Pulpo), gated by
+               PULPO_SOP_MODE (off | shadow | on). The legacy keyword→
+               page path was decommissioned 2026-07-23; when
+               retrieval is off/skipped/sub-τ the prompt takes the
+               sop_context_missing conservative path.
      Step 3    `score_audio`: upload audio to Gemini, build the prompt
                (rubric + SOP + grounding + transcript, from TeamConfig
                JSON), parse/validate the Scorecard.
@@ -108,7 +110,6 @@ from backend.services.dialpad_client import (
     get_call_details,
     get_transcript,
 )
-from backend.services.notion_service import fetch_sop_for_call
 from backend.services.rag.sop_retrieval import fetch_sop_context, pulpo_sop_mode
 
 if TYPE_CHECKING:
@@ -131,7 +132,7 @@ async def score_call(
     """
     Full pipeline for one call:
     1. Fetch transcript + moments from Dialpad (or use caller-supplied)
-    2. Fetch matching SOP from Notion
+    2. Retrieve SOP context from the RAG provider (PULPO_SOP_MODE-gated)
     3. Score with Gemini (audio + transcript + SOP)
     4. Return enriched scorecard
 
@@ -171,12 +172,14 @@ async def score_call(
                 call_id, cc_ctx.matched_by, rendered,
             )
 
-    # Step 2: SOP context — PulpoConnection §4.2/§4.3. PULPO_SOP_MODE:
-    #   off     legacy Notion path only (default)
-    #   shadow  Pulpo retrieval runs + logs + stamps provenance; the
-    #           prompt still uses Notion (the log-only compare window)
-    #   on      Pulpo replaces Notion; empty retrieval falls through to
-    #           the sop_context_missing conservative path
+    # Step 2: SOP context — PulpoConnection §4.2/§4.3. The legacy
+    # keyword→page path was decommissioned 2026-07-23 (P4); the RAG
+    # provider is the only SOP source. PULPO_SOP_MODE:
+    #   off     no retrieval; prompt takes the sop_context_missing path
+    #   shadow  retrieval runs + logs + stamps provenance; the prompt
+    #           still takes the conservative path (log-only compare)
+    #   on      the rendered block IS the SOP context; empty/sub-τ
+    #           retrieval falls through to sop_context_missing
     sop_mode = pulpo_sop_mode()
     sop_ctx = None
     if sop_mode != "off":
@@ -195,7 +198,7 @@ async def score_call(
     if sop_mode == "on" and sop_ctx is not None:
         sop_data = {"sop_title": sop_ctx.sop_title, "sop_content": sop_ctx.block_text}
     else:
-        sop_data = await fetch_sop_for_call(transcript_text)
+        sop_data = {"sop_title": "", "sop_content": ""}
 
     # Step 3: Score
     extra_notes = ""

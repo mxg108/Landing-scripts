@@ -306,6 +306,14 @@ candidates for raising τ to ~0.60 after the shadow window's real-call
 review. Rate-limit learning: the limiter rejects a batch exceeding the
 REMAINING minute allowance — the probe paces 10-query batches 12s apart.
 
+**Shadow window — 2026-07-23 (owner-reviewed, P4 gate):** live scored
+calls logged disposition-matched retrievals — *Extension / renewal* →
+[NMT Extensions, OTA SOP - Extensions, Temp Stays]; bare *Reservation &
+Stay Changes* → [NMT Extensions, OTA SOP - Swaps, General Member
+Questions]; *Verification & Onboarding* → [Verification Information,
+Verification From Step by Step, Verifications SOP - Standby]. Owner
+approved the flip; τ stays 0.55 pending on-mode observation.
+
 **6.2 Post-migration: trigger-phrase recall** (v1 §7, re-targeted) —
 after §5 lands the cards, the 1,549 labeled (member phrase → card)
 pairs benchmark properly: sampled ~300, batched 20/query-batch, rerank
