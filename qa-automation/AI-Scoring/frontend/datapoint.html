@@ -80,15 +80,42 @@
       font-size: 0.95rem;
     }
 
-    /* Call info grid */
-    .info-grid {
+    /* Call Metadata — grouped grid */
+    .meta-groups {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-      gap: 8px;
-      font-size: 0.8rem;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 16px;
     }
-    .info-item { color: var(--muted); }
+    .meta-group {
+      background: var(--bg);
+      border-radius: 10px;
+      padding: 12px 14px;
+    }
+    .meta-group-title {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      font-weight: 500;
+      margin-bottom: 8px;
+    }
+    .info-item { color: var(--muted); font-size: 0.78rem; padding: 2px 0; overflow-wrap: anywhere; }
     .info-item strong { color: var(--text); }
+    .csat-badge {
+      display: inline-block; font-size: 0.72rem; padding: 2px 8px;
+      background: #d0ddf0; border-radius: 12px; color: var(--text);
+    }
+
+    /* SOP reference footnotes */
+    .reference-item {
+      display: grid; grid-template-columns: 56px 1fr; gap: 8px;
+      padding: 6px 0; font-size: 0.78rem; line-height: 1.5;
+      border-bottom: 1px solid var(--border);
+    }
+    .reference-item:last-child { border-bottom: none; }
+    .reference-num { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .reference-meta { color: var(--muted); font-size: 0.68rem; }
+    .reference-flag { color: var(--amber); font-size: 0.68rem; }
 
     /* Call summary */
     .call-summary {
@@ -226,7 +253,8 @@
     <div id="placeholder" class="placeholder">Loading evaluation...</div>
 
     <div id="infoCard" class="card" style="display:none;">
-      <div class="info-grid" id="infoGrid"></div>
+      <h2>Call Metadata</h2>
+      <div class="meta-groups" id="metaGroups"></div>
     </div>
 
     <div id="summaryCard" class="card" style="display:none;">
@@ -249,6 +277,15 @@
         <div class="feedback-label">Opportunities for Improvement</div>
         <div id="improvements"></div>
       </div>
+    </div>
+
+    <div id="referencesCard" class="card" style="display:none;">
+      <h2>References</h2>
+      <div style="font-size:0.7rem; color:var(--muted); margin-bottom:8px;">
+        Internal SOPs the AI evaluator consulted when scoring this call —
+        numbering matches the [SOP n] citations in the reasoning above.
+      </div>
+      <div id="referencesList"></div>
     </div>
 
     <div id="dialpadCard" style="display:none; text-align:center; padding:8px 0;">
@@ -345,6 +382,103 @@
       }
     }
 
+    function escHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str == null ? '' : String(str);
+      return div.innerHTML;
+    }
+
+    function formatDuration(ms) {
+      if (!ms || ms <= 0) return null;
+      const totalSec = Math.round(ms / 1000);
+      const m = Math.floor(totalSec / 60);
+      const s = totalSec % 60;
+      return `${m}:${String(s).padStart(2, '0')} min`;
+    }
+
+    function metaGroup(title, items) {
+      const rows = items
+        .filter(i => i.html || (i.value !== null && i.value !== undefined && i.value !== ''))
+        .map(i => `<div class="info-item"><strong>${escHtml(i.label)}:</strong> ${i.html || escHtml(i.value)}</div>`)
+        .join('');
+      if (!rows) return '';
+      return `<div class="meta-group"><div class="meta-group-title">${escHtml(title)}</div>${rows}</div>`;
+    }
+
+    function renderCallMetadata(eval_) {
+      const disposition = eval_.dialpad_disposition_category
+        ? (eval_.dialpad_disposition
+            ? `${eval_.dialpad_disposition_category} — ${eval_.dialpad_disposition}`
+            : eval_.dialpad_disposition_category)
+        : null;
+      const csatHtml = (eval_.ai_csat !== null && eval_.ai_csat !== undefined)
+        ? `<span class="csat-badge" title="Dialpad Ai CSAT — model estimate, not a member survey">${escHtml(eval_.ai_csat)}/5 Ai (estimate)</span>`
+        : null;
+
+      const groups = [
+        metaGroup('Call', [
+          { label: 'Date', value: new Date(eval_.timestamp).toLocaleString() },
+          { label: 'Duration', value: formatDuration(eval_.call_duration_ms) },
+          { label: 'Entry-point ID', value: eval_.dialpad_entry_point_call_id },
+          { label: 'Call ID', value: eval_.dialpad_call_id },
+          { label: 'Master ID',
+            value: eval_.dialpad_master_call_id !== eval_.dialpad_call_id
+              ? eval_.dialpad_master_call_id : null },
+        ]),
+        metaGroup('Outcome', [
+          { label: 'Disposition', value: disposition },
+          { label: 'Ai CSAT', html: csatHtml },
+          { label: 'SOP grounding',
+            value: (eval_.pulpo_docs && eval_.pulpo_docs.length)
+              ? `${eval_.pulpo_docs.length} SOP${eval_.pulpo_docs.length > 1 ? 's' : ''} (see References)`
+              : (eval_.sop_used || null) },
+        ]),
+        metaGroup('Member', [
+          { label: 'Caller', value: eval_.caller_name },
+          { label: 'Phone', value: eval_.caller_phone },
+        ]),
+        metaGroup('Evaluation', [
+          { label: 'Agent', value: eval_.agent_name },
+          { label: 'Evaluator', value: eval_.manager_email },
+          { label: 'Source', value: eval_.source },
+        ]),
+      ].join('');
+
+      document.getElementById('metaGroups').innerHTML = groups;
+      document.getElementById('infoCard').style.display = '';
+    }
+
+    function renderReferences(eval_) {
+      const docs = Array.isArray(eval_.pulpo_docs) ? eval_.pulpo_docs : [];
+      let items = '';
+      if (docs.length > 0) {
+        items = docs.map((d, i) => {
+          const metaBits = [];
+          if (d.score != null) metaBits.push(`match ${Number(d.score).toFixed(2)}`);
+          if (d.updated_at) metaBits.push(`updated ${String(d.updated_at).slice(0, 10)}`);
+          const meta = metaBits.length ? `<span class="reference-meta"> — ${metaBits.join(', ')}</span>` : '';
+          const flagNote = d.open_flags > 0
+            ? `<div class="reference-flag">⚑ ${d.open_flags} open flag${d.open_flags > 1 ? 's' : ''} — passages under review; verify before treating as current policy.</div>`
+            : '';
+          return `
+            <div class="reference-item">
+              <div class="reference-num">[SOP ${i + 1}]</div>
+              <div>${escHtml(d.title || d.id || '')}${meta}${flagNote}</div>
+            </div>`;
+        }).join('');
+      } else if (eval_.sop_used) {
+        // Evals scored before provenance existed carry only the title.
+        items = `
+          <div class="reference-item">
+            <div class="reference-num">[SOP 1]</div>
+            <div>${escHtml(eval_.sop_used)}</div>
+          </div>`;
+      }
+      if (!items) return;
+      document.getElementById('referencesList').innerHTML = items;
+      document.getElementById('referencesCard').style.display = '';
+    }
+
     async function loadDataPoint() {
       if (!callId) {
         document.getElementById('placeholder').textContent = 'No call ID in URL.';
@@ -366,21 +500,13 @@
         `Call ${callId}  |  ${new Date(eval_.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}  |  Evaluator: ${eval_.manager_email}`;
       document.getElementById('agentLink').href = `/dashboard/${TEAM_ID}/agent/${encodeURIComponent(eval_.agent_name)}`;
 
-      // Info grid
-      const infoCard = document.getElementById('infoCard');
-      const items = [
-        { label: 'Agent', value: eval_.agent_name },
-        { label: 'Evaluator', value: eval_.manager_email },
-        { label: 'Date', value: new Date(eval_.timestamp).toLocaleString() },
-        { label: 'Source', value: eval_.source },
-      ];
-      if (eval_.caller_name) items.push({ label: 'Caller', value: eval_.caller_name });
-      if (eval_.caller_phone) items.push({ label: 'Phone', value: eval_.caller_phone });
+      // Call Metadata — everything the pipeline captured for this call,
+      // grouped: verified Dialpad facts (DispositionDesign §5), member
+      // info, call clocks/ids, and the evaluation trail.
+      renderCallMetadata(eval_);
 
-      document.getElementById('infoGrid').innerHTML = items.map(i =>
-        `<div class="info-item"><strong>${i.label}:</strong> ${i.value}</div>`
-      ).join('');
-      infoCard.style.display = '';
+      // SOP reference footnotes (PulpoConnection §4.2 provenance).
+      renderReferences(eval_);
 
       // Call summary
       if (eval_.call_summary) {

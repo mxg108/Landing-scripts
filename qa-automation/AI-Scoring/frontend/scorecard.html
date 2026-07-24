@@ -151,6 +151,24 @@
       color: var(--muted); margin-bottom: 0.35rem;
     }
 
+    /* SOP reference footnotes — numbering matches the [SOP n] citations
+       inside the AI reasoning text above. */
+    .references-section {
+      padding: 1rem 1.25rem; background: #f9fafe; border-top: 1px solid var(--border);
+      font-size: 0.75rem;
+    }
+    .reference-item {
+      display: grid; grid-template-columns: 52px 1fr; gap: 0.5rem;
+      padding: 0.3rem 0; line-height: 1.5;
+    }
+    .reference-num { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .reference-meta { color: var(--muted); font-size: 0.68rem; }
+    .reference-flag { color: var(--warning); font-size: 0.68rem; }
+    .disposition-chip {
+      font-size: 0.7rem; padding: 0.2rem 0.6rem; background: #d0ddf0;
+      color: var(--text); border-radius: 20px;
+    }
+
     .transcript-panel { border-top: 2px solid var(--navy); margin-top: 0.5rem; }
     .transcript-toggle {
       display: flex; align-items: center; justify-content: space-between;
@@ -408,6 +426,16 @@ function buildScorecardPanel(jobId, sc, filename, callId, sheetsRow) {
 
   const sheetsNote = sheetsRow > 0 ? `<span>Sheets row ${sheetsRow}</span>` : '';
 
+  // Verified Dialpad disposition (DispositionDesign §5) — the same fact
+  // the grounding block fed the scoring prompt. Absent = CC never saw
+  // the call or it was undispositioned; render nothing.
+  const dispositionChip = sc.dialpad_disposition_category
+    ? `<span class="disposition-chip" title="Verified Dialpad disposition">${escHtml(
+        sc.dialpad_disposition
+          ? `${sc.dialpad_disposition_category} — ${sc.dialpad_disposition}`
+          : sc.dialpad_disposition_category)}</span>`
+    : '';
+
   const header = `
     <div class="scorecard-header">
       <div>
@@ -415,6 +443,7 @@ function buildScorecardPanel(jobId, sc, filename, callId, sheetsRow) {
         <div class="header-meta">
           <span>Call ${callId || ''}</span>
           <span class="status-badge status-complete">complete</span>
+          ${dispositionChip}
           ${sheetsNote}
         </div>
       </div>
@@ -571,8 +600,52 @@ function buildScorecardPanel(jobId, sc, filename, callId, sheetsRow) {
     `;
   }
 
-  panel.innerHTML = header + sectionRows.join('') + approveBar + notes + transcriptPanel;
+  panel.innerHTML = header + sectionRows.join('') + approveBar + notes
+    + buildReferencesSection(sc) + transcriptPanel;
   return panel;
+}
+
+function escHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str == null ? '' : String(str);
+  return div.innerHTML;
+}
+
+// SOP reference footnotes (PulpoConnection §4.2 provenance). The AI's
+// reasoning cites "[SOP n]" — pulpo_docs preserves the injection order,
+// so footnote numbering lines up with those citations. Falls back to the
+// bare sop_used title for evals scored before provenance existed.
+function buildReferencesSection(sc) {
+  const docs = Array.isArray(sc.pulpo_docs) ? sc.pulpo_docs : [];
+  let items = '';
+  if (docs.length > 0) {
+    items = docs.map((d, i) => {
+      const metaBits = [];
+      if (d.score != null) metaBits.push(`match ${Number(d.score).toFixed(2)}`);
+      if (d.updated_at) metaBits.push(`updated ${String(d.updated_at).slice(0, 10)}`);
+      const meta = metaBits.length ? `<span class="reference-meta"> — ${metaBits.join(', ')}</span>` : '';
+      const flagNote = d.open_flags > 0
+        ? `<div class="reference-flag">⚑ ${d.open_flags} open flag${d.open_flags > 1 ? 's' : ''} — passages under review; verify before treating as current policy.</div>`
+        : '';
+      return `
+        <div class="reference-item">
+          <div class="reference-num">[SOP ${i + 1}]</div>
+          <div>${escHtml(d.title || d.id || '')}${meta}${flagNote}</div>
+        </div>`;
+    }).join('');
+  } else if (sc.sop_used) {
+    items = `
+      <div class="reference-item">
+        <div class="reference-num">[SOP 1]</div>
+        <div>${escHtml(sc.sop_used)}</div>
+      </div>`;
+  }
+  if (!items) return '';
+  return `
+    <div class="references-section">
+      <div class="notes-label">References — SOPs consulted by the AI evaluator</div>
+      ${items}
+    </div>`;
 }
 
 function checkManualScores(jobId) {

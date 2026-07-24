@@ -60,6 +60,13 @@ class FeedbackCard {
     );
     html += '</td></tr>';
 
+    // ── SOP reference footnotes (only when retrieval grounded the eval) ──
+    if (this.entry.sopReferences && this.entry.sopReferences.length) {
+      html += '<tr><td style="padding:8px 16px 16px 16px;font-family:Arial,sans-serif;">';
+      html += this._renderReferences();
+      html += '</td></tr>';
+    }
+
     // ── Dialpad call link ─────────────────────────────────────────
     if (this.entry.dialpadLink) {
       html += '<tr><td style="padding:0 16px 16px 16px;font-family:Arial,sans-serif;text-align:center;">';
@@ -114,6 +121,17 @@ class FeedbackCard {
       if (meta) meta += ' &middot; ';
       meta += this._esc(this.entry.callerPhone);
     }
+    // Verified Dialpad facts (blank on pre-layout rows): the call's
+    // disposition and the Ai CSAT estimate — labeled as a model
+    // estimate, never presented as a member survey.
+    if (this.entry.disposition) {
+      if (meta) meta += ' &middot; ';
+      meta += this._esc(this.entry.disposition);
+    }
+    if (this.entry.aiCsat) {
+      if (meta) meta += ' &middot; ';
+      meta += this._esc(this.entry.aiCsat) + '/5 Ai CSAT <span style="color:#999;">(estimate)</span>';
+    }
 
     var body = this.entry.callSummary
       ? this._esc(this.entry.callSummary)
@@ -131,6 +149,33 @@ class FeedbackCard {
              : '')
          + '<div style="font-size:14px;color:' + CONFIG.COLORS.DARK_NAVY + ';line-height:1.5;">'
          + body + '</div>'
+         + '</td></tr></table>';
+  }
+
+  /**
+   * Renders the SOP reference footnotes — the internal SOPs the AI
+   * evaluator consulted when scoring this call. Each line arrives
+   * pre-numbered ("SOP n: Title") so the numbering matches the [SOP n]
+   * citations inside the reasoning text above.
+   * @private
+   * @return {string}
+   */
+  _renderReferences() {
+    var self = this;
+    var items = this.entry.sopReferences.map(function(ref) {
+      return '<div style="font-size:13px;color:' + CONFIG.COLORS.DARK_NAVY
+           + ';line-height:1.6;">' + self._esc(ref) + '</div>';
+    }).join('');
+
+    return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="'
+         + 'border-left:4px solid ' + CONFIG.COLORS.TEXT_GRAY + ';background:#FAFAFA;'
+         + 'border-radius:0 4px 4px 0;">'
+         + '<tr><td style="padding:12px 16px;">'
+         + '<div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:'
+         + CONFIG.COLORS.TEXT_GRAY + ';margin-bottom:6px;font-weight:bold;">References</div>'
+         + '<div style="font-size:11px;color:#999;margin-bottom:6px;">'
+         + 'Internal SOPs consulted by the AI evaluator when scoring this call.</div>'
+         + items
          + '</td></tr></table>';
   }
 

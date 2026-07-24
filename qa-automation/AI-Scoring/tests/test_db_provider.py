@@ -243,3 +243,50 @@ def test_roster_rows_work_with_history_service_helpers():
     assert rows[0] == ["Name", "Email", "Supervisor", "Canonical Name"]
     assert _email_in_mails_rows("JANE@landing.com", rows)
     assert _agent_email_for_name_in_rows("Jane Doe", rows) == "jane@landing.com"
+
+
+# ---------------------------------------------------------------------------
+# Call-metadata fields (DispositionDesign §5 / PulpoConnection §4.2)
+# ---------------------------------------------------------------------------
+
+def test_call_metadata_fields_flow_through_record():
+    """/datapoint reads disposition, CSAT, clocks, the id triple, and the
+    pulpo_docs footnotes off the record — asyncpg hands JSONB back as a
+    JSON string, so the builder must parse it."""
+    provider = make_provider()
+    row = make_eval_row(
+        dialpad_disposition_category="Unit Issues",
+        dialpad_disposition="Lockouts",
+        ai_csat=4.5,
+        call_duration_ms=312_000,
+        dialpad_call_id="111",
+        dialpad_entry_point_call_id="222",
+        dialpad_master_call_id="333",
+        dialpad_call_metadata=(
+            '{"sop_used": "Lockout SOP", "pulpo_docs": ['
+            '{"id": "a", "title": "Lockout SOP", "score": 0.91}]}'
+        ),
+    )
+    rec = provider._record_from_rows(row, make_section_rows(provider._config))
+    assert rec.dialpad_disposition_category == "Unit Issues"
+    assert rec.dialpad_disposition == "Lockouts"
+    assert rec.ai_csat == 4.5
+    assert rec.call_duration_ms == 312_000
+    assert rec.dialpad_call_id == "111"
+    assert rec.dialpad_entry_point_call_id == "222"
+    assert rec.dialpad_master_call_id == "333"
+    assert rec.sop_used == "Lockout SOP"
+    assert rec.pulpo_docs == [{"id": "a", "title": "Lockout SOP", "score": 0.91}]
+
+
+def test_call_metadata_absent_defaults_are_benign():
+    """Rows scored before the CC/Pulpo era (and the SheetsProvider parity
+    path) leave every metadata field at its default — never raise."""
+    provider = make_provider()
+    rec = provider._record_from_rows(
+        make_eval_row(), make_section_rows(provider._config)
+    )
+    assert rec.dialpad_disposition_category is None
+    assert rec.ai_csat is None
+    assert rec.sop_used is None
+    assert rec.pulpo_docs == []

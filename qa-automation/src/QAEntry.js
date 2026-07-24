@@ -61,6 +61,15 @@ class QAEntry {
     entry.callerName   = (row[L.COL_CALLER_NAME]   || '').toString().trim();
     entry.callerPhone  = (row[L.COL_CALLER_PHONE]  || '').toString().trim();
 
+    // ── Call metadata + SOP references (trailing cols; blank on rows
+    //    written before the layout widened — every read degrades to '') ──
+    entry.disposition = (row[L.COL_DISPOSITION] || '').toString().trim();
+    entry.aiCsat      = (row[L.COL_AI_CSAT]     || '').toString().trim();
+    // Newline-joined "SOP n: Title" lines from the Python projection;
+    // numbering matches the [SOP n] citations in the AI reasoning text.
+    entry.sopReferences = (row[L.COL_SOP_REFERENCES] || '').toString()
+      .split('\n').map(function(s) { return s.trim(); }).filter(String);
+
     return entry;
   }
 

@@ -24,6 +24,18 @@ class EvaluationRecord(BaseModel):
     caller_name: Optional[str] = None
     caller_phone: Optional[str] = None
     source: str = "manual"  # "manual", "ai", or "backfilled"
+    # Call metadata (DispositionDesign §5 / PulpoConnection §4.2) — served
+    # by PostgresProvider only; the SheetsProvider parity path leaves the
+    # defaults, so parity comparisons must exclude these fields.
+    dialpad_disposition_category: Optional[str] = None
+    dialpad_disposition: Optional[str] = None
+    ai_csat: Optional[float] = None      # Dialpad Ai estimate, NOT a survey
+    call_duration_ms: Optional[int] = None
+    dialpad_call_id: Optional[str] = None
+    dialpad_entry_point_call_id: Optional[str] = None
+    dialpad_master_call_id: Optional[str] = None
+    sop_used: Optional[str] = None       # top SOP title injected at scoring
+    pulpo_docs: list[dict] = []          # retrieval provenance footnotes
 
 class SectionAssessment(BaseModel):
     """Gemini's assessment of a single section's progression."""

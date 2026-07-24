@@ -19,7 +19,7 @@ CONFIG.MAILS_SHEET_NAME   = "Mails";
 // ── Derived row layout (from HistoryLayout(N)) ───────────────
 CONFIG.HISTORY_LAYOUT = {
   N_SECTIONS:         15,
-  TOTAL_WIDTH:        58,
+  TOTAL_WIDTH:        61,
   COL_AGENT_NAME:     0,
   COL_AGENT_EMAIL:    1,
   COL_TIMESTAMP:      2,
@@ -38,6 +38,9 @@ CONFIG.HISTORY_LAYOUT = {
   COL_CALLER_NAME:    54,
   COL_CALLER_PHONE:   55,
   COL_SOURCE:         56,
+  COL_DISPOSITION:    58,
+  COL_AI_CSAT:        59,
+  COL_SOP_REFERENCES: 60,
 };
 
 // ── Section partitions ───────────────────────────────────────
