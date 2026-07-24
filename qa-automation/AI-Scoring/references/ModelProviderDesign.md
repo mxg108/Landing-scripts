@@ -1,7 +1,11 @@
 # ModelProviderDesign — abstracting the AI model behind the pipeline
 
-**Status:** v1 draft — design only, no code yet (design-doc-first).
-**Date:** 2026-07-23
+**Status:** v1.1 — design only. **Scoring-scope update 2026-07-24:** §2's
+"don't point Claude at scoring" is resolved by the two-stage split —
+`TwoStageScoringDesign.md` makes the text leg of scoring the seam's
+second consumer (Gemini annotates audio, any `TextModelProvider`
+judges). The seam design below is unchanged and is that doc's P1.
+**Date:** 2026-07-23 (v1), 2026-07-24 (v1.1)
 **Prompted by:** "Our system abstracts Gemini config in the team JSON, but
 how are we abstracting the AI model itself? I want to try Claude models
 (not Fable — overkill) via API either for scoring itself or progression
