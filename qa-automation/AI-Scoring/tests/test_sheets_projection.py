@@ -106,6 +106,45 @@ class TestBuildProjectionRow:
         assert row[history_layout.COL_TIMESTAMP] == ""
         assert row[L.col_eval_approved_at] == ""
 
+    def test_call_metadata_trailing_columns(self, ms_config):
+        """Disposition/CSAT/SOP-reference cells the GAS email reads —
+        pulpo_docs footnote numbering must match the [SOP n] citations
+        in the reasoning text (injection order preserved)."""
+        evaluation = _evaluation(
+            dialpad_disposition_category="Unit Issues",
+            dialpad_disposition="Lockouts",
+            ai_csat=4.5,
+            dialpad_call_metadata=(
+                '{"sop_used": "Lockout SOP", "pulpo_docs": ['
+                '{"id": "a", "title": "Lockout SOP", "score": 0.91},'
+                '{"id": "b", "title": "Latch Troubleshooting", "score": 0.72}]}'
+            ),
+        )
+        row = build_projection_row(evaluation, _sections(), ms_config)
+        L = ms_config.history_layout
+        assert row[L.col_disposition] == "Unit Issues — Lockouts"
+        assert row[L.col_ai_csat] == "4.5"
+        assert row[L.col_sop_references] == (
+            "SOP 1: Lockout SOP\nSOP 2: Latch Troubleshooting"
+        )
+
+    def test_call_metadata_absent_renders_blank(self, ms_config):
+        """Fixture without the metadata keys (and rows scored before the
+        CC/Pulpo era) render blank cells, never raise."""
+        row = build_projection_row(_evaluation(), _sections(), ms_config)
+        L = ms_config.history_layout
+        assert row[L.col_disposition] == ""
+        assert row[L.col_ai_csat] == ""
+        assert row[L.col_sop_references] == ""
+
+    def test_sop_references_falls_back_to_sop_used(self, ms_config):
+        """Pre-provenance rows carry only the bare title."""
+        evaluation = _evaluation(
+            dialpad_call_metadata='{"sop_used": "Lockout SOP", "pulpo_docs": []}',
+        )
+        row = build_projection_row(evaluation, _sections(), ms_config)
+        assert row[ms_config.history_layout.col_sop_references] == "Lockout SOP"
+
 
 class TestOverallRendering:
 

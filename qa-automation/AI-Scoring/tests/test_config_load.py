@@ -66,15 +66,16 @@ def test_score_destination_columns_reference_real_sections(config: TeamConfig):
 
 
 def test_history_layout_width_matches_formula(config: TeamConfig):
-    """Derived layout width follows the canonical 6 + 3N + 7 formula.
+    """Derived layout width follows the canonical 6 + 3N + 10 formula.
 
-    Trailing width is 7 since the call-time initiative landed
-    `col_eval_approved_at` as a trailing column (see
-    references/CallTimeOnAnalystHistory.md).
+    Trailing width grew 6 → 7 with the call-time initiative
+    (`col_eval_approved_at`, references/CallTimeOnAnalystHistory.md) and
+    7 → 10 with the call-metadata columns (disposition, ai_csat,
+    sop_references — DispositionDesign §5 / PulpoConnection §4.2).
     """
     L = config.history_layout
     n = len(config.sections)
-    assert L.total_width == 6 + 3 * n + 7
+    assert L.total_width == 6 + 3 * n + 10
     # Range invariants: scores → reasoning → confidence are contiguous, each width N
     assert L.scores_end - L.scores_start == n
     assert L.reasoning_end - L.reasoning_start == n
@@ -84,12 +85,16 @@ def test_history_layout_width_matches_formula(config: TeamConfig):
     # Trailing fixed cells immediately follow confidence range
     assert L.col_key_strengths == L.confidence_end
     assert L.col_source == L.confidence_end + 5
-    # New trailing column for the call-time initiative
     assert L.col_eval_approved_at == L.confidence_end + 6
-    # eval_approved_at is the LAST trailing column — total_width math
+    # Call-metadata trailing columns (append-only — positions of every
+    # earlier cell must never shift)
+    assert L.col_disposition == L.confidence_end + 7
+    assert L.col_ai_csat == L.confidence_end + 8
+    assert L.col_sop_references == L.confidence_end + 9
+    # sop_references is the LAST trailing column — total_width math
     # would silently break if a future trailing cell landed without
     # bumping TRAILING_WIDTH here.
-    assert L.col_eval_approved_at == L.total_width - 1
+    assert L.col_sop_references == L.total_width - 1
 
 
 def test_history_layout_eval_approved_at_does_not_collide_with_existing_trailing_cells(
@@ -123,8 +128,8 @@ def test_history_layout_eval_approved_at_indices_at_n_boundaries():
             f"N={n}: col_eval_approved_at expected at index {expected}, "
             f"got {L.col_eval_approved_at}"
         )
-        # And it's the last column.
-        assert L.total_width == L.col_eval_approved_at + 1
+        # Three call-metadata columns follow it; sop_references is last.
+        assert L.total_width == L.col_sop_references + 1
 
 
 def test_section_numbers_are_unique(config: TeamConfig):

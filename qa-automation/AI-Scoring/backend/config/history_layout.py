@@ -21,11 +21,14 @@ Layout (0-indexed columns)::
     6+3N+3      caller_name
     6+3N+4      caller_phone
     6+3N+5      source
-    6+3N+6      eval_approved_at        (NEW — see semantic note)
+    6+3N+6      eval_approved_at        (see semantic note)
+    6+3N+7      disposition             (display string "Category — Sub")
+    6+3N+8      ai_csat                 (Dialpad Ai estimate, 1-5)
+    6+3N+9      sop_references          (newline-joined "SOP n: Title")
 
-Total width: 6 + 3N + 7 columns.
+Total width: 6 + 3N + 10 columns.
 
-For Sales (N=19) → 70 cols (A–BR). For MS (N=10) → 43 cols (A–AQ).
+For Sales (N=19) → 73 cols (A–BU). For MS (N=10) → 46 cols (A–AT).
 
 ----------------------------------------------------------------------
 Timestamp semantic — see references/CallTimeOnAnalystHistory.md
@@ -60,7 +63,7 @@ COL_DIALPAD_LINK = 4
 COL_OVERALL_SCORE = 5
 
 PREFIX_WIDTH = 6
-TRAILING_WIDTH = 7          # bumped 6 → 7 to seat col_eval_approved_at
+TRAILING_WIDTH = 10         # 7 → 10: disposition, ai_csat, sop_references
 
 
 class HistoryLayout:
@@ -148,6 +151,29 @@ class HistoryLayout:
         rows until PR-2's backfill script runs; ``load_and_clean``
         falls back to col C during that window."""
         return self.confidence_end + 6
+
+    @property
+    def col_disposition(self) -> int:
+        """Verified Dialpad disposition as one display cell
+        ("Category — Sub", or just the category). Blank when the CC
+        match found none — absence is a first-class state
+        (DispositionDesign §5)."""
+        return self.confidence_end + 7
+
+    @property
+    def col_ai_csat(self) -> int:
+        """Dialpad Ai CSAT estimate (1-5, one decimal). A model
+        estimate, NOT a member survey — label it as such wherever
+        rendered (DispositionDesign §6)."""
+        return self.confidence_end + 8
+
+    @property
+    def col_sop_references(self) -> int:
+        """Newline-joined "SOP n: Title" footnotes for the RAG docs that
+        grounded the scoring prompt (PulpoConnection §4.2 provenance).
+        Numbering matches the [SOP n] citations inside the AI's
+        reasoning text."""
+        return self.confidence_end + 9
 
     @property
     def total_width(self) -> int:

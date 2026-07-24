@@ -21,6 +21,7 @@ retryable — callers log and continue; the nightly reproject sweep
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -58,6 +59,43 @@ def _render_section_value(section: dict[str, Any]) -> str:
 
 def _render_ts(value: Any) -> str:
     return value.strftime(_SHEET_TS_FORMAT) if value else ""
+
+
+def _metadata_dict(evaluation: Any) -> dict:
+    """dialpad_call_metadata JSONB → dict (asyncpg returns a JSON string
+    without a custom codec; tolerate str, dict, or NULL). ``.get`` works
+    on both asyncpg Records and plain-dict test fixtures."""
+    raw = evaluation.get("dialpad_call_metadata")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _render_disposition(evaluation: Any) -> str:
+    """"Category — Sub" display cell; blank when the CC match found none."""
+    category = evaluation.get("dialpad_disposition_category") or ""
+    sub = evaluation.get("dialpad_disposition") or ""
+    if category and sub:
+        return f"{category} — {sub}"
+    return category or sub
+
+
+def _render_sop_references(metadata: dict) -> str:
+    """Newline-joined "SOP n: Title" footnotes from the pulpo_docs
+    provenance — numbering matches the [SOP n] citations the scoring
+    prompt used. Falls back to the bare sop_used title for rows written
+    before provenance existed."""
+    docs = metadata.get("pulpo_docs")
+    if isinstance(docs, list) and docs:
+        return "\n".join(
+            f"SOP {i}: {doc.get('title', '')}"
+            for i, doc in enumerate(docs, start=1)
+            if isinstance(doc, dict) and doc.get("title")
+        )
+    return metadata.get("sop_used") or ""
 
 
 def _render_overall(value: Any) -> str:
@@ -100,6 +138,14 @@ def build_projection_row(
     row[L.col_caller_phone] = evaluation["caller_phone"] or ""
     row[L.col_source] = evaluation["source"] or ""
     row[L.col_eval_approved_at] = _render_ts(evaluation["approved_at"])
+    # Call-metadata trailing columns (DispositionDesign §5 / PulpoConnection
+    # §4.2) — the GAS email reads these to render the disposition line and
+    # the SOP-reference footnotes.
+    metadata = _metadata_dict(evaluation)
+    ai_csat = evaluation.get("ai_csat")
+    row[L.col_disposition] = _render_disposition(evaluation)
+    row[L.col_ai_csat] = str(ai_csat) if ai_csat is not None else ""
+    row[L.col_sop_references] = _render_sop_references(metadata)
     return row
 
 

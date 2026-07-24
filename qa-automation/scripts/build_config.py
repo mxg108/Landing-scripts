@@ -75,6 +75,9 @@ def _render_history_layout(config: TeamConfig) -> str:
         f"  COL_CALLER_NAME:    {L.col_caller_name},",
         f"  COL_CALLER_PHONE:   {L.col_caller_phone},",
         f"  COL_SOURCE:         {L.col_source},",
+        f"  COL_DISPOSITION:    {L.col_disposition},",
+        f"  COL_AI_CSAT:        {L.col_ai_csat},",
+        f"  COL_SOP_REFERENCES: {L.col_sop_references},",
         "};",
     ]
     return "\n".join(lines)

@@ -13,6 +13,7 @@ are served here.
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -30,7 +31,13 @@ _EVAL_COLUMNS = (
     "id, agent_name_raw, agent_email, evaluator_email, "
     "COALESCE(call_connected_at, created_at) AS ts, "
     "overall_score, dialpad_link, key_strengths, opportunities, "
-    "call_summary, caller_name, caller_phone, source"
+    "call_summary, caller_name, caller_phone, source, "
+    # Call metadata for the /datapoint drill-down (DispositionDesign §5,
+    # PulpoConnection §4.2): CC stamps, clocks, the id triple, and the
+    # metadata JSONB carrying sop_used + pulpo_docs provenance.
+    "dialpad_disposition_category, dialpad_disposition, ai_csat, "
+    "call_duration_ms, dialpad_call_id, dialpad_entry_point_call_id, "
+    "dialpad_master_call_id, dialpad_call_metadata"
 )
 
 
@@ -228,6 +235,18 @@ class PostgresProvider(DataProvider):
             ts = ts.replace(tzinfo=timezone.utc)
 
         dialpad_link = ev["dialpad_link"] or None
+        # dialpad_call_metadata is JSONB; asyncpg returns it as a JSON
+        # string without a custom codec. Tolerate str, dict, or NULL —
+        # `.get` works on both asyncpg Records and dict test fixtures.
+        metadata = ev.get("dialpad_call_metadata")
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except ValueError:
+                metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        pulpo_docs = metadata.get("pulpo_docs")
         return EvaluationRecord(
             timestamp=ts,
             agent_name=ev["agent_name_raw"],
@@ -248,6 +267,15 @@ class PostgresProvider(DataProvider):
             caller_name=ev["caller_name"] or None,
             caller_phone=ev["caller_phone"] or None,
             source=ev["source"] or "manual",
+            dialpad_disposition_category=ev.get("dialpad_disposition_category") or None,
+            dialpad_disposition=ev.get("dialpad_disposition") or None,
+            ai_csat=float(ev["ai_csat"]) if ev.get("ai_csat") is not None else None,
+            call_duration_ms=ev.get("call_duration_ms"),
+            dialpad_call_id=ev.get("dialpad_call_id") or None,
+            dialpad_entry_point_call_id=ev.get("dialpad_entry_point_call_id") or None,
+            dialpad_master_call_id=ev.get("dialpad_master_call_id") or None,
+            sop_used=metadata.get("sop_used") or None,
+            pulpo_docs=pulpo_docs if isinstance(pulpo_docs, list) else [],
         )
 
     # ------------------------------------------------------------------
