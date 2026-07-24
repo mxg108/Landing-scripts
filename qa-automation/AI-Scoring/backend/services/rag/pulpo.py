@@ -42,6 +42,12 @@ _CLIENT_INFO = {"name": "landing-qa-scoring", "version": "1.0"}
 CONNECT_TIMEOUT_S = 3.0
 READ_TIMEOUT_S = 8.0
 
+# Pulpo's search_knowledge_base rejects query strings over 500 chars
+# (server-side zod cap, observed 2026-07-24). Longer queries — e.g. the
+# transcript-head disposition fallback — are clamped here so the limit
+# never escapes this boundary.
+QUERY_MAX_CHARS = 500
+
 
 def _parse_rpc_response(resp: httpx.Response) -> Optional[dict]:
     """JSON-RPC response body → dict. Handles both plain JSON and SSE
@@ -206,12 +212,13 @@ class PulpoProvider(RagProvider):
     ) -> list[list[RagHit]]:
         if not queries:
             return []
+        sent = [q[:QUERY_MAX_CHARS] for q in queries]
         # rerank stays False by design (§4.2): Gemini reads full bodies,
         # so Pulpo's precision pass is declined — their own guidance for
         # agents that read the candidates themselves.
         payload = await self._tool_call(
             "search_knowledge_base",
-            {"queries": queries, "limit": limit, "rerank": False},
+            {"queries": sent, "limit": limit, "rerank": False},
         )
         if not isinstance(payload, dict):
             raise RagProviderError(f"pulpo: unexpected search payload: {payload!r:.200}")
@@ -220,8 +227,9 @@ class PulpoProvider(RagProvider):
             b.get("query"): [self._map_hit(r) for r in (b.get("results") or [])]
             for b in batches
         }
-        # Order-align with the request; a query Pulpo dropped yields [].
-        return [by_query.get(q, []) for q in queries]
+        # Order-align with the request (Pulpo echoes the clamped query,
+        # so align against `sent`); a query Pulpo dropped yields [].
+        return [by_query.get(q, []) for q in sent]
 
     async def get_document(self, doc_id: str) -> Optional[RagDoc]:
         try:

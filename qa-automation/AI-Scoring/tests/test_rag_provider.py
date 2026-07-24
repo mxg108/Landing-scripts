@@ -69,6 +69,16 @@ def _mcp_handler(request: httpx.Request) -> httpx.Response:
         args = body["params"]["arguments"]
         if tool == "search_knowledge_base":
             assert args["rerank"] is False  # §4.2 stance, enforced at transport
+            # Mirror the live server's zod cap: >500-char queries are a
+            # -32602 tool error, not a served search.
+            if any(len(q) > 500 for q in args["queries"]):
+                return httpx.Response(
+                    200,
+                    json={"jsonrpc": "2.0", "id": body["id"],
+                          "result": {"isError": True,
+                                     "content": [{"type": "text",
+                                                  "text": "MCP error -32602: too_big"}]}},
+                )
             payload = _SEARCH_PAYLOAD
         elif tool == "get_document":
             payload = _DOC_PAYLOAD if args["id"] == "doc-1" else {"error": "not found"}
@@ -104,6 +114,19 @@ async def test_search_maps_neutral_hits(provider: PulpoProvider):
     assert top.flag_count == 1
     # Nothing Pulpo-shaped escapes: neutral dataclass, no score_type attr.
     assert not hasattr(top, "score_type")
+
+
+@pytest.mark.asyncio
+async def test_search_clamps_overlong_queries(provider: PulpoProvider):
+    """A >500-char query (the transcript-head disposition fallback is cut
+    at 600) is clamped to Pulpo's cap before the tool call, and the batch
+    echo of the clamped string still order-aligns."""
+    long_query = "Access & Entry — Smart-lock failure" + " padding" * 100
+    assert len(long_query) > 500
+    batches = await provider.search([long_query, "no-batch-for-this"])
+    # No RagProviderError raised, and positions hold: the clamped query
+    # got no batch back from the fixture, so both slots are [].
+    assert batches == [[], []]
 
 
 @pytest.mark.asyncio
