@@ -1,16 +1,19 @@
-"""Gemini-powered agent progression assessment service."""
+"""Agent progression assessment service.
+
+Generation goes through the llm/ provider seam (ModelProviderDesign):
+Gemini by default with the team JSON's existing knobs; flip to Claude
+via PROGRESSION_MODEL_PROVIDER=anthropic — no code change.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import time
 from typing import Optional, TYPE_CHECKING
 
-from google import genai
-from google.genai import types
+from backend.services.llm.factory import resolve_stage
 
 from backend.models.dashboard import (
     EvaluationRecord,
@@ -128,8 +131,8 @@ async def get_progression(
         return result
 
     try:
-        result = generate_from_records(records, agent_name, days, config,
-                                       data_source=provider.name)
+        result = await generate_from_records(records, agent_name, days, config,
+                                             data_source=provider.name)
     except AssessmentParseError:
         # parse-failure placeholder — cached (avoids hammering Gemini) but
         # never persisted (§Q4.a: only genuine AI output lands).
@@ -164,38 +167,31 @@ async def get_progression(
 
 
 class AssessmentParseError(Exception):
-    """Gemini's response wasn't valid JSON — no genuine assessment exists."""
+    """The model's response wasn't valid JSON — no genuine assessment exists."""
 
 
-def generate_from_records(
+async def generate_from_records(
     records: list[EvaluationRecord],
     agent_name: str,
     days: int,
     config: TeamConfig,
     data_source: str = "PostgreSQL",
 ) -> ProgressionAssessment:
-    """The generation core: serialize → prompt → Gemini → parse. Shared by
+    """The generation core: serialize → prompt → model → parse. Shared by
     the dashboard path (get_progression, rolling window) and the EOM
     one-pager (calendar-month records). No caching, no persistence —
     callers own both. Raises AssessmentParseError on unparseable output."""
     evaluations_json = _serialize_records(records)
     prompt = build_progression_prompt(config, agent_name, evaluations_json, days)
 
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY not set in environment")
-
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model=config.gemini.progression_model,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            temperature=config.gemini.progression_temperature,
-            max_output_tokens=config.gemini.progression_max_output_tokens,
-        ),
+    stage = resolve_stage("progression", config)
+    result = await stage.provider.generate(
+        prompt,
+        model=stage.model,
+        max_output_tokens=stage.max_output_tokens,
     )
 
-    raw_text = _strip_markdown_fences(response.text)
+    raw_text = _strip_markdown_fences(result.text)
     try:
         parsed = json.loads(raw_text)
     except json.JSONDecodeError as exc:

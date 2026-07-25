@@ -1,7 +1,7 @@
 # TwoStageScoringDesign — Gemini annotates, any LLM scores
 
-**Status:** v1 draft — design only (design-doc-first).
-**Date:** 2026-07-24
+**Status:** v1.1 — §10 RESOLVED (owner, 2026-07-25); P1 building.
+**Date:** 2026-07-24 (v1), 2026-07-25 (v1.1)
 **Owner mandate:** "To incorporate Claude models (until Anthropic releases
 a model that can natively listen to audio) we now have to split the
 scoring work into the two-stage process we have outlined in this repo …
@@ -155,8 +155,9 @@ consumer (progression the first — same seam, no divergence).
   `output_config.format` json_schema — kills fence-stripping; Gemini:
   `response_schema` equivalent) → same `Scorecard.model_validate`
   boundary as today.
-- Default scorer: `claude-opus-4-8` (owner: not Fable); `claude-sonnet-5`
-  is the cost lever. Adaptive thinking on; no sampling params.
+- Default scorer: **`claude-sonnet-5`** (§10.2 — the starting tier; the
+  newest Opus tier is reserved for progression analysis later; never
+  Fable). Adaptive thinking on; no sampling params.
 - Because Stage B is provider-agnostic, **Gemini can also be the judge**
   — useful for isolating "did the split change scores?" from "did
   Claude change scores?" (see §6 shadow design).
@@ -187,7 +188,7 @@ Team JSON grows (back-compat: absent → synthesized from `gemini.*`):
   "scoring": {
     "pipeline": "single",                    // single | two_stage
     "annotator": { "provider": "gemini", "model": "gemini-2.5-flash" },
-    "scorer":    { "provider": "anthropic", "model": "claude-opus-4-8" }
+    "scorer":    { "provider": "anthropic", "model": "claude-sonnet-5" }
   },
   "progression": { "provider": "gemini", "model": "gemini-2.5-flash" }
 }
@@ -255,20 +256,28 @@ it lands**; `score_call`'s signature stays frozen so rescore composes
 with the pipeline switch for free; migration numbers — 018 is taken,
 this design needs **no migration** (column 006, JSONB stamps only).
 
-## 10. Open questions (owner)
+## 10. Open questions — RESOLVED (owner, 2026-07-25)
 
-1. **Key/billing** (carried from ModelProviderDesign §5): Anthropic org +
-   `ANTHROPIC_API_KEY` — new Landing account or existing?
-2. **Judge tier:** confirm `claude-opus-4-8` default vs `claude-sonnet-5`
-   for the trial (cost table §6).
-3. **Shadow scope:** all MS calls for a week, or a sampled subset?
-   (Volume says "all" is affordable.)
-4. **Annotator model:** keep `gemini-2.5-flash`, or trial `-pro` for
-   annotation fidelity on Spanish/accented audio? (Flash first is the
-   cheap default; the Spanish spot-check decides.)
-5. **PII surface:** `annotated_transcript` carries verbatim caller
-   speech; SQLMigration §8.4 gates raw reads behind
-   `KEY_ROLE_PRIVILEGED`. v1 renders it **nowhere** in the frontend —
-   surfacing it on /datapoint (privileged-only) is a follow-up decision.
-6. **Sequencing:** OK to start P1 (the `llm/` seam — zero overlap with
-   ScorecardActions) now, before the other session lands?
+1. **Key/billing:** Landing has (or the owner can mint) an Anthropic API
+   key; lands in `.env` + Railway ~Monday. Until then the anthropic
+   provider raises a clean `LlmProviderError` and nothing selects it by
+   default.
+2. **Judge tier:** **`claude-sonnet-5` is the starting point.** The
+   newest Opus tier (Opus 4.8 today; its successor when released) is
+   reserved for **progression analysis** specifically, later. **Never
+   Fable.**
+3. **Shadow scope:** **all MS calls for a week** — volume makes it
+   manageable and easy to extrapolate.
+4. **Annotator model:** trial **both** `gemini-2.5-flash` AND
+   `gemini-2.5-pro` — the P2 smoke runs the same calls through each and
+   the Spanish spot-check compares annotations side by side.
+5. **PII surface:** carried as **debt**, deliberately. The forcing
+   function is the future **Agent view** — agents monitoring their own
+   progress/performance — where raw transcriptions must NOT appear.
+   That surface gets its own spec: **`AgentView.md`** (future branch +
+   PR group); redaction/visibility rules for `annotated_transcript` are
+   designed there, not here. Until then: rendered nowhere in the
+   frontend, `KEY_ROLE_PRIVILEGED` gates raw reads (SQLMigration §8.4).
+6. **Sequencing:** **go.** ScorecardActions doesn't touch model
+   providers beyond what's already spec'd, so P1 starts immediately;
+   the §9 rebase rule holds for P2+.

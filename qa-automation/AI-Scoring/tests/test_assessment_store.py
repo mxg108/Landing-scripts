@@ -186,18 +186,24 @@ def _wire(monkeypatch, gemini_text):
     monkeypatch.setattr(ast, "persist_assessment", fake_persist)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
 
+    # The Gemini client moved behind the llm/ seam (ModelProviderDesign
+    # P1) — stub the async surface the GeminiTextProvider actually calls.
     class _Resp:
         text = gemini_text
 
-    class _Models:
-        def generate_content(self, **kw):
+    class _AioModels:
+        async def generate_content(self, **kw):
             return _Resp()
+
+    class _Aio:
+        models = _AioModels()
 
     class _Client:
         def __init__(self, api_key=None):
-            self.models = _Models()
+            self.aio = _Aio()
 
-    monkeypatch.setattr(ps.genai, "Client", _Client)
+    import backend.services.llm.gemini as llm_gemini
+    monkeypatch.setattr(llm_gemini.genai, "Client", _Client)
     return ps, calls
 
 

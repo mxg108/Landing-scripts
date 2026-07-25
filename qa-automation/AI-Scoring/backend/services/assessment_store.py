@@ -191,7 +191,7 @@ async def get_or_generate_month_assessment(
     if not records:
         return None
     try:
-        result = generate_from_records(records, agent_name, days, config)
+        result = await generate_from_records(records, agent_name, days, config)
     except AssessmentParseError:
         logger.warning(
             "assessment_store: month generation unparseable for %r (%s %s) — "
