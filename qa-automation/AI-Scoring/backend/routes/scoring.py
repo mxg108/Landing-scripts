@@ -30,7 +30,8 @@ from backend.services.history_service import (
 )
 from backend.services import eval_store
 from backend.services.eval_store import record_approval, record_draft_evaluation
-from backend.services.sheets_projection import project_evaluation
+from backend.services.sheets_projection import project_evaluation, tombstone_evaluation
+from backend.services.stat_points import rebuild_agent_series
 from backend.services.event_bus import get_event_bus
 from backend.services.scoring_service import score_call
 from backend.services.sheets_service import (
@@ -76,6 +77,43 @@ def _job_key(team_id: str, job_id: str) -> str:
 
 def _make_job_id(call_id: str, agent_name: str) -> str:
     return f"{call_id}_{agent_name}".replace(" ", "_")
+
+
+async def _job_from_db(team_id: str, job_id: str) -> Optional[dict]:
+    """Reconstruct an approval context from qa.evaluations when the
+    in-memory job is gone — server restart, old scorecard URL, or the
+    /datapoints surface (ScorecardActionsDesign §3, slice S1).
+
+    Concurrency: last-writer-wins by design. qa.evaluations has no
+    updated_at column and these are low-traffic manager tools. If Landing
+    outgrows this (concurrent evaluators on one eval), add updated_at +
+    an If-Unmodified-Since-style optimistic check here — potential design
+    choice deliberately deferred, not overlooked.
+    """
+    ref = await eval_store.resolve_evaluation(team_id, job_id)
+    if ref is None:
+        return None
+    return {
+        "status": "complete",
+        "state": ref.state,
+        "scoring_status": ref.scoring_status,
+        "evaluation_id": ref.id,
+        "call_id": ref.dialpad_call_id or ref.dialpad_entry_point_call_id or "",
+        "agent_name": ref.agent_name_raw,
+        "agent_email": ref.agent_email or "",
+        "overall_score": ref.overall_score,
+        "restored_from_db": True,
+        "scorecard": {
+            "sections": ref.sections,
+            "manager_email": ref.evaluator_email or "",
+            "dialpad_link": ref.dialpad_link,
+            "call_summary": ref.call_summary or "",
+            "key_strengths": ref.key_strengths or "",
+            "opportunities": ref.opportunities or "",
+            "agent_name": ref.agent_name_raw,
+            "model": ref.model,
+        },
+    }
 
 
 def _sse_eval_id_from_link(link: str) -> str:
@@ -564,7 +602,13 @@ async def approve_scorecard(
     key = _job_key(team_id, job_id)
     job = _jobs.get(key)
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        # S1 fallback (ScorecardActionsDesign §3): the in-memory job died
+        # with the process, but the evaluation didn't — reconstruct the
+        # approval context from the DB row and cache it like a live job.
+        job = await _job_from_db(team_id, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        _jobs[key] = job
     if job["status"] == "approved":
         raise HTTPException(status_code=409, detail="Already approved")
     if job["status"] != "complete":
@@ -597,7 +641,17 @@ async def approve_scorecard(
     # + projections. No destination tab, no readback — DB errors are hard
     # errors (§7.3 Phase C).
     sc = job["scorecard"]
-    evaluator_email = sc.get("manager_email", "")
+    # Payload evaluator wins (S1: restored jobs have no original manager);
+    # then the job's manager; then the row's evaluator already inside
+    # manager_email for restored jobs. All empty → 422, because "" would
+    # satisfy the NOT-NULL approval CHECK while recording nobody.
+    evaluator_email = approval.evaluator_email or sc.get("manager_email", "")
+    if not evaluator_email:
+        job["status"] = "complete"
+        raise HTTPException(
+            status_code=422,
+            detail="evaluator_email required: approval context has no evaluator identity",
+        )
     # Backend guard behind the frontend's "Score Required" gate: manual
     # sections without a formula na_default must carry real scores —
     # NA would ride into full credit (the 2026-07-06 Sales find).
@@ -685,3 +739,125 @@ async def approve_scorecard(
         job["status"] = "complete"
         job["error"] = str(e)
         raise HTTPException(status_code=500, detail=f"Engine approval failed: {e}")
+
+
+@router.delete("/score/{job_id}")
+async def delete_evaluation(
+    request: Request,
+    job_id: str,
+    identity: KeyIdentity = Depends(require_api_key),
+):
+    """Delete an evaluation — the privileged-only tampering doorway
+    (ScorecardActionsDesign §4.4; formalizes the 2026-07-24 manual
+    procedure).
+
+    Order inside one transaction: stat point out (its FK is NO ACTION and
+    would block the row delete), evaluation out (sections/tags/sweeps
+    cascade), agent series rebuilt (§5 — the manual procedure got lucky
+    with a latest-point delete; this route must not depend on luck).
+    Coaching links refuse the delete with a 409 — they are the human-side
+    tampering ledger and cascading them would erase the receipts that
+    justify score changes.
+
+    The response carries a full JSON snapshot of what was deleted (row +
+    sections + stat point) — the caller's client-side backup, replacing
+    the ad-hoc eval_2377_backup.json.
+
+    Concurrency: last-writer-wins by design. qa.evaluations has no
+    updated_at column and these are low-traffic manager tools. If Landing
+    outgrows this (concurrent evaluators on one eval), add updated_at +
+    an If-Unmodified-Since-style optimistic check here — potential design
+    choice deliberately deferred, not overlooked.
+    """
+    team_id = team_id_from_path(request)
+    if identity.role != "privileged":
+        append_score_audit_row(
+            api_key_role=identity.role,
+            evaluator_email="",
+            agent_email="",
+            agent_name="",
+            call_id=eval_store.call_id_from_job_id(job_id),
+            target_team=team_id,
+            action=audit_cfg.ACTION_DENIED,
+            result_row=None,
+            notes="delete_requires_privileged_key",
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Deleting evaluations requires the privileged API key",
+        )
+
+    ref = await eval_store.resolve_evaluation(team_id, job_id)
+    if ref is None:
+        raise HTTPException(status_code=404, detail="No evaluation matches this call id")
+    config = get_team_config(team_id)
+
+    pool = await eval_store.get_pool()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Database not configured")
+
+    async with pool.acquire() as conn:
+        coaching_rows = await conn.fetch(
+            "SELECT coaching_id, linked_at FROM qa.coaching_evaluations "
+            "WHERE evaluation_id = $1", ref.id,
+        )
+        if coaching_rows:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Evaluation has coaching/1:1 records and cannot be "
+                               "deleted — they are the audit trail for score "
+                               "changes. Unlink the coachings first if this "
+                               "delete is truly intended.",
+                    "coaching_ids": [r["coaching_id"] for r in coaching_rows],
+                },
+            )
+
+        # Snapshot BEFORE deleting — the response is the caller's backup,
+        # and dialpad_link must outlive the row for the tombstone.
+        eval_row = await conn.fetchrow(
+            "SELECT * FROM qa.evaluations WHERE id = $1", ref.id)
+        section_rows = await conn.fetch(
+            "SELECT * FROM qa.evaluation_sections WHERE evaluation_id = $1 "
+            "ORDER BY section_number", ref.id)
+        point_row = await conn.fetchrow(
+            "SELECT * FROM qa.agent_stat_points WHERE evaluation_id = $1", ref.id)
+        snapshot = {
+            "evaluation": dict(eval_row) if eval_row else None,
+            "sections": [dict(r) for r in section_rows],
+            "stat_point": dict(point_row) if point_row else None,
+        }
+        agent_id = eval_row["agent_id"] if eval_row else None
+
+        async with conn.transaction():
+            await conn.execute(
+                "DELETE FROM qa.agent_stat_points WHERE evaluation_id = $1", ref.id)
+            await conn.execute(
+                "DELETE FROM qa.evaluations WHERE id = $1", ref.id)
+            if agent_id is not None:
+                # Fatal by contract — a failed rebuild rolls the delete back.
+                await rebuild_agent_series(conn, agent_id, config)
+
+    # Post-commit, both retryable/visible rather than delete-blocking:
+    tombstone_row = await tombstone_evaluation(ref.dialpad_link or "", config)
+    append_score_audit_row(
+        api_key_role=identity.role,
+        evaluator_email="",
+        agent_email=ref.agent_email or "",
+        agent_name=ref.agent_name_raw,
+        call_id=ref.dialpad_call_id or ref.dialpad_entry_point_call_id or "",
+        target_team=team_id,
+        action=audit_cfg.ACTION_ORPHANED,
+        result_row=tombstone_row,
+        notes=f"role={identity.role} old_score={ref.overall_score}; "
+              "backup returned in delete response",
+    )
+    # Evict any cached job so the scorecard page stops serving the ghost.
+    _jobs.pop(_job_key(team_id, job_id), None)
+
+    return {
+        "status": "deleted",
+        "evaluation_id": ref.id,
+        "tombstoned_history_row": tombstone_row,
+        "snapshot": snapshot,
+    }

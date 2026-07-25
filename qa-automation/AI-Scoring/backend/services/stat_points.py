@@ -131,6 +131,59 @@ async def insert_point(conn, *, team_id: str, agent_id: int, evaluation_id: int,
     return result.endswith("1")
 
 
+def build_series(evals: list[dict], *, span: int,
+                 sigma_multiplier: float) -> list[dict]:
+    """Deterministic per-agent series from approved_at-ordered evals.
+
+    Moved here from scripts/backfill_stat_points.py (ScorecardActionsDesign
+    §5) so the F1 replay CLI and the action-time rebuild share one math
+    core — parity by construction, not by test."""
+    prior = PriorState()
+    rows = []
+    for ev in evals:
+        score = float(ev["overall_score"])
+        point = compute_point(score, prior, span=span,
+                              sigma_multiplier=sigma_multiplier)
+        rows.append({"evaluation_id": ev["id"], "score": score, "point": point})
+        prior = PriorState(n=prior.n + 1, ewma=point.ewma,
+                           mean=point.spc_mean, sigma=point.spc_sigma)
+    return rows
+
+
+async def rebuild_agent_series(conn, agent_id: int, config) -> int:
+    """Rebuild one agent's whole stat series from finalized history.
+
+    Called by the scorecard actions (rescore / override / delete —
+    ScorecardActionsDesign §5) after they change or remove a finalized
+    score: the EWMA/SPC chain is recursive, so any mid-chain change
+    invalidates every later point. The series is deterministic; DELETE +
+    re-INSERT inside the caller's transaction is correct and idempotent.
+
+    FATAL by contract — the finalize-time `write_point_for_finalize` is
+    non-fatal because a missed point is a gap replay repairs, but a
+    rebuild runs INSIDE a mutating transaction and a half-applied action
+    with a silently corrupt EWMA chain is worse than a loud rollback.
+    Callers must NOT wrap this in try/except.
+
+    Returns the number of points written (0 for an agent with no
+    finalized history — their stale points still get deleted)."""
+    evals = await conn.fetch(
+        "SELECT id, team_id, overall_score FROM qa.evaluations "
+        "WHERE agent_id = $1 AND state = 'finalized' "
+        "ORDER BY approved_at, id", agent_id)
+    await conn.execute(
+        "DELETE FROM qa.agent_stat_points WHERE agent_id = $1", agent_id)
+    series = build_series(
+        evals, span=config.stats.ewma_span,
+        sigma_multiplier=config.stats.spc_sigma_multiplier)
+    for ev, row in zip(evals, series):
+        await insert_point(
+            conn, team_id=ev["team_id"], agent_id=agent_id,
+            evaluation_id=row["evaluation_id"], score=row["score"],
+            point=row["point"])
+    return len(series)
+
+
 async def write_point_for_finalize(conn, evaluation_id: int, config) -> None:
     """Finalize-seam entry: read the (just-finalized) evaluation, compute
     the incremental point, insert. NON-FATAL — logs and returns on any

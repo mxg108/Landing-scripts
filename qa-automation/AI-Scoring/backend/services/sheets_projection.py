@@ -214,4 +214,40 @@ async def project_evaluation(
     return history_row_num
 
 
-__all__ = ["project_evaluation", "build_projection_row"]
+async def tombstone_evaluation(dialpad_link: str, config: "TeamConfig") -> Optional[int]:
+    """Blank the Analyst_History row of a DELETED evaluation
+    (ScorecardActionsDesign §4.4.6).
+
+    Sheets is a projection — a deleted DB row with a surviving sheet row
+    is drift, not history. Callers must capture ``dialpad_link`` BEFORE
+    deleting the qa.evaluations row; there is nothing left to resolve it
+    from afterwards.
+
+    Same failure semantics as project_evaluation: Sheets errors log and
+    return None (the nightly reproject sweep can't repair a tombstone,
+    but the audit row records the delete — a stale sheet row is visible,
+    not silent). Returns the blanked 1-indexed row number, or None when
+    the link is empty, Sheets is unconfigured, or no row matches."""
+    if not dialpad_link:
+        return None
+    if not _sheets_configured(config.team_id):
+        logger.warning("tombstone: Sheets not configured for %s — nothing to blank",
+                       config.team_id)
+        return None
+    try:
+        sheet = _get_sheet(config, config.sheets.analyst_history.tab_name)
+        existing = _find_row_by_dialpad_link(sheet, dialpad_link)
+        if existing is None:
+            return None
+        width = config.history_layout.total_width
+        end_letter = col_index_to_letter(width - 1)
+        sheet.update(f"A{existing}:{end_letter}{existing}", [[""] * width],
+                     value_input_option="USER_ENTERED")
+        return existing
+    except Exception:
+        logger.exception("tombstone: Analyst_History blank failed for link %s — "
+                         "sheet row is stale until manually cleared", dialpad_link)
+        return None
+
+
+__all__ = ["project_evaluation", "build_projection_row", "tombstone_evaluation"]

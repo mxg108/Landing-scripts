@@ -37,6 +37,7 @@ import asyncio
 import json
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -720,6 +721,143 @@ async def stamp_and_finalize(
 
 
 # ---------------------------------------------------------------------------
+# DB-backed action resolution (ScorecardActionsDesign §3, slice S1)
+# ---------------------------------------------------------------------------
+
+# Reverse of _CONFIDENCE_MAP — DB rows back into the draft-dump vocabulary.
+_CONFIDENCE_UNMAP = {"HIGH": "high", "MED": "medium", "LOW": "low"}
+
+
+@dataclass
+class EvalRef:
+    """A qa.evaluations row resolved by Dialpad call id, plus its AI
+    sections reshaped into the Stage-1 draft-dump form — enough context
+    to reconstruct an approval flow without the in-memory job."""
+    id: int
+    team_id: str
+    state: str
+    source: str
+    scoring_status: str
+    agent_name_raw: str
+    agent_email: Optional[str]
+    evaluator_email: Optional[str]
+    dialpad_call_id: Optional[str]
+    dialpad_entry_point_call_id: Optional[str]
+    dialpad_link: Optional[str]
+    call_summary: Optional[str]
+    key_strengths: Optional[str]
+    opportunities: Optional[str]
+    overall_score: Optional[float]
+    model: str
+    sections: list[dict[str, Any]]
+
+
+def call_id_from_job_id(job_id: str) -> str:
+    """The Dialpad call id inside a scorecard job_id.
+
+    ``_make_job_id`` builds ``<call_id>_<agent_name>`` with spaces
+    flattened to underscores, so the call id is the digits before the
+    first ``_``; a bare call id (the /datapoints surface) passes through
+    unchanged. Returns "" for ids with no numeric prefix — the caller
+    skips the DB probe entirely rather than querying junk."""
+    head = job_id.split("_", 1)[0]
+    return head if head.isdigit() else ""
+
+
+async def resolve_evaluation(team_id: str, job_id: str) -> Optional[EvalRef]:
+    """Resolve an action target from Postgres, not the in-memory job store.
+
+    Probes BOTH dialpad_entry_point_call_id and dialpad_call_id — the
+    2026-07-24 incident eval was addressed by its dialpad_call_id while
+    everyone believed it was the entry-point id. Do not "simplify" this
+    to one column. Ordering mirrors db_provider.get_by_eval_id so a
+    (rare) duplicate call id resolves to the same row every surface
+    picks. Unlike that read-path helper, drafts resolve too — actions
+    target any lifecycle state.
+
+    Returns None when dual-write is off (no pool), the job_id has no
+    numeric call id, or nothing matches."""
+    call_id = call_id_from_job_id(job_id)
+    if not call_id:
+        return None
+    pool = await _get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, team_id, state, source, scoring_status, "
+            "  agent_name_raw, agent_email, evaluator_email, "
+            "  dialpad_call_id, dialpad_entry_point_call_id, dialpad_link, "
+            "  call_summary, key_strengths, opportunities, overall_score, "
+            "  models_used "
+            "FROM qa.evaluations "
+            "WHERE team_id = $1 "
+            "AND (dialpad_entry_point_call_id = $2 OR dialpad_call_id = $2) "
+            "ORDER BY COALESCE(call_connected_at, created_at) LIMIT 1",
+            team_id, call_id,
+        )
+        if row is None:
+            return None
+        section_rows = await conn.fetch(
+            "SELECT section_id, score_type, numeric_score, binary_value, "
+            "  score_source, confidence, reasoning "
+            "FROM qa.evaluation_sections WHERE evaluation_id = $1 "
+            "ORDER BY section_number",
+            row["id"],
+        )
+
+    models_used = row["models_used"]
+    if isinstance(models_used, str):
+        try:
+            models_used = json.loads(models_used or "{}")
+        except ValueError:
+            models_used = {}
+    model = ((models_used or {}).get("text") or {}).get("model") or "gemini-2.5-flash"
+
+    # AI rows only, reshaped to the Stage-1 dump (job['scorecard']
+    # ['sections']) that build_approval_sections diffs against. Manual /
+    # auto_value rows are regenerated from team config at approval time.
+    sections: list[dict[str, Any]] = []
+    for s in section_rows:
+        if s["score_source"] != "ai":
+            continue
+        is_binary = s["score_type"] == "binary"
+        sections.append({
+            "id": s["section_id"],
+            "name": s["section_id"],
+            "score": None if is_binary else s["numeric_score"],
+            "score_type": "yn" if is_binary else "numeric",
+            "yn_value": s["binary_value"],
+            "confidence": _CONFIDENCE_UNMAP.get(s["confidence"] or "", "medium"),
+            "reasoning": s["reasoning"] or "",
+            "audio_dependent": False,
+            "flags": [],
+        })
+
+    return EvalRef(
+        id=row["id"],
+        team_id=row["team_id"],
+        state=row["state"],
+        source=row["source"],
+        scoring_status=row["scoring_status"],
+        agent_name_raw=row["agent_name_raw"],
+        agent_email=row["agent_email"],
+        evaluator_email=row["evaluator_email"],
+        dialpad_call_id=row["dialpad_call_id"],
+        dialpad_entry_point_call_id=row["dialpad_entry_point_call_id"],
+        dialpad_link=row["dialpad_link"],
+        call_summary=row["call_summary"],
+        key_strengths=row["key_strengths"],
+        opportunities=row["opportunities"],
+        overall_score=(
+            float(row["overall_score"]) if row["overall_score"] is not None else None
+        ),
+        model=model,
+        sections=sections,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Pool lifecycle
 # ---------------------------------------------------------------------------
 
@@ -756,6 +894,9 @@ __all__ = [
     "record_draft_evaluation",
     "record_approval",
     "stamp_and_finalize",
+    "resolve_evaluation",
+    "call_id_from_job_id",
+    "EvalRef",
     "get_pool",
     "build_draft_row",
     "build_draft_sections",

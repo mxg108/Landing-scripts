@@ -157,3 +157,63 @@ class TestOverallRendering:
     ])
     def test_render_overall(self, value, expected):
         assert _render_overall(value) == expected
+
+
+# ---------------------------------------------------------------------------
+# tombstone_evaluation — ScorecardActionsDesign §4.4.6 (slice S3)
+# ---------------------------------------------------------------------------
+
+from backend.services import sheets_projection as sp_module  # noqa: E402
+from backend.services.sheets_projection import tombstone_evaluation  # noqa: E402
+
+
+class _FakeSheet:
+    def __init__(self):
+        self.updates: list[tuple] = []
+
+    def update(self, rng, values, value_input_option=None):
+        self.updates.append((rng, values, value_input_option))
+
+
+@pytest.mark.asyncio
+class TestTombstoneEvaluation:
+
+    @pytest.fixture(autouse=True)
+    def _stub_sheets(self, monkeypatch):
+        self.sheet = _FakeSheet()
+        self.found_row = 42
+        monkeypatch.setattr(sp_module, "_sheets_configured", lambda team_id: True)
+        monkeypatch.setattr(sp_module, "_get_sheet", lambda config, tab: self.sheet)
+        monkeypatch.setattr(
+            sp_module, "_find_row_by_dialpad_link",
+            lambda sheet, link: self.found_row,
+        )
+
+    async def test_blanks_full_layout_width(self, ms_config):
+        row = await tombstone_evaluation("https://dialpad.test/call/DP123", ms_config)
+        assert row == 42
+        assert len(self.sheet.updates) == 1
+        rng, values, _ = self.sheet.updates[0]
+        width = ms_config.history_layout.total_width
+        end = history_layout.col_index_to_letter(width - 1)
+        assert rng == f"A42:{end}42"
+        assert values == [[""] * width]
+
+    async def test_empty_link_is_noop(self, ms_config):
+        assert await tombstone_evaluation("", ms_config) is None
+        assert self.sheet.updates == []
+
+    async def test_missing_row_is_noop(self, ms_config):
+        self.found_row = None
+        assert await tombstone_evaluation("https://x/1", ms_config) is None
+        assert self.sheet.updates == []
+
+    async def test_unconfigured_sheets_is_noop(self, ms_config, monkeypatch):
+        monkeypatch.setattr(sp_module, "_sheets_configured", lambda team_id: False)
+        assert await tombstone_evaluation("https://x/1", ms_config) is None
+
+    async def test_sheet_error_swallowed_returns_none(self, ms_config, monkeypatch):
+        def boom(sheet, link):
+            raise RuntimeError("gspread down")
+        monkeypatch.setattr(sp_module, "_find_row_by_dialpad_link", boom)
+        assert await tombstone_evaluation("https://x/1", ms_config) is None
