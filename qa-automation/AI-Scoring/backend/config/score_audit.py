@@ -36,8 +36,16 @@ COLUMNS: list[str] = [
 ACTION_SCORED = "scored"
 ACTION_DENIED = "denied"
 ACTION_APPROVED = "approved"
+# ScorecardActionsDesign §6 — manual-doorway receipts (migration 018
+# carries the matching qa.score_audit CHECK for the future DB audit path).
+ACTION_ORPHANED = "evaluation_orphaned"
+ACTION_RESCORED = "rescored"
+ACTION_OVERRIDDEN = "overridden"
 
-ACTIONS: frozenset[str] = frozenset({ACTION_SCORED, ACTION_DENIED, ACTION_APPROVED})
+ACTIONS: frozenset[str] = frozenset({
+    ACTION_SCORED, ACTION_DENIED, ACTION_APPROVED,
+    ACTION_ORPHANED, ACTION_RESCORED, ACTION_OVERRIDDEN,
+})
 
 # Allowed roles — mirrors KeyIdentity.role in middleware/auth.py.
 ROLE_TEAM = "team"

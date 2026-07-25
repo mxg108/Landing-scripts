@@ -44,8 +44,7 @@ if str(_AI_SCORING) not in sys.path:
 from backend.config.team_config import get_team_config  # noqa: E402
 from backend.services.stat_points import (  # noqa: E402
     COVERAGE_REGIME,
-    PriorState,
-    compute_point,
+    build_series,
 )
 
 _b1_spec = importlib.util.spec_from_file_location(
@@ -54,18 +53,9 @@ b1 = importlib.util.module_from_spec(_b1_spec)
 _b1_spec.loader.exec_module(b1)
 
 
-def build_series(evals: list[dict], *, span: int, sigma_multiplier: float) -> list[dict]:
-    """Deterministic per-agent series from approved_at-ordered evals."""
-    prior = PriorState()
-    rows = []
-    for ev in evals:
-        score = float(ev["overall_score"])
-        point = compute_point(score, prior, span=span,
-                              sigma_multiplier=sigma_multiplier)
-        rows.append({"evaluation_id": ev["id"], "score": score, "point": point})
-        prior = PriorState(n=prior.n + 1, ewma=point.ewma,
-                           mean=point.spc_mean, sigma=point.spc_sigma)
-    return rows
+# build_series moved to backend.services.stat_points (ScorecardActionsDesign
+# §5) — the action-time rebuild (rescore/override/delete) and this replay
+# CLI share one math core.
 
 
 async def run(args) -> int:

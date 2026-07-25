@@ -31,7 +31,13 @@ def test_columns_are_ten_in_canonical_order():
 
 
 def test_actions_set_matches_design():
-    assert audit_cfg.ACTIONS == frozenset({"scored", "denied", "approved"})
+    # Extended by migration 018 (ScorecardActionsDesign §6): the manual
+    # doorways get explicit receipts. Must stay in sync with the
+    # score_audit_action_check CHECK in both audit tables.
+    assert audit_cfg.ACTIONS == frozenset({
+        "scored", "denied", "approved",
+        "evaluation_orphaned", "rescored", "overridden",
+    })
 
 
 def test_roles_set_matches_key_identity():

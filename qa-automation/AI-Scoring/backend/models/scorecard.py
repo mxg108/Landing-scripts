@@ -93,6 +93,13 @@ class ApprovalRequest(BaseModel):
     sections: List[ScorecardSection]
     key_strengths: str
     opportunities: str
+    # ScorecardActionsDesign §3 (S1): the in-memory job carries the
+    # original manager_email, but an approval context reconstructed from
+    # the DB after a restart doesn't — the frontend sends the signed-in
+    # evaluator here. Optional for backward compatibility; the route
+    # falls back to job/row identity and 422s only when every source
+    # comes up empty.
+    evaluator_email: Optional[str] = None
 
 
 class ScorecardWithMeta(Scorecard):

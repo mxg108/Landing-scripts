@@ -588,3 +588,373 @@ def test_batch_privileged_role_recorded_in_audit(client):
     assert row["api_key_role"] == "privileged"
     assert row["target_team"] == "sales"
     assert row["notes"] == "batch_upload"
+
+
+# ---------------------------------------------------------------------------
+# S1 — approve falls back to DB resolution (ScorecardActionsDesign §3)
+# ---------------------------------------------------------------------------
+
+def _eval_ref(**overrides):
+    from backend.services.eval_store import EvalRef
+    defaults = dict(
+        id=2377,
+        team_id="member_support",
+        state="draft",
+        source="ai",
+        scoring_status="flagged_human_review",
+        agent_name_raw="Luis Rubio",
+        agent_email="luis@landing.com",
+        evaluator_email=None,
+        dialpad_call_id="5035229460504576",
+        dialpad_entry_point_call_id="6105002063634432",
+        dialpad_link="https://dialpad.com/callhistory/callreview/6105002063634432",
+        call_summary="Billing question",
+        key_strengths="Good tone",
+        opportunities="Faster holds",
+        overall_score=None,
+        model="gemini-2.5-flash",
+        sections=[],
+    )
+    defaults.update(overrides)
+    return EvalRef(**defaults)
+
+
+def _stub_engine_path(monkeypatch, captured_approvals):
+    """Same engine stubs as test_approve_writes_audit_row, capturing the
+    record_approval kwargs so the fallback context can be asserted."""
+    monkeypatch.setattr(
+        scoring_module.eval_store, "missing_manual_scores",
+        lambda config, sections: [],
+    )
+
+    async def fake_record_approval(config, **kw):
+        captured_approvals.append(kw)
+        return kw.get("evaluation_id")
+    monkeypatch.setattr(scoring_module, "record_approval", fake_record_approval)
+
+    class _Detail:
+        overall_score = 72.0
+
+    async def fake_stamp(evaluation_id, config, evaluator_email):
+        return _Detail()
+    monkeypatch.setattr(scoring_module.eval_store, "stamp_and_finalize", fake_stamp)
+
+    async def fake_pool():
+        return object()
+    monkeypatch.setattr(scoring_module.eval_store, "get_pool", fake_pool)
+
+    async def fake_project(pool, evaluation_id, config, include_history=True):
+        return 321
+    monkeypatch.setattr(scoring_module, "project_evaluation", fake_project)
+    monkeypatch.setattr(
+        scoring_module, "trigger_apps_script", lambda row, team_id: {"status": "ok"}
+    )
+
+
+def _resolve_stub(monkeypatch, ref):
+    calls = []
+
+    async def fake_resolve(team_id, job_id):
+        calls.append((team_id, job_id))
+        return ref
+    monkeypatch.setattr(scoring_module.eval_store, "resolve_evaluation", fake_resolve)
+    return calls
+
+
+def test_approve_restart_simulation_falls_back_to_db(client, monkeypatch):
+    """Empty _jobs (process restarted) — approve reconstructs the context
+    from qa.evaluations, finalizes, and caches the restored job."""
+    approvals: list[dict] = []
+    _stub_engine_path(monkeypatch, approvals)
+    resolve_calls = _resolve_stub(monkeypatch, _eval_ref())
+
+    job_id = "5035229460504576_Luis_Rubio"
+    resp = client.post(
+        f"/api/member_support/score/{job_id}/approve",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={
+            "sections": [],
+            "key_strengths": "x",
+            "opportunities": "y",
+            "evaluator_email": "ana@landing.com",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["state"] == "finalized"
+    assert resolve_calls == [("member_support", job_id)]
+
+    # The approval ran against the resolved row, flagged-review resolution
+    # included (scoring_status came back flagged_human_review).
+    assert len(approvals) == 1
+    assert approvals[0]["evaluation_id"] == 2377
+    assert approvals[0]["evaluator_email"] == "ana@landing.com"
+    assert approvals[0]["resolving_review"] is True
+
+    # Restored job is cached like a live one and now shows approved.
+    key = scoring_module._job_key("member_support", job_id)
+    assert scoring_module._jobs[key]["status"] == "approved"
+    assert scoring_module._jobs[key]["restored_from_db"] is True
+
+    approved = [r for r in client.audit_rows if r["action"] == "approved"]
+    assert len(approved) == 1
+    assert approved[0]["evaluator_email"] == "ana@landing.com"
+    assert approved[0]["agent_name"] == "Luis Rubio"
+
+
+def test_approve_fallback_finalized_row_is_read_only(client, monkeypatch):
+    """A finalized eval resolved from the DB keeps the 409 wall — the
+    edit-of-finalized doorway (ack protocol) is slice S6, not S1."""
+    approvals: list[dict] = []
+    _stub_engine_path(monkeypatch, approvals)
+    _resolve_stub(
+        monkeypatch,
+        _eval_ref(state="finalized", scoring_status="complete", overall_score=88.0),
+    )
+
+    resp = client.post(
+        "/api/member_support/score/5035229460504576_Luis_Rubio/approve",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={
+            "sections": [], "key_strengths": "x", "opportunities": "y",
+            "evaluator_email": "ana@landing.com",
+        },
+    )
+    assert resp.status_code == 409
+    assert "read-only" in resp.json()["detail"]
+    assert approvals == []
+
+
+def test_approve_fallback_no_row_is_404(client, monkeypatch):
+    _resolve_stub(monkeypatch, None)
+    resp = client.post(
+        "/api/member_support/score/999_Nobody/approve",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={"sections": [], "key_strengths": "x", "opportunities": "y"},
+    )
+    assert resp.status_code == 404
+
+
+def test_approve_fallback_without_any_evaluator_is_422(client, monkeypatch):
+    """Restored draft has no evaluator identity and the payload sends none:
+    422 rather than approving as nobody ('' would pass the NOT-NULL CHECK)."""
+    approvals: list[dict] = []
+    _stub_engine_path(monkeypatch, approvals)
+    _resolve_stub(monkeypatch, _eval_ref(evaluator_email=None))
+
+    resp = client.post(
+        "/api/member_support/score/5035229460504576_Luis_Rubio/approve",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={"sections": [], "key_strengths": "x", "opportunities": "y"},
+    )
+    assert resp.status_code == 422
+    assert "evaluator_email" in resp.json()["detail"]
+    assert approvals == []
+    # Job stays approvable after the rejection.
+    key = scoring_module._job_key(
+        "member_support", "5035229460504576_Luis_Rubio"
+    )
+    assert scoring_module._jobs[key]["status"] == "complete"
+
+
+def test_approve_fallback_row_evaluator_backfills_payload(client, monkeypatch):
+    """No payload evaluator, but the row carries one (e.g. re-approving a
+    draft that had an evaluator stamped) — the row identity is used."""
+    approvals: list[dict] = []
+    _stub_engine_path(monkeypatch, approvals)
+    _resolve_stub(
+        monkeypatch,
+        _eval_ref(evaluator_email="lead@landing.com", scoring_status="complete"),
+    )
+
+    resp = client.post(
+        "/api/member_support/score/5035229460504576_Luis_Rubio/approve",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={"sections": [], "key_strengths": "x", "opportunities": "y"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert approvals[0]["evaluator_email"] == "lead@landing.com"
+    assert approvals[0]["resolving_review"] is False
+
+
+# ---------------------------------------------------------------------------
+# S3 — DELETE /score/{job_id} (ScorecardActionsDesign §4.4)
+# ---------------------------------------------------------------------------
+
+from contextlib import asynccontextmanager  # noqa: E402
+
+
+class _FakeDeleteConn:
+    def __init__(self, coachings=(), eval_row=None, sections=(), point=None):
+        self.coachings = list(coachings)
+        self.eval_row = eval_row
+        self.sections = list(sections)
+        self.point = point
+        self.deletes: list[tuple[str, tuple]] = []
+        self.in_transaction_deletes: list[str] = []
+
+    @asynccontextmanager
+    async def transaction(self):
+        yield
+
+    async def fetch(self, query, *args):
+        if "coaching_evaluations" in query:
+            return self.coachings
+        if "evaluation_sections" in query:
+            return self.sections
+        raise AssertionError(f"unexpected fetch: {query}")
+
+    async def fetchrow(self, query, *args):
+        if "FROM qa.evaluations" in query:
+            return self.eval_row
+        if "agent_stat_points" in query:
+            return self.point
+        raise AssertionError(f"unexpected fetchrow: {query}")
+
+    async def execute(self, query, *args):
+        assert query.startswith("DELETE")
+        self.deletes.append((query, args))
+        return "DELETE 1"
+
+
+class _FakeDeletePool:
+    def __init__(self, conn):
+        self.conn = conn
+
+    @asynccontextmanager
+    async def acquire(self):
+        yield self.conn
+
+
+def _wire_delete(monkeypatch, ref, conn):
+    async def fake_resolve(team_id, job_id):
+        return ref
+    monkeypatch.setattr(scoring_module.eval_store, "resolve_evaluation", fake_resolve)
+
+    async def fake_pool():
+        return _FakeDeletePool(conn)
+    monkeypatch.setattr(scoring_module.eval_store, "get_pool", fake_pool)
+
+    rebuilds: list[int] = []
+
+    async def fake_rebuild(c, agent_id, config):
+        rebuilds.append(agent_id)
+        return 3
+    monkeypatch.setattr(scoring_module, "rebuild_agent_series", fake_rebuild)
+
+    tombstones: list[str] = []
+
+    async def fake_tombstone(link, config):
+        tombstones.append(link)
+        return 42
+    monkeypatch.setattr(scoring_module, "tombstone_evaluation", fake_tombstone)
+    return rebuilds, tombstones
+
+
+def test_delete_requires_privileged_key(client, monkeypatch):
+    resolve_calls = []
+
+    async def fake_resolve(team_id, job_id):
+        resolve_calls.append(job_id)
+        return None
+    monkeypatch.setattr(scoring_module.eval_store, "resolve_evaluation", fake_resolve)
+
+    resp = client.delete(
+        "/api/member_support/score/5035229460504576_Luis_Rubio",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+    )
+    assert resp.status_code == 403
+    assert resolve_calls == []  # denied before touching the DB
+    denied = [r for r in client.audit_rows if r["action"] == "denied"]
+    assert len(denied) == 1
+    assert denied[0]["notes"] == "delete_requires_privileged_key"
+    assert denied[0]["call_id"] == "5035229460504576"
+    assert denied[0]["api_key_role"] == "team"
+
+
+def test_delete_unknown_eval_404(client, monkeypatch):
+    async def fake_resolve(team_id, job_id):
+        return None
+    monkeypatch.setattr(scoring_module.eval_store, "resolve_evaluation", fake_resolve)
+    resp = client.delete(
+        "/api/member_support/score/999_Nobody",
+        headers={"Authorization": f"Bearer {PRIV_TOKEN}"},
+    )
+    assert resp.status_code == 404
+
+
+def test_delete_refuses_when_coaching_rows_exist(client, monkeypatch):
+    conn = _FakeDeleteConn(coachings=[{"coaching_id": 9, "linked_at": None}])
+    _wire_delete(monkeypatch, _eval_ref(state="finalized"), conn)
+
+    resp = client.delete(
+        "/api/member_support/score/5035229460504576_Luis_Rubio",
+        headers={"Authorization": f"Bearer {PRIV_TOKEN}"},
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["coaching_ids"] == [9]
+    assert conn.deletes == []  # nothing touched
+
+
+def test_delete_happy_path(client, monkeypatch):
+    eval_row = {
+        "id": 2377, "agent_id": 7, "team_id": "member_support",
+        "overall_score": 0.0, "dialpad_link": "https://dialpad.test/call/X",
+    }
+    point = {"id": 1404, "evaluation_id": 2377, "ewma": 43.6}
+    conn = _FakeDeleteConn(
+        eval_row=eval_row,
+        sections=[{"section_id": "greeting", "numeric_score": 5}],
+        point=point,
+    )
+    ref = _eval_ref(state="finalized", overall_score=0.0)
+    rebuilds, tombstones = _wire_delete(monkeypatch, ref, conn)
+
+    # Pre-seed a cached job to verify eviction.
+    key = scoring_module._job_key("member_support", "5035229460504576_Luis_Rubio")
+    scoring_module._jobs[key] = {"status": "complete"}
+
+    resp = client.delete(
+        "/api/member_support/score/5035229460504576_Luis_Rubio",
+        headers={"Authorization": f"Bearer {PRIV_TOKEN}"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "deleted"
+    assert body["evaluation_id"] == 2377
+    assert body["tombstoned_history_row"] == 42
+    # Snapshot is the caller's backup.
+    assert body["snapshot"]["evaluation"]["id"] == 2377
+    assert body["snapshot"]["sections"][0]["section_id"] == "greeting"
+    assert body["snapshot"]["stat_point"]["id"] == 1404
+
+    # Delete order: stat point first (NO ACTION FK), then the eval row.
+    assert "agent_stat_points" in conn.deletes[0][0]
+    assert "FROM qa.evaluations" in conn.deletes[1][0]
+    assert rebuilds == [7]
+    assert tombstones == [ref.dialpad_link]
+
+    orphaned = [r for r in client.audit_rows if r["action"] == "evaluation_orphaned"]
+    assert len(orphaned) == 1
+    assert orphaned[0]["result_row"] == 42
+    assert "old_score=0.0" in orphaned[0]["notes"]
+    assert orphaned[0]["agent_name"] == "Luis Rubio"
+
+    assert key not in scoring_module._jobs  # ghost evicted
+
+
+def test_delete_skips_rebuild_for_agentless_eval(client, monkeypatch):
+    """agent_id NULL (departed agent, no stat point) — delete proceeds,
+    no series rebuild."""
+    conn = _FakeDeleteConn(
+        eval_row={"id": 5, "agent_id": None, "dialpad_link": ""},
+        sections=[], point=None,
+    )
+    rebuilds, _ = _wire_delete(monkeypatch, _eval_ref(id=5), conn)
+
+    resp = client.delete(
+        "/api/member_support/score/5035229460504576_Luis_Rubio",
+        headers={"Authorization": f"Bearer {PRIV_TOKEN}"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert rebuilds == []
+    assert resp.json()["snapshot"]["stat_point"] is None
