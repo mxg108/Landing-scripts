@@ -65,6 +65,24 @@ def test_hold_kind_is_closed_vocabulary():
         HoldSegment(start_ms=0, end_ms=1, kind="coffee_break")
 
 
+def test_response_schema_pinned_to_pydantic_contract():
+    """The hand-authored Gemini response_schema (OpenAPI subset — no
+    additionalProperties) must track the pydantic models field-for-field
+    so constrained decoding and post-hoc validation can't drift."""
+    from backend.prompts.annotator_prompt import ANNOTATOR_RESPONSE_SCHEMA as s
+
+    assert set(s["properties"]) == set(AnnotatedTranscript.model_fields)
+    turn = s["properties"]["turns"]["items"]
+    assert set(turn["properties"]) == set(TranscriptTurn.model_fields)
+    hold = s["properties"]["holds"]["items"]
+    assert set(hold["properties"]) == set(HoldSegment.model_fields)
+    assert hold["properties"]["kind"]["enum"] == [
+        "hold_music", "dead_air", "mute_suspected",
+    ]
+    # The field Gemini's schema dialect rejects must never reappear.
+    assert "additionalProperties" not in json.dumps(s)
+
+
 # ---------------------------------------------------------------------------
 # Annotator prompt doctrine (§3.1 / §3.2)
 # ---------------------------------------------------------------------------
@@ -156,7 +174,12 @@ def test_scoring_pipeline_env_collapse(monkeypatch, raw, expected):
 # annotate_audio — parse + cleanup with a fake Gemini client
 # ---------------------------------------------------------------------------
 
-def _fake_genai_client(payload_text):
+def _fake_genai_client(*payload_texts):
+    """One payload per generate attempt (retry consumes the next);
+    the last repeats if attempts exceed payloads. Records the
+    temperature + response config of each attempt."""
+    payloads = list(payload_texts)
+
     class _Uploaded:
         uri = "files/fake"
         name = "files/fake"
@@ -172,13 +195,20 @@ def _fake_genai_client(payload_text):
             self.deleted.append(name)
 
     class _AioModels:
+        def __init__(self):
+            self.attempts = []
+
         async def generate_content(self, *, model, contents, config):
+            self.attempts.append(config)
+            text = payloads[min(len(self.attempts) - 1, len(payloads) - 1)]
             class _Resp:
-                text = payload_text
+                pass
+            _Resp.text = text
             return _Resp()
 
     class _Aio:
-        models = _AioModels()
+        def __init__(self):
+            self.models = _AioModels()
 
     class _Client:
         def __init__(self):
@@ -208,15 +238,35 @@ def test_annotate_audio_parses_and_cleans_up(monkeypatch):
     ))
     assert annotation.schema_version == "gemini_annotate_v1"
     assert client.files.deleted == ["files/fake"]   # upload cleaned up
+    # Constrained decoding requested (the bilingual-call fix)
+    (config,) = client.aio.models.attempts
+    assert config.response_mime_type == "application/json"
+    assert config.temperature == 0.0
 
 
-def test_annotate_audio_invalid_json_raises(monkeypatch):
+def test_annotate_audio_retries_once_with_bumped_temperature(monkeypatch):
+    """The observed failure class: temp-0 decoding re-serving the same
+    degenerate sample. First attempt bad → one retry at bumped temp."""
+    import backend.services.audio_service as audio_service
+
+    client = _fake_genai_client("NOT JSON", _annotation_json())
+    monkeypatch.setattr(audio_service, "_get_client", lambda: client)
+    annotation = asyncio.run(audio_service.annotate_audio(b"bytes", "call.mp3"))
+    assert annotation.schema_version == "gemini_annotate_v1"
+    first, second = client.aio.models.attempts
+    assert first.temperature == 0.0
+    assert second.temperature == 0.2
+    assert client.files.deleted == ["files/fake"]   # cleanup after retries too
+
+
+def test_annotate_audio_invalid_json_raises_after_both_attempts(monkeypatch):
     import backend.services.audio_service as audio_service
 
     client = _fake_genai_client("I am not JSON")
     monkeypatch.setattr(audio_service, "_get_client", lambda: client)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="annotation unusable"):
         asyncio.run(audio_service.annotate_audio(b"bytes", "call.mp3"))
+    assert len(client.aio.models.attempts) == 2    # retried, then surfaced
 
 
 def test_annotator_model_env_override(monkeypatch):

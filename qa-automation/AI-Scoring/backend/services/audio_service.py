@@ -9,6 +9,7 @@ live here — the only google-genai importers besides llm/gemini.py.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import tempfile
@@ -19,6 +20,7 @@ from google import genai
 from google.genai import types
 
 from backend.prompts.annotator_prompt import (
+    ANNOTATOR_RESPONSE_SCHEMA,
     build_annotator_prompt,
     build_annotator_system_prompt,
 )
@@ -28,6 +30,8 @@ from backend.models.scorecard import Scorecard
 
 if TYPE_CHECKING:
     from backend.config.team_config import TeamConfig
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_MIME_TYPES = {
     ".mp3": "audio/mp3",
@@ -143,10 +147,87 @@ async def score_audio(
 DEFAULT_ANNOTATOR_MODEL = "gemini-2.5-flash"
 
 
+def _finish_diagnostics(response) -> str:
+    """Why did generation stop? Gemini can end a candidate early
+    (MAX_TOKENS, SAFETY, RECITATION — hold-music lyrics trigger the
+    latter) and `response.text` alone hides it; a truncated candidate
+    then surfaces as a misleading JSON parse error. Best-effort string
+    for exception messages and logs."""
+    bits = []
+    try:
+        candidates = response.candidates or []
+        if candidates:
+            bits.append(f"finish_reason={candidates[0].finish_reason}")
+        else:
+            bits.append("no candidates")
+        usage = getattr(response, "usage_metadata", None)
+        if usage is not None:
+            bits.append(
+                "tokens(prompt={}, out={}, thoughts={})".format(
+                    getattr(usage, "prompt_token_count", None),
+                    getattr(usage, "candidates_token_count", None),
+                    getattr(usage, "thoughts_token_count", None),
+                )
+            )
+        feedback = getattr(response, "prompt_feedback", None)
+        if feedback:
+            bits.append(f"prompt_feedback={feedback}")
+    except Exception:  # noqa: BLE001 — diagnostics must never mask the real error
+        bits.append("diagnostics unavailable")
+    return "; ".join(bits)
+
+
 def annotator_model() -> str:
     """Stage-A model — env-tunable for the flash-vs-pro trial
     (TwoStageScoringDesign §10.4); team-JSON knob lands with P4."""
     return os.environ.get("ANNOTATOR_MODEL", "").strip() or DEFAULT_ANNOTATOR_MODEL
+
+
+# Attempt temperatures: 0.0 for fidelity, then a small bump. Gemini's
+# near-deterministic decoding at temp 0 can re-serve the SAME degenerate
+# sample on retry (observed 2026-07-27 on a bilingual call: two runs,
+# byte-identical truncated JSON) — the bump exists to break that loop.
+_ANNOTATE_ATTEMPT_TEMPS = (0.0, 0.2)
+
+
+async def _annotate_once(
+    client, uploaded, mime_type: str, prompt: str, model: str, temperature: float
+) -> AnnotatedTranscript:
+    response = await client.aio.models.generate_content(
+        model=model,
+        contents=[
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_uri(file_uri=uploaded.uri, mime_type=mime_type),
+                    types.Part.from_text(text=prompt),
+                ],
+            )
+        ],
+        config=types.GenerateContentConfig(
+            system_instruction=build_annotator_system_prompt(),
+            temperature=temperature,
+            max_output_tokens=65_536,
+            # Constrained decoding: the response is grammar-forced into
+            # the annotation schema, so syntactically-malformed JSON
+            # (the observed bilingual failure class) can't happen. The
+            # hand-authored dict, not the pydantic class — Gemini's
+            # OpenAPI subset rejects additionalProperties (400).
+            response_mime_type="application/json",
+            response_schema=ANNOTATOR_RESPONSE_SCHEMA,
+        ),
+    )
+    try:
+        # genai parses schema'd responses itself; fall back to the
+        # fence-tolerant path if .parsed is absent (older SDKs, stubs).
+        parsed = getattr(response, "parsed", None)
+        if isinstance(parsed, AnnotatedTranscript):
+            return parsed
+        return AnnotatedTranscript.model_validate(_extract_json(response.text))
+    except Exception as exc:
+        raise ValueError(
+            f"annotation unusable [{_finish_diagnostics(response)}]: {exc}"
+        ) from exc
 
 
 async def annotate_audio(
@@ -160,9 +241,10 @@ async def annotate_audio(
     transcript (`gemini_annotate_v1`) — the artifact Stage B judges from.
 
     No rubric, no SOP, no grounding: the annotator observes, it never
-    scores. Raises on failure — the CALLER decides fallback semantics
-    (scoring_service treats annotation as an enhancement, never a
-    scoring blocker)."""
+    scores. One internal retry (bumped temperature) on an unusable
+    generation; raises after that — the CALLER decides fallback
+    semantics (scoring_service treats annotation as an enhancement,
+    never a scoring blocker)."""
     client = _get_client()
     mime_type = _get_mime_type(filename)
 
@@ -180,25 +262,22 @@ async def annotate_audio(
             transcript_text=transcript_text,
             moments_display=moments_display,
         )
-        response = await client.aio.models.generate_content(
-            model=model or annotator_model(),
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_uri(file_uri=uploaded.uri, mime_type=mime_type),
-                        types.Part.from_text(text=prompt),
-                    ],
+        resolved_model = model or annotator_model()
+        last_exc: Exception | None = None
+        for temperature in _ANNOTATE_ATTEMPT_TEMPS:
+            try:
+                return await _annotate_once(
+                    client, uploaded, mime_type, prompt, resolved_model, temperature
                 )
-            ],
-            config=types.GenerateContentConfig(
-                system_instruction=build_annotator_system_prompt(),
-                # Annotation wants fidelity, not creativity.
-                temperature=0.0,
-                max_output_tokens=65_536,
-            ),
-        )
-        return AnnotatedTranscript.model_validate(_extract_json(response.text))
+            except Exception as exc:  # noqa: BLE001 — one retry, then surface
+                last_exc = exc
+                logger.warning(
+                    "annotate attempt at temp=%s failed (%s) — %s",
+                    temperature, exc,
+                    "retrying with bumped temperature"
+                    if temperature != _ANNOTATE_ATTEMPT_TEMPS[-1] else "giving up",
+                )
+        raise last_exc  # type: ignore[misc]  # loop always ran at least once
     finally:
         Path(tmp_path).unlink(missing_ok=True)
         if uploaded is not None:

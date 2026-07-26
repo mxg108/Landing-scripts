@@ -17,6 +17,58 @@ import json
 
 _SCHEMA_VERSION = "gemini_annotate_v1"
 
+# Gemini response_schema for constrained decoding — hand-authored because
+# the API speaks an OpenAPI subset that rejects pydantic's
+# additionalProperties:false (400 INVALID_ARGUMENT, observed 2026-07-27).
+# Pydantic still validates the parsed result on our side, so the
+# extra="forbid" contract holds; a test pins this dict to the model
+# fields so the two can't drift.
+ANNOTATOR_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "schema_version": {"type": "string"},
+        "language_detected": {"type": "string"},
+        "turns": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "speaker": {
+                        "type": "string",
+                        "enum": ["agent", "caller", "system", "other"],
+                    },
+                    "text": {"type": "string"},
+                    "emotion": {"type": "string"},
+                    "paraphrase_intent": {"type": "string"},
+                    "pace_marker": {"type": "string"},
+                    "interruption": {"type": "boolean"},
+                    "start_ms": {"type": "integer"},
+                    "end_ms": {"type": "integer"},
+                },
+                "required": ["speaker", "text"],
+            },
+        },
+        "holds": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "start_ms": {"type": "integer"},
+                    "end_ms": {"type": "integer"},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["hold_music", "dead_air", "mute_suspected"],
+                    },
+                    "note": {"type": "string"},
+                },
+                "required": ["start_ms", "end_ms", "kind"],
+            },
+        },
+        "call_observations": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["schema_version", "turns"],
+}
+
 _ANNOTATOR_SYSTEM = """You are an audio-as-data interpreter for a QA \
 pipeline at Landing, a flexible-living company. You listen to member \
 support / sales calls and produce a structured ANNOTATED TRANSCRIPT. \
