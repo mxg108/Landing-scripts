@@ -1,4 +1,10 @@
-"""Gemini audio upload and scoring."""
+"""Gemini audio upload, scoring, and Stage-A annotation.
+
+This module is the Gemini-native AUDIO leg: single-stage scoring
+(`score_audio`, today's pipeline and the two-stage Plan-B fallback) and
+the Stage-A annotator (`annotate_audio`, TwoStageScoringDesign §3) both
+live here — the only google-genai importers besides llm/gemini.py.
+"""
 
 from __future__ import annotations
 
@@ -7,12 +13,17 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from google import genai
 from google.genai import types
 
+from backend.prompts.annotator_prompt import (
+    build_annotator_prompt,
+    build_annotator_system_prompt,
+)
 from backend.prompts.qa_scoring_prompt import build_prompt, build_system_prompt
+from backend.models.formula import AnnotatedTranscript
 from backend.models.scorecard import Scorecard
 
 if TYPE_CHECKING:
@@ -127,3 +138,71 @@ async def score_audio(
             client.files.delete(name=uploaded.name)
         except Exception:
             pass
+
+
+DEFAULT_ANNOTATOR_MODEL = "gemini-2.5-flash"
+
+
+def annotator_model() -> str:
+    """Stage-A model — env-tunable for the flash-vs-pro trial
+    (TwoStageScoringDesign §10.4); team-JSON knob lands with P4."""
+    return os.environ.get("ANNOTATOR_MODEL", "").strip() or DEFAULT_ANNOTATOR_MODEL
+
+
+async def annotate_audio(
+    audio_bytes: bytes,
+    filename: str,
+    transcript_text: str = "",
+    moments_display: Optional[list[dict]] = None,
+    model: Optional[str] = None,
+) -> AnnotatedTranscript:
+    """Stage A: upload audio to Gemini and produce the annotated
+    transcript (`gemini_annotate_v1`) — the artifact Stage B judges from.
+
+    No rubric, no SOP, no grounding: the annotator observes, it never
+    scores. Raises on failure — the CALLER decides fallback semantics
+    (scoring_service treats annotation as an enhancement, never a
+    scoring blocker)."""
+    client = _get_client()
+    mime_type = _get_mime_type(filename)
+
+    with tempfile.NamedTemporaryFile(suffix=Path(filename).suffix, delete=False) as tmp:
+        tmp.write(audio_bytes)
+        tmp_path = tmp.name
+
+    uploaded = None
+    try:
+        uploaded = client.files.upload(
+            file=tmp_path,
+            config=types.UploadFileConfig(mime_type=mime_type, display_name=filename),
+        )
+        prompt = build_annotator_prompt(
+            transcript_text=transcript_text,
+            moments_display=moments_display,
+        )
+        response = await client.aio.models.generate_content(
+            model=model or annotator_model(),
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_uri(file_uri=uploaded.uri, mime_type=mime_type),
+                        types.Part.from_text(text=prompt),
+                    ],
+                )
+            ],
+            config=types.GenerateContentConfig(
+                system_instruction=build_annotator_system_prompt(),
+                # Annotation wants fidelity, not creativity.
+                temperature=0.0,
+                max_output_tokens=65_536,
+            ),
+        )
+        return AnnotatedTranscript.model_validate(_extract_json(response.text))
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+        if uploaded is not None:
+            try:
+                client.files.delete(name=uploaded.name)
+            except Exception:
+                pass

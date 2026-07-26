@@ -187,9 +187,11 @@ def test_anthropic_refusal_raises():
 
 
 def test_anthropic_missing_key_raises_cleanly(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_LANDING",
+                "ANTHROPIC_API_KEY_PERSONAL"):
+        monkeypatch.delenv(var, raising=False)
     provider = AnthropicTextProvider()
-    with pytest.raises(LlmProviderError, match="ANTHROPIC_API_KEY"):
+    with pytest.raises(LlmProviderError, match="Anthropic key"):
         asyncio.run(provider.generate(
             "x", model="claude-sonnet-5", max_output_tokens=1,
         ))

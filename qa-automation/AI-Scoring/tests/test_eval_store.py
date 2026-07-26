@@ -905,3 +905,49 @@ class TestSalesManualReviewGate:
         designed state (only reviewer-flagged calls score it)."""
         eval_store._active_formula.cache_clear()
         assert eval_store.missing_manual_scores(ms_config, []) == []
+
+
+# ---------------------------------------------------------------------------
+# Stage-A annotation persistence (TwoStageScoringDesign §3)
+# ---------------------------------------------------------------------------
+
+def _annotation_dump():
+    return {
+        "schema_version": "gemini_annotate_v1",
+        "language_detected": "es",
+        "turns": [{
+            "speaker": "agent", "text": "Buenos días", "emotion": "warm",
+            "paraphrase_intent": "greeting", "pace_marker": "normal",
+            "interruption": False, "start_ms": 0, "end_ms": 2000,
+        }],
+        "holds": [{"start_ms": 10_000, "end_ms": 40_000, "kind": "hold_music",
+                   "note": None}],
+        "call_observations": ["clean audio"],
+    }
+
+
+class TestAnnotatedTranscriptPersistence:
+
+    def test_annotation_persists_with_audio_leg_stamp(self, ms_config):
+        sc = _scorecard(
+            ms_config,
+            annotated_transcript=_annotation_dump(),
+            annotator_model="gemini-2.5-flash",
+        )
+        row = build_draft_row(sc, ms_config)
+        assert json.loads(row["annotated_transcript"]) == _annotation_dump()
+        models_used = json.loads(row["models_used"])
+        assert models_used["audio"] == {
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+            "version": "gemini_annotate_v1",
+        }
+        # The text leg (the score author) is untouched by annotation.
+        assert models_used["text"]["model"] == "gemini-2.5-flash"
+
+    def test_single_pipeline_rows_keep_null_annotation_and_no_audio_leg(
+        self, ms_config
+    ):
+        row = build_draft_row(_scorecard(ms_config), ms_config)
+        assert row["annotated_transcript"] is None
+        assert "audio" not in json.loads(row["models_used"])

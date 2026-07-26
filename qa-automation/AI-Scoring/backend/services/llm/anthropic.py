@@ -37,10 +37,29 @@ class AnthropicTextProvider(TextModelProvider):
     def _get_client(self):
         if self._client is not None:
             return self._client
-        if not os.getenv("ANTHROPIC_API_KEY"):
-            raise LlmProviderError("ANTHROPIC_API_KEY not set in environment")
+        # Key resolution: engineering-provisioned key wins, then the
+        # Landing key, then the owner's personal key (funded interim,
+        # 2026-07-26). Sub-20-char values are placeholders (the .env
+        # carries a stub _LANDING entry until engineering delivers) —
+        # skipped so the first REAL key wins without editing .env.
+        api_key = next(
+            (
+                key for key in (
+                    os.getenv("ANTHROPIC_API_KEY"),
+                    os.getenv("ANTHROPIC_API_KEY_LANDING"),
+                    os.getenv("ANTHROPIC_API_KEY_PERSONAL"),
+                )
+                if key and len(key) >= 20
+            ),
+            None,
+        )
+        if not api_key:
+            raise LlmProviderError(
+                "no Anthropic key in environment (ANTHROPIC_API_KEY / "
+                "_LANDING / _PERSONAL)"
+            )
         from anthropic import AsyncAnthropic
-        self._client = AsyncAnthropic()
+        self._client = AsyncAnthropic(api_key=api_key)
         return self._client
 
     async def generate(

@@ -708,16 +708,37 @@ class TranscriptTurn(BaseModel):
     end_ms: Optional[int] = None
 
 
-class AnnotatedTranscript(BaseModel):
-    """qa.evaluations.annotated_transcript JSONB — §8.2 shape.
+class HoldSegment(BaseModel):
+    """One OBSERVATIONAL hold heard in the audio — Stage-A output
+    (TwoStageScoringDesign §3.1). Never a verified system fact: verified
+    hold durations come from command_center.hold_times via the grounding
+    block, gated by has_hold_truth. Prompts must word these as
+    observations ("audio suggests a hold of ~63s"), never assertions."""
+    model_config = ConfigDict(extra="forbid")
+    start_ms: int
+    end_ms: int
+    kind: Literal["hold_music", "dead_air", "mute_suspected"]
+    note: Optional[str] = None
 
-    NULL for Gemini-scored evaluations (pre-LandGPT / Plan-B-only routes).
-    Always populated when models_used.audio.provider == 'landgpt'.
+
+class AnnotatedTranscript(BaseModel):
+    """qa.evaluations.annotated_transcript JSONB — §8.2 shape, extended
+    additively by TwoStageScoringDesign §3 (schema_version exists exactly
+    so variants can do this):
+
+    - ``qwen2_audio_v1``      — the original LandGPT shape (turns only)
+    - ``gemini_annotate_v1``  — the cloud Stage-A annotator; adds
+      ``holds`` (observational) + ``call_observations`` (call-level)
+
+    NULL for evaluations scored without an annotation stage (single-stage
+    Gemini / Plan-B fallback routes).
     """
     model_config = ConfigDict(extra="forbid")
     schema_version: str
     language_detected: Optional[str] = None
     turns: list[TranscriptTurn]
+    holds: list[HoldSegment] = Field(default_factory=list)
+    call_observations: list[str] = Field(default_factory=list)
 
 
 class RecordingUrls(BaseModel):
