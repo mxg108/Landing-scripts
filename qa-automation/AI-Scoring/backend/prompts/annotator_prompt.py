@@ -67,7 +67,8 @@ exact shape (schema_version "{schema_version}"):
   up beyond removing filler stutters.
 - "holds" are what you HEAR (music, dead air, suspected mute) — you are
   an observer, not a system of record. Include an entry for any gap over
-  ~10 seconds.
+  ~10 seconds. Do NOT record gaps shorter than 10 seconds — brief pauses
+  are normal conversation, not holds.
 - Timestamps are milliseconds from the start of the recording; best
   effort, never omitted.
 - Mark "interruption": true only for genuine cut-offs, not backchannel
