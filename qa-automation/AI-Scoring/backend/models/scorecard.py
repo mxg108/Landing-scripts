@@ -142,3 +142,9 @@ class ScorecardWithMeta(Scorecard):
     # [{id, title, score, score_kind, updated_at, open_flags}, ...].
     # Stamped in shadow AND on modes; [] when retrieval was off/skipped.
     pulpo_docs: List[dict] = []
+    # TwoStageScoringDesign §3 — the Stage-A artifact (AnnotatedTranscript
+    # dump, schema gemini_annotate_v1) + the model that produced it, for
+    # the models_used audio-leg stamp. None when SCORING_PIPELINE=single
+    # or annotation failed (annotation is never a scoring blocker).
+    annotated_transcript: Optional[dict] = None
+    annotator_model: Optional[str] = None

@@ -36,3 +36,5 @@ appsscript.json
 # trail for the backfill script. Never commit; rerun locally per team.
 .backfill-log
 .backfill-skipped.csv
+# Stage-A annotation smoke outputs — verbatim caller speech (PII), never commit
+scripts/annotations/

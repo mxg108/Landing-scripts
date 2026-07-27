@@ -139,8 +139,19 @@ def human_review_trigger_fired(formula: Optional[Formula], sections: list[Any]) 
 
 def build_draft_row(scorecard: "ScorecardWithMeta", config: "TeamConfig") -> dict[str, Any]:
     """qa.evaluations column dict for a Stage-1 draft (§3.2 row shape)."""
+    # §8.1 audio leg: populated when Stage A annotated this call
+    # (TwoStageScoringDesign §2) — the version stamp names the annotation
+    # schema so old rows stay reproducible as the annotator evolves.
+    audio_leg = None
+    if scorecard.annotated_transcript and scorecard.annotator_model:
+        audio_leg = ModelInfo(
+            provider="gemini",
+            model=scorecard.annotator_model,
+            version="gemini_annotate_v1",
+        )
     models_used = ModelsUsed(
-        text=ModelInfo(provider="gemini", model=scorecard.model)
+        audio=audio_leg,
+        text=ModelInfo(provider="gemini", model=scorecard.model),
     )
     duration_ms = int(scorecard.duration_ms) if scorecard.duration_ms else None
     # §3.14 gate beats long-call telemetry when both apply — the human-review
@@ -184,6 +195,14 @@ def build_draft_row(scorecard: "ScorecardWithMeta", config: "TeamConfig") -> dic
         "dialpad_disposition_category": scorecard.dialpad_disposition_category,
         "dialpad_disposition": scorecard.dialpad_disposition,
         "ai_csat": scorecard.ai_csat,
+        # TwoStageScoringDesign §3 — the Stage-A artifact fills the
+        # migration-006 column that has waited for it (§8.2). NULL on
+        # single-pipeline rows and annotate failures; the rescore-REPLACE
+        # path overwrites it with the rest of the row.
+        "annotated_transcript": (
+            json.dumps(scorecard.annotated_transcript)
+            if scorecard.annotated_transcript else None
+        ),
         "dialpad_call_metadata": json.dumps({
             "sop_used": scorecard.sop_used,
             "stage1_flags": sorted({f for s in scorecard.sections for f in s.flags}),

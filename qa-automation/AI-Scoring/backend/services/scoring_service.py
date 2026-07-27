@@ -53,6 +53,12 @@ step 2 and honor the constraints listed at the bottom.
                page path was decommissioned 2026-07-23; when
                retrieval is off/skipped/sub-τ the prompt takes the
                sop_context_missing conservative path.
+     Step 2.5  Stage-A annotation (TwoStageScoringDesign §3), gated by
+               SCORING_PIPELINE (single | annotate_only | two_stage*):
+               annotate_audio produces the gemini_annotate_v1 artifact,
+               persisted to qa.evaluations.annotated_transcript. In
+               annotate_only the scoring prompt is untouched; Stage-B
+               judging (two_stage*) lands with P3. Never a blocker.
      Step 3    `score_audio`: upload audio to Gemini, build the prompt
                (rubric + SOP + grounding + transcript, from TeamConfig
                JSON), parse/validate the Scorecard.
@@ -94,10 +100,11 @@ Constraints the automated trigger MUST keep in mind:
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING, Optional
 
 from backend.models.scorecard import ScorecardWithMeta
-from backend.services.audio_service import score_audio
+from backend.services.audio_service import annotate_audio, annotator_model, score_audio
 from backend.services.cc_context import (
     build_call_context_block,
     fetch_call_context,
@@ -116,6 +123,25 @@ if TYPE_CHECKING:
     from backend.config.team_config import TeamConfig
 
 logger = logging.getLogger(__name__)
+
+_PIPELINE_MODES = ("single", "annotate_only", "two_stage_shadow", "two_stage")
+
+
+def scoring_pipeline() -> str:
+    """SCORING_PIPELINE — TwoStageScoringDesign §6 (house pattern:
+    unknown values collapse to the off-state).
+
+      single           today's one-call Gemini scoring (default)
+      annotate_only    P2: Stage A runs alongside single-stage scoring;
+                       the annotation persists, the prompt is untouched —
+                       inspectable audio evidence accumulates before any
+                       judge change
+      two_stage_shadow / two_stage — land with P3; until then they run
+                       as annotate_only (with a warning) rather than
+                       silently doing nothing
+    """
+    mode = os.environ.get("SCORING_PIPELINE", "single").strip().lower()
+    return mode if mode in _PIPELINE_MODES else "single"
 
 
 async def score_call(
@@ -200,6 +226,42 @@ async def score_call(
     else:
         sop_data = {"sop_title": "", "sop_content": ""}
 
+    # Step 2.5: Stage-A annotation (TwoStageScoringDesign §3). In
+    # annotate_only the artifact persists while the scoring prompt stays
+    # untouched — same log-only instinct as the CC/Pulpo shadow modes.
+    # Non-fatal throughout: annotation is an enhancement, never a
+    # scoring blocker (the cc_context doctrine).
+    pipeline = scoring_pipeline()
+    annotation = None
+    annotation_model = None
+    if pipeline != "single":
+        if pipeline in ("two_stage_shadow", "two_stage"):
+            logger.warning(
+                "SCORING_PIPELINE=%s: Stage-B judging lands with P3 — "
+                "running annotation only for call=%s", pipeline, call_id,
+            )
+        try:
+            annotation_model = annotator_model()
+            annotation = await annotate_audio(
+                audio_bytes,
+                filename,
+                transcript_text=transcript_text,
+                moments_display=transcript_data.get("moments_display", []),
+                model=annotation_model,
+            )
+            logger.info(
+                "stage_a[%s] call=%s model=%s: %d turns, %d holds, lang=%s",
+                pipeline, call_id, annotation_model,
+                len(annotation.turns), len(annotation.holds),
+                annotation.language_detected,
+            )
+        except Exception:
+            logger.exception(
+                "stage_a annotate failed for call=%s — scoring proceeds "
+                "without an annotation", call_id,
+            )
+            annotation = None
+
     # Step 3: Score
     extra_notes = ""
     flagged_long = duration_ms > CALL_DURATION_FLAG_MS
@@ -267,4 +329,8 @@ async def score_call(
         # PulpoConnection §4.2 step 6 — retrieval provenance for the eval
         # row (stamped in shadow AND on: the shadow window's compare data).
         pulpo_docs=sop_ctx.provenance if sop_ctx else [],
+        # TwoStageScoringDesign §3 — the Stage-A artifact + audio-leg
+        # model stamp (eval_store fills models_used.audio from these).
+        annotated_transcript=annotation.model_dump() if annotation else None,
+        annotator_model=annotation_model if annotation else None,
     )
