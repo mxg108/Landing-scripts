@@ -281,3 +281,212 @@ class TestAutoRescoreHelpers:
         assert await fetch_auto_rescore_state(1) is None
         assert await stamp_auto_rescored(1) is False
         await mark_human_review_required(1)  # no raise
+
+
+# ---------------------------------------------------------------------------
+# S6 — apply_override / coaching receipts / review queue
+# (ScorecardActionsDesign §4.3, §4.3a, §0.3)
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from backend.services.eval_store import (  # noqa: E402
+    apply_override,
+    complete_coaching_notified,
+    create_notification_coaching,
+    create_resolution_receipt,
+    list_review_queue,
+)
+
+
+class _S6Conn:
+    """Records queries in order; answers the coaching INSERT with an id."""
+
+    def __init__(self, agent_row=None, queue_rows=()):
+        self.agent_row = agent_row
+        self.queue_rows = list(queue_rows)
+        self.queries: list[tuple[str, tuple]] = []
+        self.fail_on_rebuild = False
+
+    @asynccontextmanager
+    async def transaction(self):
+        self.queries.append(("BEGIN", ()))
+        yield
+        self.queries.append(("COMMIT", ()))
+
+    async def fetchrow(self, query, *args):
+        self.queries.append((query, args))
+        if "INSERT INTO qa.coachings" in query:
+            return {"id": 55}
+        if "SELECT agent_id" in query:
+            return self.agent_row
+        raise AssertionError(f"unexpected fetchrow: {query}")
+
+    async def fetch(self, query, *args):
+        self.queries.append((query, args))
+        return self.queue_rows
+
+    async def execute(self, query, *args):
+        self.queries.append((query, args))
+        return "UPDATE 1"
+
+
+def _sql_ops(conn):
+    return [q for q, _ in conn.queries if q not in ("BEGIN", "COMMIT")]
+
+
+@pytest.mark.asyncio
+class TestApplyOverride:
+
+    def _wire(self, monkeypatch, conn, rebuild_calls=None):
+        async def fake_get_pool():
+            return FakePool(conn)
+        monkeypatch.setattr(eval_store, "_get_pool", fake_get_pool)
+
+        calls = rebuild_calls if rebuild_calls is not None else []
+
+        async def fake_rebuild(c, agent_id, config):
+            if conn.fail_on_rebuild:
+                raise RuntimeError("rebuild boom")
+            calls.append(agent_id)
+            conn.queries.append(("REBUILD", (agent_id,)))
+            return 3
+        import backend.services.stat_points as sp
+        monkeypatch.setattr(sp, "rebuild_agent_series", fake_rebuild)
+        return calls
+
+    async def _run(self):
+        return await apply_override(
+            evaluation_id=2377, team_id="member_support", agent_id=7,
+            agent_name="Luis Rubio", old_score=62.5, new_score=85.0,
+            reasoning="hold SOP v3", conducted_by_role="manager",
+            evaluator_email="ana@landing.com",
+            config=SimpleNamespace(),
+        )
+
+    async def test_supersede_touches_only_score_source_and_queue(self, monkeypatch):
+        """Engine-score reproducibility: the UPDATE must leave sections
+        and formula_version alone — old score reproducible forever."""
+        conn = _S6Conn()
+        self._wire(monkeypatch, conn)
+        coaching_id = await self._run()
+        assert coaching_id == 55
+
+        update = next(q for q, _ in conn.queries if q.startswith("UPDATE qa.evaluations"))
+        assert "overall_score = $2" in update
+        assert "source = 'ai_reviewed'" in update
+        assert "human_review_completed_at" in update  # queue exit (§0.3)
+        assert "formula_version" not in update
+        assert "evaluation_sections" not in update
+
+    async def test_order_update_receipt_rebuild_one_transaction(self, monkeypatch):
+        rebuilds = []
+        conn = _S6Conn()
+        self._wire(monkeypatch, conn, rebuilds)
+        await self._run()
+        ops = _sql_ops(conn)
+        assert ops[0].startswith("UPDATE qa.evaluations")
+        assert "INSERT INTO qa.coachings" in ops[1]
+        assert "INSERT INTO qa.coaching_evaluations" in ops[2]
+        assert ops[3] == "REBUILD"
+        assert rebuilds == [7]
+        # Everything between the outermost BEGIN/COMMIT pair.
+        assert conn.queries[0][0] == "BEGIN"
+        assert conn.queries[-1][0] == "COMMIT"
+
+    async def test_receipt_carries_deadline_and_action_plan(self, monkeypatch):
+        conn = _S6Conn()
+        self._wire(monkeypatch, conn)
+        await self._run()
+        insert_q, insert_args = next(
+            (q, a) for q, a in conn.queries if "INSERT INTO qa.coachings" in q)
+        assert "'pending'" in insert_q
+        assert "interval '3 days'" in insert_q
+        assert insert_args[2] == "manager"
+        assert insert_args[3] == "ana@landing.com"
+        assert insert_args[4] == "Notify Luis Rubio: score manually overridden 62.5 → 85.0"
+        link_q, link_args = next(
+            (q, a) for q, a in conn.queries
+            if "INSERT INTO qa.coaching_evaluations" in q)
+        assert "opportunities FROM qa.evaluations" in link_q  # snapshot
+        assert link_args == (55, 2377, "hold SOP v3")
+
+    async def test_rebuild_failure_rolls_back(self, monkeypatch):
+        """Fatal by contract (§5) — apply_override must propagate."""
+        conn = _S6Conn()
+        conn.fail_on_rebuild = True
+        self._wire(monkeypatch, conn)
+        with pytest.raises(RuntimeError, match="rebuild boom"):
+            await self._run()
+
+
+@pytest.mark.asyncio
+class TestReceiptHelpers:
+
+    def _wire(self, monkeypatch, conn):
+        async def fake_get_pool():
+            return FakePool(conn)
+        monkeypatch.setattr(eval_store, "_get_pool", fake_get_pool)
+
+    async def test_complete_guarded_by_pending_status(self, monkeypatch):
+        conn = _S6Conn()
+        self._wire(monkeypatch, conn)
+        await complete_coaching_notified(
+            55, completed_by="ana@landing.com", summary="notified")
+        q, args = conn.queries[0]
+        assert "status = 'completed'" in q
+        assert "WHERE id = $1 AND status = 'pending'" in q
+        assert args == (55, "notified", "ana@landing.com")
+
+    async def test_resolution_receipt_skips_agentless(self, monkeypatch):
+        conn = _S6Conn(agent_row={"agent_id": None})
+        self._wire(monkeypatch, conn)
+        assert await create_resolution_receipt(
+            evaluation_id=5, team_id="member_support",
+            evaluator_email="ana@landing.com", agent_name="Ghost") is None
+
+    async def test_resolution_receipt_creates(self, monkeypatch):
+        conn = _S6Conn(agent_row={"agent_id": 7})
+        self._wire(monkeypatch, conn)
+        cid = await create_resolution_receipt(
+            evaluation_id=5, team_id="member_support",
+            evaluator_email="ana@landing.com", agent_name="Luis Rubio")
+        assert cid == 55
+        insert_q, insert_args = next(
+            (q, a) for q, a in conn.queries if "INSERT INTO qa.coachings" in q)
+        assert insert_args[2] == "manager"
+        assert "resolved by" in insert_args[4]
+
+
+@pytest.mark.asyncio
+class TestListReviewQueue:
+
+    async def test_queue_filter_and_mapping(self, monkeypatch):
+        conn = _S6Conn(queue_rows=[{
+            "id": 2377, "dialpad_call_id": "503",
+            "dialpad_entry_point_call_id": None,
+            "agent_name_raw": "Luis Rubio", "agent_email": "l@landing.com",
+            "overall_score": 45, "state": "finalized",
+            "scoring_status": "complete", "source": "ai",
+            "human_review_required_at": "t1", "auto_rescored_at": "t0",
+            "finalized_at": "t1",
+        }])
+
+        async def fake_get_pool():
+            return FakePool(conn)
+        monkeypatch.setattr(eval_store, "_get_pool", fake_get_pool)
+
+        rows = await list_review_queue("member_support")
+        q, args = conn.queries[0]
+        assert "human_review_required_at IS NOT NULL" in q
+        assert "human_review_completed_at IS NULL" in q
+        assert "ORDER BY human_review_required_at" in q
+        assert args == ("member_support",)
+        assert rows[0]["overall_score"] == 45.0
+        assert isinstance(rows[0]["overall_score"], float)
+
+    async def test_no_pool_returns_empty(self, monkeypatch):
+        async def no_pool():
+            return None
+        monkeypatch.setattr(eval_store, "_get_pool", no_pool)
+        assert await list_review_queue("member_support") == []

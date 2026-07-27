@@ -22,7 +22,7 @@ from backend.middleware.auth import (
     require_api_key,
     team_id_from_path,
 )
-from backend.models.scorecard import ApprovalRequest, RescoreRequest
+from backend.models.scorecard import ApprovalRequest, OverrideRequest, RescoreRequest
 from backend.services.history_service import (
     agent_email_for_name,
     agent_name_for_email,
@@ -122,7 +122,8 @@ async def _await_coro(coro) -> None:
     await coro
 
 
-def _dispatch_finalize_email(job, history_row, team_id, evaluation_id) -> None:
+def _dispatch_finalize_email(job, history_row, team_id, evaluation_id,
+                             default_disclaimer=None) -> None:
     """Apps Script email dispatch at the finalize seam — shared by the
     auto-flow and the approve path.
 
@@ -132,7 +133,11 @@ def _dispatch_finalize_email(job, history_row, team_id, evaluation_id) -> None:
     in the job payload. The context lives on the in-memory job only — a
     restart between rescore and re-approve loses it, and the re-finalize
     email goes out disclaimer-less (accepted at current traffic; the
-    audit 'rescored' row still records the intervention)."""
+    audit 'rescored' row still records the intervention).
+
+    ``default_disclaimer`` (S6): the caller's cause tag when no rescore
+    context rides the job — e.g. 'review_resolution' on a flagged-review
+    approve. A rescore context wins over it."""
     if not history_row or history_row <= 0:
         job["email_dispatch"] = {
             "status": "skipped", "message": "no Analyst_History row projected",
@@ -145,7 +150,7 @@ def _dispatch_finalize_email(job, history_row, team_id, evaluation_id) -> None:
             "message": f"rescore ({rescore.get('cause', '?')}) requested suppress_email",
         }
         return
-    disclaimer = f"rescore_{rescore['cause']}" if rescore else None
+    disclaimer = f"rescore_{rescore['cause']}" if rescore else default_disclaimer
     try:
         job["email_dispatch"] = trigger_apps_script(
             history_row, team_id, disclaimer=disclaimer
@@ -840,6 +845,17 @@ async def approve_scorecard(
             status_code=422,
             detail=f"Manual sections require scores before approval: {unscored}",
         )
+    # §4.3a (S6): resolving a flagged review is a manual mutation of an
+    # agent-visible score — the acknowledgment gate applies.
+    resolving = job.get("scoring_status") == "flagged_human_review"
+    if resolving and approval.acknowledged is not True:
+        job["status"] = "complete"
+        raise HTTPException(
+            status_code=422,
+            detail="acknowledged required: resolving a human-review flag "
+                   "binds the evaluator to notify the agent that their "
+                   "progression was manually modified (§4.3a)",
+        )
     try:
         evaluation_id = await record_approval(
             config,
@@ -854,7 +870,7 @@ async def approve_scorecard(
             agent_email=job.get("agent_email") or None,
             model=sc.get("model", "gemini-2.5-flash"),
             strict=True,
-            resolving_review=job.get("scoring_status") == "flagged_human_review",
+            resolving_review=resolving,
         )
         if evaluation_id is None:
             raise HTTPException(status_code=500, detail="No draft evaluation row to approve")
@@ -870,13 +886,27 @@ async def approve_scorecard(
             semaphore=_semaphore_for_key(identity),
             manager_email=evaluator_email,
         )
+        # §4.3a.3 (S6): the resolution creates the coaching receipt —
+        # a human looked, and the agent is owed notice. Created even
+        # when the auto-rescore fired (the human DID resolve; the
+        # suppressed email leaves the receipt pending, correctly).
+        coaching_id = None
+        if resolving:
+            coaching_id = await eval_store.create_resolution_receipt(
+                evaluation_id=evaluation_id, team_id=team_id,
+                evaluator_email=evaluator_email,
+                agent_name=job.get("agent_name") or sc.get("agent_name") or "the agent",
+            )
         history_row = None
         if followup is None:
             pool = await eval_store.get_pool()
             history_row = await project_evaluation(
                 pool, evaluation_id, config, include_history=True
             )
-            _dispatch_finalize_email(job, history_row, team_id, evaluation_id)
+            _dispatch_finalize_email(
+                job, history_row, team_id, evaluation_id,
+                default_disclaimer="review_resolution" if resolving else None,
+            )
             await _publish_finalized_event(
                 team_id, job,
                 agent_name=job.get("agent_name") or sc.get("agent_name"),
@@ -888,6 +918,20 @@ async def approve_scorecard(
                 key_strengths=approval.key_strengths,
                 opportunities=approval.opportunities,
             )
+            # The disclaimer email discharges the §4.3a notification duty.
+            dispatched_ok = (job.get("email_dispatch") or {}).get("status") \
+                not in ("error", "suppressed", "skipped")
+            if coaching_id is not None and dispatched_ok:
+                await eval_store.complete_coaching_notified(
+                    coaching_id, completed_by=evaluator_email,
+                    summary="Agent notified via review-resolution email",
+                )
+        approve_notes = "engine-scored"
+        if resolving:
+            approve_notes += (
+                f"; resolved_review ack:{evaluator_email}"
+                f"; coaching={coaching_id if coaching_id is not None else 'none'}"
+            )
         append_score_audit_row(
             api_key_role=identity.role,
             evaluator_email=evaluator_email,
@@ -897,7 +941,7 @@ async def approve_scorecard(
             target_team=team_id,
             action=audit_cfg.ACTION_APPROVED,
             result_row=history_row,
-            notes="engine-scored",
+            notes=approve_notes,
         )
         job["status"] = "approved"
         job["state"] = "finalized"
@@ -1160,6 +1204,193 @@ async def rescore_evaluation(
         "evaluation_id": ref.id,
         "superseded_score": ref.overall_score,
     }
+
+
+@router.post("/score/{job_id}/override")
+async def override_scorecard(
+    request: Request,
+    job_id: str,
+    payload: OverrideRequest,
+    identity: KeyIdentity = Depends(require_api_key),
+):
+    """Override the auto score — SUPERSEDE riding source='ai_reviewed'
+    (ScorecardActionsDesign §4.3). Team key (roster-scoped) or
+    privileged. Scorecard surface only by design — an approval-flow
+    action, not an archaeology action; the datapoint page never renders
+    the control (S7 checkpoint).
+
+    Target must be finalized. No precondition beyond that — the coaching
+    record is not a gate you pass, it's a receipt the action writes
+    (v1.2): one transaction sets the score a human stands behind, creates
+    the pending qa.coachings receipt (+ 3-day notification deadline) and
+    the coaching_evaluations link, resolves any standing review-queue
+    entry, and rebuilds the stat series. Sections and formula_version
+    stay — the superseded engine score is reproducible forever, so the
+    UI can render "engine would say X" without storing X.
+
+    §4.3a: `acknowledged` must be literally true (422 otherwise). The
+    disclaimer email dispatches by default and mechanically discharges
+    the notification duty (coaching completes); `suppress_email` leaves
+    it pending — idx_coachings_pending is the accountability queue.
+
+    Concurrency: last-writer-wins by design. qa.evaluations has no
+    updated_at column and these are low-traffic manager tools. If Landing
+    outgrows this (concurrent evaluators on one eval), add updated_at +
+    an If-Unmodified-Since-style optimistic check here — potential design
+    choice deliberately deferred, not overlooked.
+    """
+    team_id = team_id_from_path(request)
+    config = get_team_config(team_id)
+    key = _job_key(team_id, job_id)
+
+    if payload.acknowledged is not True:
+        raise HTTPException(
+            status_code=422,
+            detail="acknowledged required: overriding binds the evaluator "
+                   "to notify the agent that their progression was manually "
+                   "modified (§4.3a)",
+        )
+
+    existing = _jobs.get(key)
+    if existing and existing.get("status") in {"pending", "scoring"}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A scoring job for this call is already {existing['status']}",
+        )
+
+    ref = await eval_store.resolve_evaluation(team_id, job_id)
+    if ref is None:
+        raise HTTPException(status_code=404, detail="No evaluation matches this call id")
+
+    is_in_roster = (
+        await email_in_team_mails(ref.agent_email, team_id)
+        if ref.agent_email else False
+    )
+    try:
+        check_scoring_access(
+            identity, team_id, ref.agent_email, is_in_roster=is_in_roster,
+        )
+    except HTTPException as exc:
+        append_score_audit_row(
+            api_key_role=identity.role,
+            evaluator_email=payload.evaluator_email,
+            agent_email=ref.agent_email or "",
+            agent_name=ref.agent_name_raw,
+            call_id=ref.dialpad_call_id or ref.dialpad_entry_point_call_id or "",
+            target_team=team_id,
+            action=audit_cfg.ACTION_DENIED,
+            result_row=None,
+            notes=f"http_{exc.status_code}",
+        )
+        raise
+
+    if ref.state != "finalized":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Evaluation is '{ref.state}' — only finalized "
+                   "evaluations can be overridden (draft evals go through "
+                   "the normal edit + approve flow)",
+        )
+    if ref.agent_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Evaluation has no linked agent (qa.agents) — the "
+                   "coaching receipt cannot be created. Import the agent "
+                   "first (scripts/import_agents.py).",
+        )
+
+    old_score = ref.overall_score
+    coaching_id = await eval_store.apply_override(
+        evaluation_id=ref.id, team_id=team_id, agent_id=ref.agent_id,
+        agent_name=ref.agent_name_raw, old_score=old_score,
+        new_score=payload.overall_score, reasoning=payload.reasoning,
+        conducted_by_role=payload.conducted_by_role,
+        evaluator_email=payload.evaluator_email, config=config,
+    )
+
+    # Post-transaction, visible-not-blocking: projection, audit, email.
+    pool = await eval_store.get_pool()
+    history_row = await project_evaluation(
+        pool, ref.id, config, include_history=True
+    )
+    notes = f"{old_score} → {payload.overall_score}: {payload.reasoning}"
+    if payload.sop_gap is not None:
+        doc = (
+            f" (doc {payload.sop_gap.document_id})"
+            if payload.sop_gap.document_id is not None else ""
+        )
+        notes += f" | SOP gap: {payload.sop_gap.note}{doc}"
+    notes += f" | ack:{payload.evaluator_email}"
+    append_score_audit_row(
+        api_key_role=identity.role,
+        evaluator_email=payload.evaluator_email,
+        agent_email=ref.agent_email or "",
+        agent_name=ref.agent_name_raw,
+        call_id=ref.dialpad_call_id or ref.dialpad_entry_point_call_id or "",
+        target_team=team_id,
+        action=audit_cfg.ACTION_OVERRIDDEN,
+        result_row=history_row,
+        notes=notes,
+    )
+
+    coaching_status = "pending"
+    email_dispatch: dict = {"status": "suppressed", "message": "suppress_email requested"}
+    if not payload.suppress_email:
+        try:
+            email_dispatch = trigger_apps_script(
+                history_row, team_id, disclaimer="override"
+            ) if history_row and history_row > 0 else {
+                "status": "skipped", "message": "no Analyst_History row projected",
+            }
+        except Exception as e:
+            email_dispatch = {"status": "error", "message": str(e)}
+            logging.getLogger(__name__).exception(
+                "override: disclaimer dispatch failed for eval %s (retryable; "
+                "coaching stays pending)", ref.id,
+            )
+        if email_dispatch.get("status") not in ("error", "suppressed", "skipped"):
+            # §4.3.5: the disclaimer email discharges the notification
+            # duty mechanically — the receipt completes.
+            await eval_store.complete_coaching_notified(
+                coaching_id, completed_by=payload.evaluator_email,
+                summary="Agent notified via override disclaimer email",
+            )
+            coaching_status = "completed"
+
+    # Refresh the cached job so the scorecard page shows the new score.
+    cached = _jobs.get(key)
+    if cached:
+        cached["overall_score"] = payload.overall_score
+        cached["source"] = "ai_reviewed"
+
+    return {
+        "status": "overridden",
+        "evaluation_id": ref.id,
+        "old_score": old_score,
+        "new_score": payload.overall_score,
+        "superseded_engine_score": old_score,
+        "coaching_id": coaching_id,
+        "coaching_status": coaching_status,
+        "history_row": history_row,
+        "email_dispatch": email_dispatch,
+    }
+
+
+@router.get("/review-queue")
+async def review_queue(
+    request: Request,
+    identity: KeyIdentity = Depends(require_api_key),
+):
+    """The §0.3 review queue — every evaluation that WOULD require a
+    human look and hasn't had one (human_review_required_at set,
+    human_review_completed_at not). This is the accounting surface for
+    the no-hard-blockers doctrine: blocked drafts (authoritative mode),
+    shipped-but-queued rows (informative mode), and still-low
+    auto-rescore survivors all appear here until a human resolution
+    (approve) or an override stamps them completed."""
+    team_id = team_id_from_path(request)
+    rows = await eval_store.list_review_queue(team_id)
+    return {"team_id": team_id, "count": len(rows), "evaluations": rows}
 
 
 @router.delete("/score/{job_id}")

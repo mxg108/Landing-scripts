@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
-from pydantic import BaseModel, ValidationInfo, model_validator
+from typing import List, Literal, Optional
+from pydantic import BaseModel, Field, ValidationInfo, model_validator
 
 
 class ScorecardSection(BaseModel):
@@ -100,6 +100,11 @@ class ApprovalRequest(BaseModel):
     # falls back to job/row identity and 422s only when every source
     # comes up empty.
     evaluator_email: Optional[str] = None
+    # ScorecardActionsDesign §4.3a (S6): required (literally true) when
+    # the approval resolves a flagged human review — the acknowledgment
+    # binds the evaluator to notify the agent that a human manually
+    # modified their progression. Plain approvals ignore it.
+    acknowledged: bool = False
 
 
 class RescoreRequest(BaseModel):
@@ -112,6 +117,32 @@ class RescoreRequest(BaseModel):
     the disclaimer email by default."""
     evaluator_email: str
     suppress_email: bool = False
+
+
+class SopGap(BaseModel):
+    """The SOP-escalation record riding an override (ScorecardActionsDesign
+    §4.3): evidence of an outdated or missing SOP. ``document_id`` points
+    into embeddings.sop_documents when the evaluator can name the doc."""
+    note: str = Field(min_length=1)
+    document_id: Optional[int] = None
+
+
+class OverrideRequest(BaseModel):
+    """POST /score/{job_id}/override payload (ScorecardActionsDesign §4.3).
+
+    SUPERSEDE riding source='ai_reviewed': sections and formula_version
+    stay untouched, so the engine score remains reproducible forever.
+    ``acknowledged`` is the §4.3a gate — the route 422s unless it is
+    literally true; the acknowledgment binds the evaluator to notify the
+    agent their progression was manually modified. The override CREATES
+    the coaching receipt (v1.2 — receipts are written, not required)."""
+    overall_score: float = Field(ge=0, le=100)
+    reasoning: str = Field(min_length=1)
+    conducted_by_role: Literal["team_lead", "manager", "hr", "external"]
+    sop_gap: Optional[SopGap] = None
+    acknowledged: bool
+    suppress_email: bool = False
+    evaluator_email: str = Field(min_length=1)
 
 
 class ScorecardWithMeta(Scorecard):

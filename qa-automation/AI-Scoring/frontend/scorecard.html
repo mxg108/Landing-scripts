@@ -365,7 +365,17 @@ function showLoadError(msg) {
   }
 }
 
+// Job-level meta the action flows consult (ScorecardActions S6):
+// scoring_status drives the §4.3a resolution acknowledgment; state
+// gates the override control.
+let _jobMeta = {};
+
 function renderPanel(data) {
+  _jobMeta = {
+    scoring_status: data.scoring_status || null,
+    state: data.state || null,
+    overall_score: data.overall_score != null ? data.overall_score : null,
+  };
   const loadingRow = document.getElementById('loadingRow');
   if (loadingRow) loadingRow.remove();
   document.getElementById('scHeaderMeta').textContent =
@@ -387,7 +397,10 @@ function renderPanel(data) {
   }
 
   // Post-cutover (CutoverDesign §5): an engine-finalized evaluation is
-  // immutable — render everything, then lock it down completely.
+  // immutable — render everything, then lock it down completely. The
+  // S6 override doorway is the ONE designed hole in this wall
+  // (ScorecardActionsDesign §4.3) — injected after the lockdown so its
+  // controls stay live.
   if (data.state === 'finalized') {
     panel.querySelectorAll('select, textarea, input, button').forEach(el => el.disabled = true);
     const btn = document.getElementById(`approve-btn-${JOB_ID}`);
@@ -399,6 +412,128 @@ function renderPanel(data) {
     }
     document.getElementById('scHeaderMeta').textContent =
       `Job ${JOB_ID} — ${TEAM_ID} — finalized (read-only)`;
+    injectOverrideBar(panel, data);
+  }
+}
+
+// --------------------------------------------------------------------
+// S6 — Override doorway (ScorecardActionsDesign §4.3 / §4.3a).
+// Scorecard surface ONLY by design — the datapoint page must never
+// render this control (an approval-flow action, not archaeology).
+// --------------------------------------------------------------------
+
+const ACK_TEXT =
+  'You are manually modifying an AI-scored evaluation. By continuing ' +
+  'you commit to at least notifying the agent that their progression ' +
+  'was manually modified by a human.';
+
+function injectOverrideBar(panel, data) {
+  const bar = document.createElement('div');
+  bar.className = 'approve-bar';
+  bar.id = `override-bar-${JOB_ID}`;
+  bar.innerHTML = `
+    <span class="approve-status">Wrong score? A human can stand behind a different one.</span>
+    <button class="btn-approve" style="background:#7c2d12;" id="override-toggle-${JOB_ID}"
+            onclick="toggleOverrideForm()">Override Score…</button>
+    <div id="override-form-${JOB_ID}" style="display:none; width:100%; margin-top:0.75rem;
+         padding:0.75rem; border:1px solid var(--border); border-radius:8px;">
+      <div style="display:flex; gap:0.75rem; flex-wrap:wrap; margin-bottom:0.5rem;">
+        <label style="font-size:0.8rem;">New score (0–100)
+          <input type="number" id="ov-score-${JOB_ID}" min="0" max="100" step="0.1"
+                 style="width:6rem; display:block;">
+        </label>
+        <label style="font-size:0.8rem;">Your role
+          <select id="ov-role-${JOB_ID}" style="display:block;">
+            <option value="team_lead">Team lead</option>
+            <option value="manager" selected>Manager</option>
+            <option value="hr">HR</option>
+            <option value="external">External</option>
+          </select>
+        </label>
+        <label style="font-size:0.8rem;">Your email
+          <input type="email" id="ov-email-${JOB_ID}" placeholder="you@landing.com"
+                 style="display:block; width:14rem;">
+        </label>
+      </div>
+      <label style="font-size:0.8rem; display:block; margin-bottom:0.5rem;">Reasoning (required — this is the audit record)
+        <textarea id="ov-reasoning-${JOB_ID}" rows="2" style="width:100%;"></textarea>
+      </label>
+      <label style="font-size:0.8rem; display:block; margin-bottom:0.5rem;">SOP gap (optional — outdated/missing SOP evidence)
+        <textarea id="ov-sopgap-${JOB_ID}" rows="1" style="width:100%;"></textarea>
+      </label>
+      <label style="font-size:0.8rem; display:block; margin-bottom:0.35rem;">
+        <input type="checkbox" id="ov-suppress-${JOB_ID}"> Do NOT re-send the evaluation email
+        (leaves your notification duty pending)
+      </label>
+      <label style="font-size:0.8rem; display:block; margin-bottom:0.6rem;">
+        <input type="checkbox" id="ov-ack-${JOB_ID}"> ${ACK_TEXT}
+      </label>
+      <button class="btn-approve" style="background:#7c2d12;" id="ov-submit-${JOB_ID}"
+              onclick="submitOverride()">Override & Record</button>
+      <span class="approve-status" id="ov-status-${JOB_ID}"></span>
+    </div>`;
+  panel.appendChild(bar);
+  const saved = localStorage.getItem('qa_evaluator_email');
+  if (saved) document.getElementById(`ov-email-${JOB_ID}`).value = saved;
+}
+
+function toggleOverrideForm() {
+  const form = document.getElementById(`override-form-${JOB_ID}`);
+  if (form) form.style.display = form.style.display === 'none' ? 'block' : 'none';
+}
+
+async function submitOverride() {
+  const g = id => document.getElementById(`${id}-${JOB_ID}`);
+  const statusEl = g('ov-status');
+  const score = parseFloat(g('ov-score').value);
+  const reasoning = g('ov-reasoning').value.trim();
+  const email = g('ov-email').value.trim();
+  const sopNote = g('ov-sopgap').value.trim();
+
+  if (Number.isNaN(score) || score < 0 || score > 100) {
+    statusEl.textContent = 'Enter a score between 0 and 100.'; return;
+  }
+  if (!reasoning) { statusEl.textContent = 'Reasoning is required.'; return; }
+  if (!email) { statusEl.textContent = 'Your email is required.'; return; }
+  if (!g('ov-ack').checked) {
+    statusEl.textContent = 'You must acknowledge the notification duty (§4.3a).'; return;
+  }
+  localStorage.setItem('qa_evaluator_email', email);
+
+  const btn = g('ov-submit');
+  btn.disabled = true; btn.textContent = 'Recording…';
+  statusEl.textContent = 'Applying override, rebuilding stats, dispatching…';
+  try {
+    const res = await fetch(`${API_BASE}/score/${JOB_ID}/override`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({
+        overall_score: score,
+        reasoning,
+        conducted_by_role: g('ov-role').value,
+        sop_gap: sopNote ? { note: sopNote } : null,
+        acknowledged: true,
+        suppress_email: g('ov-suppress').checked,
+        evaluator_email: email,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail));
+    }
+    const data = await res.json();
+    btn.textContent = 'Overridden';
+    btn.style.background = '#065f46';
+    const duty = data.coaching_status === 'completed'
+      ? 'Agent notified via the disclaimer email.'
+      : `Notification duty PENDING (coaching #${data.coaching_id}, 3-day deadline) — you owe the agent a conversation.`;
+    statusEl.textContent =
+      `Score ${data.old_score} → ${data.new_score}. ${duty}`;
+    document.getElementById('scHeaderMeta').textContent =
+      `Job ${JOB_ID} — ${TEAM_ID} — overridden (${data.new_score})`;
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+    btn.disabled = false; btn.textContent = 'Override & Record';
   }
 }
 
@@ -673,6 +808,13 @@ async function approveScorecard(jobId) {
   const statusEl = document.getElementById(`approve-status-${jobId}`);
   const panel = document.getElementById(`scorecard-${jobId}`);
 
+  // §4.3a (S6): resolving a flagged human review is a manual mutation
+  // of an agent-visible score — explicit acknowledgment or nothing.
+  const resolvingReview = _jobMeta.scoring_status === 'flagged_human_review';
+  if (resolvingReview && !window.confirm(ACK_TEXT + '\n\nProceed with the resolution?')) {
+    return;
+  }
+
   btn.disabled = true;
   btn.textContent = 'Sending...';
   statusEl.textContent = 'Updating sheets and sending email...';
@@ -750,6 +892,7 @@ async function approveScorecard(jobId) {
     sections,
     key_strengths: document.getElementById(`strengths-${jobId}`).value,
     opportunities: document.getElementById(`opportunities-${jobId}`).value,
+    acknowledged: resolvingReview,  // §4.3a — the route 422s a resolution without it
   };
 
   try {

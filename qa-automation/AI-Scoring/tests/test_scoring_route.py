@@ -626,11 +626,26 @@ def _eval_ref(**overrides):
 
 def _stub_engine_path(monkeypatch, captured_approvals):
     """Same engine stubs as test_approve_writes_audit_row, capturing the
-    record_approval kwargs so the fallback context can be asserted."""
+    record_approval kwargs so the fallback context can be asserted.
+    Returns {'receipts': [...], 'completions': [...]} capturing the S6
+    §4.3a coaching-receipt calls."""
     monkeypatch.setattr(
         scoring_module.eval_store, "missing_manual_scores",
         lambda config, sections: [],
     )
+
+    s6 = {"receipts": [], "completions": []}
+
+    async def fake_receipt(**kw):
+        s6["receipts"].append(kw)
+        return 91
+    monkeypatch.setattr(
+        scoring_module.eval_store, "create_resolution_receipt", fake_receipt)
+
+    async def fake_complete(coaching_id, **kw):
+        s6["completions"].append({"coaching_id": coaching_id, **kw})
+    monkeypatch.setattr(
+        scoring_module.eval_store, "complete_coaching_notified", fake_complete)
 
     async def fake_record_approval(config, **kw):
         captured_approvals.append(kw)
@@ -655,6 +670,7 @@ def _stub_engine_path(monkeypatch, captured_approvals):
         scoring_module, "trigger_apps_script",
         lambda row, team_id, disclaimer=None: {"status": "ok"},
     )
+    return s6
 
 
 def _resolve_stub(monkeypatch, ref):
@@ -682,6 +698,7 @@ def test_approve_restart_simulation_falls_back_to_db(client, monkeypatch):
             "sections": [],
             "key_strengths": "x",
             "opportunities": "y",
+            "acknowledged": True,
             "evaluator_email": "ana@landing.com",
         },
     )
@@ -1104,6 +1121,22 @@ def _stub_rescore_pipeline(monkeypatch, *, flagged=False, draft_row_id=2377,
     monkeypatch.setattr(
         scoring_module.eval_store, "mark_human_review_required", fake_mark_queue)
 
+    # S6 — §4.3a receipt writers (the approve path may create/complete
+    # a resolution receipt; stubbed so no real pool is ever touched).
+    caps["receipts"] = []
+    caps["completions"] = []
+
+    async def fake_receipt(**kw):
+        caps["receipts"].append(kw)
+        return 91
+    monkeypatch.setattr(
+        scoring_module.eval_store, "create_resolution_receipt", fake_receipt)
+
+    async def fake_complete(coaching_id, **kw):
+        caps["completions"].append({"coaching_id": coaching_id, **kw})
+    monkeypatch.setattr(
+        scoring_module.eval_store, "complete_coaching_notified", fake_complete)
+
     if hr_mode is not None:
         from backend.config.team_config import (
             HumanReviewConfig, get_team_config as _real_get_config,
@@ -1330,7 +1363,8 @@ def test_rescore_flagged_pass_holds_draft_then_approve_dispatches_disclaimer(
     resp = client.post(
         "/api/member_support/score/5035229460504576_Luis_Rubio/approve",
         headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
-        json={"sections": [], "key_strengths": "x", "opportunities": "y"},
+        json={"sections": [], "key_strengths": "x", "opportunities": "y",
+              "acknowledged": True},
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["state"] == "finalized"
@@ -1581,6 +1615,7 @@ def test_approve_low_unedited_fires_auto_rescore(client, monkeypatch):
         headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
         json={
             "sections": [], "key_strengths": "x", "opportunities": "y",
+            "acknowledged": True,
             "evaluator_email": "ana@landing.com",
         },
     )
@@ -1608,3 +1643,309 @@ def test_approve_low_unedited_fires_auto_rescore(client, monkeypatch):
     assert job["state"] == "finalized"
     assert job["overall_score"] == 88.0
     assert job["rescore"]["cause"] == "auto"
+
+
+# ---------------------------------------------------------------------------
+# S6 — POST /score/{job_id}/override + §4.3a + /review-queue
+# (ScorecardActionsDesign §4.3, §4.3a, §0.3 accounting)
+# ---------------------------------------------------------------------------
+
+_OVERRIDE_URL = "/api/member_support/score/5035229460504576_Luis_Rubio/override"
+
+
+def _override_payload(**overrides):
+    p = {
+        "overall_score": 85.0,
+        "reasoning": "Agent followed the new hold SOP; model judged v3",
+        "conducted_by_role": "manager",
+        "sop_gap": None,
+        "acknowledged": True,
+        "suppress_email": False,
+        "evaluator_email": "ana@landing.com",
+    }
+    p.update(overrides)
+    return p
+
+
+def _stub_override(monkeypatch):
+    caps = {"applies": [], "completions": [], "dispatches": []}
+
+    async def fake_apply(**kw):
+        caps["applies"].append(kw)
+        return 55
+    monkeypatch.setattr(scoring_module.eval_store, "apply_override", fake_apply)
+
+    async def fake_complete(coaching_id, **kw):
+        caps["completions"].append({"coaching_id": coaching_id, **kw})
+    monkeypatch.setattr(
+        scoring_module.eval_store, "complete_coaching_notified", fake_complete)
+
+    async def fake_pool():
+        return object()
+    monkeypatch.setattr(scoring_module.eval_store, "get_pool", fake_pool)
+
+    async def fake_project(pool, evaluation_id, config, include_history=True):
+        return 321
+    monkeypatch.setattr(scoring_module, "project_evaluation", fake_project)
+
+    def fake_trigger(row, team_id, disclaimer=None):
+        caps["dispatches"].append({"row": row, "disclaimer": disclaimer})
+        return {"status": "ok"}
+    monkeypatch.setattr(scoring_module, "trigger_apps_script", fake_trigger)
+    return caps
+
+
+def test_override_requires_acknowledged(client, monkeypatch):
+    """§4.3a: the literal-true gate, checked before anything else."""
+    resolve_calls = _resolve_stub(monkeypatch, _eval_ref(state="finalized"))
+    resp = client.post(
+        _OVERRIDE_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json=_override_payload(acknowledged=False),
+    )
+    assert resp.status_code == 422
+    assert "acknowledged" in str(resp.json()["detail"])
+    assert resolve_calls == []
+    assert client.audit_rows == []
+
+
+def test_override_only_finalized(client, monkeypatch):
+    _stub_override(monkeypatch)
+    _resolve_stub(monkeypatch, _eval_ref(state="draft"))
+    resp = client.post(
+        _OVERRIDE_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json=_override_payload(),
+    )
+    assert resp.status_code == 409
+    assert "finalized" in resp.json()["detail"]
+
+
+def test_override_team_key_unrostered_403_denied_audit(client, monkeypatch):
+    _stub_override(monkeypatch)
+    _resolve_stub(
+        monkeypatch,
+        _eval_ref(state="finalized", agent_email="ghost@landing.com"))
+    resp = client.post(
+        _OVERRIDE_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json=_override_payload(),
+    )
+    assert resp.status_code == 403
+    denied = [r for r in client.audit_rows if r["action"] == "denied"]
+    assert len(denied) == 1
+    assert denied[0]["notes"] == "http_403"
+
+
+def test_override_agentless_422(client, monkeypatch):
+    """No qa.agents link → no coaching receipt possible → refuse: the
+    receipt is not optional (v1.2 doctrine)."""
+    caps = _stub_override(monkeypatch)
+    _resolve_stub(
+        monkeypatch,
+        _eval_ref(state="finalized", overall_score=62.5, agent_id=None))
+    resp = client.post(
+        _OVERRIDE_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json=_override_payload(),
+    )
+    assert resp.status_code == 422
+    assert "coaching receipt" in resp.json()["detail"]
+    assert caps["applies"] == []
+
+
+def test_override_happy_path_email_completes_coaching(client, monkeypatch):
+    """§4.3 full flow: SUPERSEDE + receipt + rebuild (inside apply), then
+    projection, 'overridden' audit with SOP gap + ack, disclaimer email,
+    and the mechanical §4.3a discharge."""
+    caps = _stub_override(monkeypatch)
+    _resolve_stub(
+        monkeypatch,
+        _eval_ref(state="finalized", scoring_status="complete",
+                  overall_score=62.5))
+
+    resp = client.post(
+        _OVERRIDE_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json=_override_payload(
+            sop_gap={"note": "Hold SOP v3 not in Pulpo", "document_id": 12}),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "overridden"
+    assert body["old_score"] == 62.5
+    assert body["new_score"] == 85.0
+    assert body["superseded_engine_score"] == 62.5
+    assert body["coaching_id"] == 55
+    assert body["coaching_status"] == "completed"
+    assert body["history_row"] == 321
+
+    assert len(caps["applies"]) == 1
+    ap = caps["applies"][0]
+    assert ap["evaluation_id"] == 2377
+    assert ap["agent_id"] == 7
+    assert ap["old_score"] == 62.5
+    assert ap["new_score"] == 85.0
+    assert ap["conducted_by_role"] == "manager"
+
+    assert caps["dispatches"] == [{"row": 321, "disclaimer": "override"}]
+    assert caps["completions"] == [{
+        "coaching_id": 55, "completed_by": "ana@landing.com",
+        "summary": "Agent notified via override disclaimer email",
+    }]
+
+    overridden = [r for r in client.audit_rows if r["action"] == "overridden"]
+    assert len(overridden) == 1
+    assert overridden[0]["notes"] == (
+        "62.5 → 85.0: Agent followed the new hold SOP; model judged v3"
+        " | SOP gap: Hold SOP v3 not in Pulpo (doc 12)"
+        " | ack:ana@landing.com"
+    )
+    assert overridden[0]["result_row"] == 321
+
+
+def test_override_suppress_email_leaves_coaching_pending(client, monkeypatch):
+    """§4.3.5: suppress_email → no dispatch, receipt stays pending —
+    idx_coachings_pending is the accountability queue."""
+    caps = _stub_override(monkeypatch)
+    _resolve_stub(
+        monkeypatch, _eval_ref(state="finalized", overall_score=62.5))
+    resp = client.post(
+        _OVERRIDE_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json=_override_payload(suppress_email=True),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["coaching_status"] == "pending"
+    assert body["email_dispatch"]["status"] == "suppressed"
+    assert caps["dispatches"] == []
+    assert caps["completions"] == []
+
+
+def test_override_dispatch_error_leaves_coaching_pending(client, monkeypatch):
+    """A failed disclaimer email must NOT mark the duty discharged."""
+    caps = _stub_override(monkeypatch)
+
+    def boom(row, team_id, disclaimer=None):
+        raise RuntimeError("GAS down")
+    monkeypatch.setattr(scoring_module, "trigger_apps_script", boom)
+    _resolve_stub(
+        monkeypatch, _eval_ref(state="finalized", overall_score=62.5))
+    resp = client.post(
+        _OVERRIDE_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json=_override_payload(),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["coaching_status"] == "pending"
+    assert body["email_dispatch"]["status"] == "error"
+    assert caps["completions"] == []
+    # The override itself and its audit row still landed.
+    assert len(caps["applies"]) == 1
+    assert [r["action"] for r in client.audit_rows] == ["overridden"]
+
+
+def test_approve_resolution_without_ack_422(client, monkeypatch):
+    """§4.3a on the HR-resolution doorway: no acknowledgment, no
+    resolution — and the job stays approvable."""
+    approvals: list[dict] = []
+    _stub_engine_path(monkeypatch, approvals)
+    _resolve_stub(monkeypatch, _eval_ref())  # flagged_human_review
+
+    resp = client.post(
+        "/api/member_support/score/5035229460504576_Luis_Rubio/approve",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={"sections": [], "key_strengths": "x", "opportunities": "y",
+              "evaluator_email": "ana@landing.com"},
+    )
+    assert resp.status_code == 422
+    assert "acknowledged" in resp.json()["detail"]
+    assert approvals == []
+    key = scoring_module._job_key(
+        "member_support", "5035229460504576_Luis_Rubio")
+    assert scoring_module._jobs[key]["status"] == "complete"
+
+
+def test_approve_resolution_creates_and_completes_receipt(client, monkeypatch):
+    """§4.3a.3: the resolution books the receipt; the resolution email
+    (with the review_resolution disclaimer) discharges it."""
+    approvals: list[dict] = []
+    s6 = _stub_engine_path(monkeypatch, approvals)
+    dispatches: list[dict] = []
+
+    def fake_trigger(row, team_id, disclaimer=None):
+        dispatches.append({"row": row, "disclaimer": disclaimer})
+        return {"status": "ok"}
+    monkeypatch.setattr(scoring_module, "trigger_apps_script", fake_trigger)
+    _resolve_stub(monkeypatch, _eval_ref())  # flagged_human_review
+
+    resp = client.post(
+        "/api/member_support/score/5035229460504576_Luis_Rubio/approve",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={"sections": [], "key_strengths": "x", "opportunities": "y",
+              "acknowledged": True, "evaluator_email": "ana@landing.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(s6["receipts"]) == 1
+    assert s6["receipts"][0]["evaluation_id"] == 2377
+    assert s6["receipts"][0]["evaluator_email"] == "ana@landing.com"
+    assert dispatches == [{"row": 321, "disclaimer": "review_resolution"}]
+    assert s6["completions"] == [{
+        "coaching_id": 91, "completed_by": "ana@landing.com",
+        "summary": "Agent notified via review-resolution email",
+    }]
+    approved = [r for r in client.audit_rows if r["action"] == "approved"]
+    assert "resolved_review ack:ana@landing.com" in approved[0]["notes"]
+    assert "coaching=91" in approved[0]["notes"]
+
+
+def test_plain_approve_needs_no_ack_and_no_receipt(client, monkeypatch):
+    """A non-flagged approval is untouched by §4.3a."""
+    approvals: list[dict] = []
+    s6 = _stub_engine_path(monkeypatch, approvals)
+    _resolve_stub(
+        monkeypatch,
+        _eval_ref(scoring_status="complete", evaluator_email="lead@landing.com"))
+
+    resp = client.post(
+        "/api/member_support/score/5035229460504576_Luis_Rubio/approve",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={"sections": [], "key_strengths": "x", "opportunities": "y"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert s6["receipts"] == []
+    assert s6["completions"] == []
+    approved = [r for r in client.audit_rows if r["action"] == "approved"]
+    assert approved[0]["notes"] == "engine-scored"
+
+
+def test_review_queue_endpoint(client, monkeypatch):
+    """§0.3 accounting: the queue lists every would-need-review eval."""
+    rows = [
+        {"id": 2377, "agent_name_raw": "Luis Rubio", "overall_score": 45.0,
+         "state": "finalized", "scoring_status": "complete", "source": "ai",
+         "dialpad_call_id": "503", "dialpad_entry_point_call_id": None,
+         "agent_email": "luis@landing.com",
+         "human_review_required_at": "2026-07-27T10:00:00+00:00",
+         "auto_rescored_at": "2026-07-27T09:00:00+00:00",
+         "finalized_at": "2026-07-27T10:00:00+00:00"},
+    ]
+    listed = []
+
+    async def fake_list(team_id):
+        listed.append(team_id)
+        return rows
+    monkeypatch.setattr(scoring_module.eval_store, "list_review_queue", fake_list)
+
+    resp = client.get(
+        "/api/member_support/review-queue",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert listed == ["member_support"]
+    assert body["count"] == 1
+    assert body["evaluations"][0]["id"] == 2377
+    assert body["evaluations"][0]["auto_rescored_at"] is not None
