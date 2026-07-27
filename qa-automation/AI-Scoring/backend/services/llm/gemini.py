@@ -46,16 +46,19 @@ class GeminiTextProvider(TextModelProvider):
         model: str,
         max_output_tokens: int,
         json_schema: Optional[dict] = None,
+        system: Optional[str] = None,
     ) -> LlmResult:
         if json_schema is not None:
-            # Provider-enforced structured output lands with the Stage-B
-            # scorer (TwoStageScoringDesign P3) — mapped against the live
-            # SDK then, never silently ignored now (provider.py contract).
+            # Gemini's response_schema dialect rejects standard-JSON-schema
+            # fields (additionalProperties → 400, learned the hard way in
+            # the annotator) — callers on this seam parse fence-tolerant
+            # JSON instead. Raise rather than silently ignore (contract).
             raise LlmProviderError(
                 "structured output not implemented for the gemini provider yet"
             )
         client = self._get_client()
         config = types.GenerateContentConfig(
+            system_instruction=system,
             temperature=self._temperature,
             max_output_tokens=max_output_tokens,
         )

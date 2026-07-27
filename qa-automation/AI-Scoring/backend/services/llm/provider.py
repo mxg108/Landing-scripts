@@ -44,13 +44,19 @@ class TextModelProvider(ABC):
         model: str,
         max_output_tokens: int,
         json_schema: Optional[dict] = None,
+        system: Optional[str] = None,
     ) -> LlmResult:
         """Generate text for *prompt* on *model*.
 
-        ``json_schema`` requests provider-enforced structured output
-        (the Stage-B scorer path). Providers that cannot enforce it MUST
-        raise LlmProviderError rather than silently returning free text
-        — a scorecard parsed from unconstrained output is a different
-        reliability class and the caller needs to know.
+        ``json_schema`` requests provider-enforced structured output.
+        Providers that cannot enforce it MUST raise LlmProviderError
+        rather than silently returning free text — a scorecard parsed
+        from unconstrained output is a different reliability class and
+        the caller needs to know.
+
+        ``system`` is the system-level instruction (the Stage-B judge
+        carries the team's scoring persona here); providers map it to
+        their native channel (Gemini system_instruction / Anthropic
+        system param).
         """
         ...

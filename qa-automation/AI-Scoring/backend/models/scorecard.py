@@ -160,3 +160,15 @@ class ScorecardWithMeta(Scorecard):
     # or annotation failed (annotation is never a scoring blocker).
     annotated_transcript: Optional[dict] = None
     annotator_model: Optional[str] = None
+    # TwoStageScoringDesign §4 — text-leg provenance. scorer_provider +
+    # `model` above identify the SCORE AUTHOR (models_used.text and
+    # ai_provider_primary); "gemini" default = single-stage today.
+    scorer_provider: str = "gemini"
+    # §5 — Plan-B record: set when a two_stage run fell back to
+    # single-stage scoring ("annotate_failed" | "text_scorer_failed");
+    # eval_store turns it into models_used.fallback.
+    pipeline_fallback_reason: Optional[str] = None
+    # §6 — shadow-week compare stamp (judge meta + per-section results,
+    # or the judge error), persisted to dialpad_call_metadata for the
+    # report; None outside two_stage_shadow.
+    two_stage_shadow: Optional[dict] = None

@@ -1,8 +1,33 @@
 # TwoStageScoringDesign — Gemini annotates, any LLM scores
 
-**Status:** v1.2 — P1 shipped (PR #140, Claude leg live-verified incl.
-structured output); P2 shipped (Stage-A annotator + `annotate_only`).
-**Date:** 2026-07-24 (v1), 2026-07-25 (v1.1), 2026-07-26 (v1.2)
+**Status:** v1.3 — P1 (#140), P2 (#142 + hardening #143), **P3 built**:
+Stage-B judge + `two_stage_shadow` / `two_stage` are live code.
+**Date:** 2026-07-24 (v1) … 2026-07-26 (v1.2), 2026-07-29 (v1.3)
+
+**v1.3 amendments (P3):**
+- Judge resolution: `SCORING_MODEL_PROVIDER` = gemini (default) |
+  anthropic; `SCORING_ANTHROPIC_MODEL` (default `claude-sonnet-5`).
+  The gemini default IS the rollout order — shadow week 1 judges with
+  Gemini (isolates the split's effect), then
+  `SCORING_MODEL_PROVIDER=anthropic` isolates the model's.
+- Judge prompt reuses the single-stage rubric / SOP blocks / output
+  schema **verbatim** (`judge_prompt.py` imports them); only the
+  evidence block differs — the rendered annotated record replaces
+  transcript+audio, with doctrine: record is authoritative,
+  "observational" holds are heard-not-verified, ANNOTATION TRUNCATED →
+  low confidence on affected sections. Agent-name rule duplicated with
+  a sync-gate test; judge output parsed with the same fence-tolerant
+  path as single-stage (provider-enforced schema is a later
+  tightening; Gemini's dialect can't express ours).
+- Shadow stamp (`dialpad_call_metadata.two_stage_shadow`): judge
+  provider/model, per-section {score, yn_value, confidence},
+  mismatched_section_ids vs the served scorecard, judge
+  strengths/opportunities, elapsed_s — or {error} when the judge
+  failed. `scripts/two_stage_shadow_report.py` aggregates the week
+  (per-section disagreement table, §6.1-style).
+- two_stage provenance: `models_used.text` + `ai_provider_primary` =
+  the judge; `models_used.fallback` records single-stage rescues
+  (`annotate_failed` | `text_scorer_failed`, sections=[]).
 
 **v1.2 amendments:**
 - `SCORING_PIPELINE` gains **`annotate_only`** between `single` and the
