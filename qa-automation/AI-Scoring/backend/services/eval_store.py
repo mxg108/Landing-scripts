@@ -769,6 +769,11 @@ class EvalRef:
     overall_score: Optional[float]
     model: str
     sections: list[dict[str, Any]]
+    # S4 additions (defaulted so S1-era constructions stay valid):
+    # agent_id feeds the §5 series rebuild; duration_ms feeds the fresh
+    # score_call pass (long-call flag parity with the original run).
+    agent_id: Optional[int] = None
+    duration_ms: Optional[float] = None
 
 
 def call_id_from_job_id(job_id: str) -> str:
@@ -808,7 +813,7 @@ async def resolve_evaluation(team_id: str, job_id: str) -> Optional[EvalRef]:
             "  agent_name_raw, agent_email, evaluator_email, "
             "  dialpad_call_id, dialpad_entry_point_call_id, dialpad_link, "
             "  call_summary, key_strengths, opportunities, overall_score, "
-            "  models_used "
+            "  models_used, agent_id, duration_ms "
             "FROM qa.evaluations "
             "WHERE team_id = $1 "
             "AND (dialpad_entry_point_call_id = $2 OR dialpad_call_id = $2) "
@@ -873,6 +878,10 @@ async def resolve_evaluation(team_id: str, job_id: str) -> Optional[EvalRef]:
         ),
         model=model,
         sections=sections,
+        agent_id=row["agent_id"],
+        duration_ms=(
+            float(row["duration_ms"]) if row["duration_ms"] is not None else None
+        ),
     )
 
 

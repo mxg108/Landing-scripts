@@ -387,7 +387,10 @@ def test_approve_writes_audit_row(client, monkeypatch):
     async def fake_project(pool, evaluation_id, config, include_history=True):
         return 555
     monkeypatch.setattr(scoring_module, "project_evaluation", fake_project)
-    monkeypatch.setattr(scoring_module, "trigger_apps_script", lambda row, team_id: {"status": "ok"})
+    monkeypatch.setattr(
+        scoring_module, "trigger_apps_script",
+        lambda row, team_id, disclaimer=None: {"status": "ok"},
+    )
 
     resp = client.post(
         f"/api/member_support/score/{job_id}/approve",
@@ -614,6 +617,8 @@ def _eval_ref(**overrides):
         overall_score=None,
         model="gemini-2.5-flash",
         sections=[],
+        agent_id=7,
+        duration_ms=180000.0,
     )
     defaults.update(overrides)
     return EvalRef(**defaults)
@@ -647,7 +652,8 @@ def _stub_engine_path(monkeypatch, captured_approvals):
         return 321
     monkeypatch.setattr(scoring_module, "project_evaluation", fake_project)
     monkeypatch.setattr(
-        scoring_module, "trigger_apps_script", lambda row, team_id: {"status": "ok"}
+        scoring_module, "trigger_apps_script",
+        lambda row, team_id, disclaimer=None: {"status": "ok"},
     )
 
 
@@ -958,3 +964,369 @@ def test_delete_skips_rebuild_for_agentless_eval(client, monkeypatch):
     assert resp.status_code == 200, resp.text
     assert rebuilds == []
     assert resp.json()["snapshot"]["stat_point"] is None
+
+
+# ---------------------------------------------------------------------------
+# S4 — POST /score/{job_id}/rescore (ScorecardActionsDesign §4.2, manual)
+# ---------------------------------------------------------------------------
+
+class _NullConn:
+    @asynccontextmanager
+    async def transaction(self):
+        yield
+
+
+class _NullPool:
+    def __init__(self):
+        self.conn = _NullConn()
+
+    @asynccontextmanager
+    async def acquire(self):
+        yield self.conn
+
+
+class _FakeScorecard:
+    """Just enough of ScorecardWithMeta for the post-Stage-1 flow."""
+
+    def __init__(self, manager_email):
+        self.sections = []
+        self.manager_email = manager_email
+        self.agent_name = "Luis Rubio"
+        self.dialpad_link = (
+            "https://dialpad.com/callhistory/callreview/6105002063634432"
+        )
+        self.call_summary = "Billing question"
+        self.key_strengths = "Good tone"
+        self.opportunities = "Faster holds"
+        self.model = "gemini-2.5-flash"
+
+    def model_dump(self):
+        return {
+            "sections": self.sections,
+            "manager_email": self.manager_email,
+            "dialpad_link": self.dialpad_link,
+            "call_summary": self.call_summary,
+            "key_strengths": self.key_strengths,
+            "opportunities": self.opportunities,
+            "agent_name": self.agent_name,
+            "model": self.model,
+        }
+
+
+def _stub_rescore_pipeline(monkeypatch, *, flagged=False, draft_row_id=2377,
+                           engine_score=88.0):
+    """Stub the whole rescore background pipeline, recording operation
+    order in caps['ops'] — the §4.2 order proof (draft → rebuild → stamp)
+    rides on it."""
+    caps = {"score_calls": [], "ops": [], "rebuilds": [], "dispatches": [],
+            "approvals": []}
+
+    async def fake_download(call_id):
+        caps["download"] = call_id
+        return b"AUDIO"
+    monkeypatch.setattr(scoring_module, "download_recording", fake_download)
+
+    async def fake_score_call(**kw):
+        caps["score_calls"].append(kw)
+        return _FakeScorecard(kw["manager_email"])
+    monkeypatch.setattr(scoring_module, "score_call", fake_score_call)
+
+    async def fake_record_draft(scorecard, config, strict=False):
+        caps["ops"].append("draft")
+        return draft_row_id
+    monkeypatch.setattr(
+        scoring_module, "record_draft_evaluation", fake_record_draft)
+
+    async def fake_rebuild(conn, agent_id, config):
+        caps["ops"].append("rebuild")
+        caps["rebuilds"].append(agent_id)
+        return 3
+    monkeypatch.setattr(scoring_module, "rebuild_agent_series", fake_rebuild)
+
+    monkeypatch.setattr(
+        scoring_module.eval_store, "_active_formula", lambda team_id: None)
+    monkeypatch.setattr(
+        scoring_module.eval_store, "human_review_trigger_fired",
+        lambda formula, sections: flagged)
+    monkeypatch.setattr(
+        scoring_module.eval_store, "requires_analyst_review",
+        lambda config: False)
+
+    class _Detail:
+        overall_score = engine_score
+
+    async def fake_stamp(evaluation_id, config, evaluator_email):
+        caps["ops"].append("stamp")
+        return _Detail()
+    monkeypatch.setattr(
+        scoring_module.eval_store, "stamp_and_finalize", fake_stamp)
+
+    pool = _NullPool()
+
+    async def fake_pool():
+        return pool
+    monkeypatch.setattr(scoring_module.eval_store, "get_pool", fake_pool)
+
+    async def fake_project(pool_, evaluation_id, config, include_history=True):
+        caps["ops"].append("project")
+        return 321
+    monkeypatch.setattr(scoring_module, "project_evaluation", fake_project)
+
+    def fake_trigger(row, team_id, disclaimer=None):
+        caps["dispatches"].append({"row": row, "disclaimer": disclaimer})
+        return {"status": "ok"}
+    monkeypatch.setattr(scoring_module, "trigger_apps_script", fake_trigger)
+
+    # Approve-path stubs so the flagged → re-approve round-trip works.
+    monkeypatch.setattr(
+        scoring_module.eval_store, "missing_manual_scores",
+        lambda config, sections: [])
+
+    async def fake_record_approval(config, **kw):
+        caps["approvals"].append(kw)
+        return kw.get("evaluation_id")
+    monkeypatch.setattr(scoring_module, "record_approval", fake_record_approval)
+
+    return caps
+
+
+_RESCORE_URL = "/api/member_support/score/5035229460504576_Luis_Rubio/rescore"
+
+
+def test_rescore_in_flight_409(client, monkeypatch):
+    """§4.2: refuse to race a pending/scoring job — before any DB probe."""
+    resolve_calls = _resolve_stub(monkeypatch, _eval_ref())
+    key = scoring_module._job_key(
+        "member_support", "5035229460504576_Luis_Rubio")
+    scoring_module._jobs[key] = {"status": "scoring"}
+
+    resp = client.post(
+        _RESCORE_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={"evaluator_email": "ana@landing.com"},
+    )
+    assert resp.status_code == 409
+    assert "scoring" in resp.json()["detail"]
+    assert resolve_calls == []
+    assert client.audit_rows == []
+
+
+def test_rescore_unknown_eval_404(client, monkeypatch):
+    _resolve_stub(monkeypatch, None)
+    resp = client.post(
+        _RESCORE_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={"evaluator_email": "ana@landing.com"},
+    )
+    assert resp.status_code == 404
+    assert client.audit_rows == []
+
+
+def test_rescore_team_key_unrostered_403_denied_audit(client, monkeypatch):
+    """§7: team keys are roster-scoped for rescore, same as /score."""
+    _resolve_stub(monkeypatch, _eval_ref(agent_email="ghost@landing.com"))
+    resp = client.post(
+        _RESCORE_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={"evaluator_email": "ana@landing.com"},
+    )
+    assert resp.status_code == 403
+    denied = [r for r in client.audit_rows if r["action"] == "denied"]
+    assert len(denied) == 1
+    assert denied[0]["notes"] == "http_403"
+    assert denied[0]["evaluator_email"] == "ana@landing.com"
+    assert denied[0]["agent_name"] == "Luis Rubio"
+
+
+def test_rescore_no_recording_422(client, monkeypatch):
+    _resolve_stub(monkeypatch, _eval_ref())
+
+    async def fake_download(call_id):
+        raise scoring_module.NoRecordingAvailable("gone")
+    monkeypatch.setattr(scoring_module, "download_recording", fake_download)
+
+    resp = client.post(
+        _RESCORE_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={"evaluator_email": "ana@landing.com"},
+    )
+    assert resp.status_code == 422
+    denied = [r for r in client.audit_rows if r["action"] == "denied"]
+    assert len(denied) == 1
+    assert denied[0]["notes"] == "no_recording"
+    rescored = [r for r in client.audit_rows if r["action"] == "rescored"]
+    assert rescored == []
+
+
+def test_rescore_clean_pass_auto_finalizes_with_disclaimer(client, monkeypatch):
+    """Full REPLACE round-trip on a clean fresh pass: same row id, series
+    rebuilt while the row is draft (§4.2.3 — after the upsert, before
+    finalize), auto-finalize, disclaimer email by default."""
+    caps = _stub_rescore_pipeline(monkeypatch)
+    _resolve_stub(
+        monkeypatch,
+        _eval_ref(state="finalized", scoring_status="complete",
+                  overall_score=62.5),
+    )
+
+    resp = client.post(
+        _RESCORE_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={"evaluator_email": "ana@landing.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "pending"
+    assert body["evaluation_id"] == 2377
+    assert body["superseded_score"] == 62.5
+
+    # Audit receipt with the superseded score AND model stamp (the
+    # P3+ cross-model traceability hook).
+    rescored = [r for r in client.audit_rows if r["action"] == "rescored"]
+    assert len(rescored) == 1
+    assert rescored[0]["notes"] == "manual: 62.5; superseded_model=gemini-2.5-flash"
+    assert rescored[0]["evaluator_email"] == "ana@landing.com"
+    assert rescored[0]["call_id"] == "5035229460504576"
+
+    # Fresh pass ran with the row's own inputs.
+    assert caps["download"] == "5035229460504576"
+    assert len(caps["score_calls"]) == 1
+    assert caps["score_calls"][0]["duration_ms"] == 180000.0
+    assert caps["score_calls"][0]["manager_email"] == "ana@landing.com"
+
+    # §4.2 order proof: upsert → rebuild (row is draft) → finalize.
+    assert caps["ops"] == ["draft", "rebuild", "stamp", "project"]
+    assert caps["rebuilds"] == [7]
+
+    # Disclaimer email dispatched by default.
+    assert caps["dispatches"] == [{"row": 321, "disclaimer": "rescore_manual"}]
+
+    key = scoring_module._job_key(
+        "member_support", "5035229460504576_Luis_Rubio")
+    job = scoring_module._jobs[key]
+    assert job["status"] == "complete"
+    assert job["state"] == "finalized"
+    assert job["overall_score"] == 88.0
+    assert job["rescore"]["superseded_score"] == 62.5
+    assert job["email_dispatch"] == {"status": "ok"}
+
+
+def test_rescore_suppress_email_opts_out(client, monkeypatch):
+    caps = _stub_rescore_pipeline(monkeypatch)
+    _resolve_stub(monkeypatch, _eval_ref(state="finalized", overall_score=62.5))
+
+    resp = client.post(
+        _RESCORE_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={"evaluator_email": "ana@landing.com", "suppress_email": True},
+    )
+    assert resp.status_code == 200, resp.text
+    assert caps["dispatches"] == []
+    key = scoring_module._job_key(
+        "member_support", "5035229460504576_Luis_Rubio")
+    job = scoring_module._jobs[key]
+    assert job["status"] == "complete"
+    assert job["email_dispatch"]["status"] == "suppressed"
+
+
+def test_rescore_row_id_mismatch_errors_job(client, monkeypatch):
+    """REPLACE contract guard: if the upsert lands anywhere but the
+    resolved row, the job errors loudly before touching the stat chain."""
+    caps = _stub_rescore_pipeline(monkeypatch, draft_row_id=9999)
+    _resolve_stub(monkeypatch, _eval_ref(state="finalized", overall_score=62.5))
+
+    resp = client.post(
+        _RESCORE_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={"evaluator_email": "ana@landing.com"},
+    )
+    assert resp.status_code == 200  # scheduling succeeded; the job errored
+    key = scoring_module._job_key(
+        "member_support", "5035229460504576_Luis_Rubio")
+    job = scoring_module._jobs[key]
+    assert job["status"] == "error"
+    assert "REPLACE contract violated" in job["error"]
+    assert "rebuild" not in caps["ops"]
+    assert "stamp" not in caps["ops"]
+
+
+def test_rescore_flagged_pass_holds_draft_then_approve_dispatches_disclaimer(
+        client, monkeypatch):
+    """The fresh pass fires §3.14 → row holds in draft review; the
+    re-approve finalizes with resolving_review and the disclaimer email
+    still rides the job's rescore context."""
+    caps = _stub_rescore_pipeline(monkeypatch, flagged=True)
+    _resolve_stub(monkeypatch, _eval_ref(state="finalized", overall_score=45.0))
+
+    resp = client.post(
+        _RESCORE_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={"evaluator_email": "ana@landing.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    key = scoring_module._job_key(
+        "member_support", "5035229460504576_Luis_Rubio")
+    job = scoring_module._jobs[key]
+    assert job["status"] == "complete"
+    assert job["state"] == "draft"
+    assert job["scoring_status"] == "flagged_human_review"
+    # Stat point already removed while the row sits in draft (§4.2.3).
+    assert caps["ops"] == ["draft", "rebuild"]
+    assert caps["dispatches"] == []
+
+    resp = client.post(
+        "/api/member_support/score/5035229460504576_Luis_Rubio/approve",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={"sections": [], "key_strengths": "x", "opportunities": "y"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["state"] == "finalized"
+    assert caps["approvals"][0]["resolving_review"] is True
+    assert caps["approvals"][0]["evaluator_email"] == "ana@landing.com"
+    assert caps["ops"] == ["draft", "rebuild", "stamp", "project"]
+    assert caps["dispatches"] == [{"row": 321, "disclaimer": "rescore_manual"}]
+
+    actions = [r["action"] for r in client.audit_rows]
+    assert actions == ["rescored", "approved"]
+
+
+def test_rescore_agentless_eval_skips_rebuild(client, monkeypatch):
+    """agent_id NULL (departed agent) — fresh pass proceeds, no series
+    rebuild, matching the delete route's behavior."""
+    caps = _stub_rescore_pipeline(monkeypatch)
+    _resolve_stub(
+        monkeypatch,
+        _eval_ref(state="finalized", overall_score=62.5, agent_id=None),
+    )
+
+    resp = client.post(
+        _RESCORE_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={"evaluator_email": "ana@landing.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    key = scoring_module._job_key(
+        "member_support", "5035229460504576_Luis_Rubio")
+    assert scoring_module._jobs[key]["status"] == "complete"
+    assert caps["rebuilds"] == []
+    assert caps["ops"] == ["draft", "stamp", "project"]
+
+
+def test_rescore_privileged_key_unrostered_allowed(client, monkeypatch):
+    """§7: privileged keys rescore unrostered agents (same as /score)."""
+    caps = _stub_rescore_pipeline(monkeypatch)
+    _resolve_stub(
+        monkeypatch,
+        _eval_ref(state="finalized", overall_score=62.5,
+                  agent_email="ghost@landing.com"),
+    )
+
+    resp = client.post(
+        _RESCORE_URL,
+        headers={"Authorization": f"Bearer {PRIV_TOKEN}"},
+        json={"evaluator_email": "ana@landing.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    rescored = [r for r in client.audit_rows if r["action"] == "rescored"]
+    assert len(rescored) == 1
+    assert rescored[0]["api_key_role"] == "privileged"

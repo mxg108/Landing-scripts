@@ -67,6 +67,8 @@ def _eval_row(**overrides):
         "models_used": json.dumps(
             {"text": {"provider": "gemini", "model": "gemini-2.5-flash"}}
         ),
+        "agent_id": 7,
+        "duration_ms": 180000,
     }
     row.update(overrides)
     return row
@@ -136,6 +138,10 @@ class TestResolveEvaluation:
         assert ref.state == "draft"
         assert ref.scoring_status == "flagged_human_review"
         assert ref.model == "gemini-2.5-flash"
+        # S4 fields — series-rebuild target and long-call-flag parity.
+        assert ref.agent_id == 7
+        assert ref.duration_ms == 180000.0
+        assert isinstance(ref.duration_ms, float)
         # The 2026-07-24 incident guarantee: one probe, both columns.
         query, args = self.conn.fetchrow_args
         assert "dialpad_entry_point_call_id = $2" in query
