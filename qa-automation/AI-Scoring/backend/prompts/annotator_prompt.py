@@ -117,6 +117,10 @@ exact shape (schema_version "{schema_version}"):
   turns to English), and be extra thorough with emotion/pace annotations.
 - "turns.text" is verbatim speech. Do not summarize, censor, or clean it
   up beyond removing filler stutters.
+- COLLAPSE filler and stutter runs: "uh uh uh...", "eh eh eh", repeated
+  false starts — transcribe AT MOST one or two instances, never the full
+  run. Prolonged stuttering or hesitation belongs in that turn's
+  pace_marker or in call_observations, not spelled out token by token.
 - "holds" are what you HEAR (music, dead air, suspected mute) — you are
   an observer, not a system of record. Include an entry for any gap over
   ~10 seconds. Do NOT record gaps shorter than 10 seconds — brief pauses

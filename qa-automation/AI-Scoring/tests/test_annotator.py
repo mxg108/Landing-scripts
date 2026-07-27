@@ -104,6 +104,8 @@ def test_prompt_subordinates_transcript_and_markers_as_hints():
     )
     assert "hint — the audio overrules it" in prompt
     assert "hints, machine-detected" in prompt
+    # Anti-loop rule: stutter runs collapse instead of being spelled out
+    assert "COLLAPSE filler and stutter runs" in prompt
     # Both omitted cleanly when absent
     bare = build_annotator_prompt(transcript_text="", moments_display=None)
     assert "REFERENCE TRANSCRIPT" not in bare
@@ -174,10 +176,11 @@ def test_scoring_pipeline_env_collapse(monkeypatch, raw, expected):
 # annotate_audio — parse + cleanup with a fake Gemini client
 # ---------------------------------------------------------------------------
 
-def _fake_genai_client(*payload_texts):
+def _fake_genai_client(*payload_texts, finish_reason=None):
     """One payload per generate attempt (retry consumes the next);
     the last repeats if attempts exceed payloads. Records the
-    temperature + response config of each attempt."""
+    temperature + response config of each attempt. *finish_reason*
+    stamps every response's candidate (e.g. "FinishReason.MAX_TOKENS")."""
     payloads = list(payload_texts)
 
     class _Uploaded:
@@ -201,9 +204,13 @@ def _fake_genai_client(*payload_texts):
         async def generate_content(self, *, model, contents, config):
             self.attempts.append(config)
             text = payloads[min(len(self.attempts) - 1, len(payloads) - 1)]
+            class _Cand:
+                pass
+            _Cand.finish_reason = finish_reason or "FinishReason.STOP"
             class _Resp:
                 pass
             _Resp.text = text
+            _Resp.candidates = [_Cand()]
             return _Resp()
 
     class _Aio:
@@ -242,6 +249,9 @@ def test_annotate_audio_parses_and_cleans_up(monkeypatch):
     (config,) = client.aio.models.attempts
     assert config.response_mime_type == "application/json"
     assert config.temperature == 0.0
+    # Bounded thinking (the MAX_TOKENS fix: thoughts spend from the
+    # output budget, and the budget belongs to the transcript)
+    assert config.thinking_config.thinking_budget == 4096
 
 
 def test_annotate_audio_retries_once_with_bumped_temperature(monkeypatch):
@@ -269,9 +279,85 @@ def test_annotate_audio_invalid_json_raises_after_both_attempts(monkeypatch):
     assert len(client.aio.models.attempts) == 2    # retried, then surfaced
 
 
+def test_annotate_audio_max_tokens_names_truncation(monkeypatch):
+    """A MAX_TOKENS candidate with NOTHING salvageable must raise an
+    error naming the real problem (budget exhaustion), not a JSON
+    syntax artifact."""
+    import backend.services.audio_service as audio_service
+
+    client = _fake_genai_client(
+        '{"schema_version": "gemini_annotate_v1", "turns": [',   # no complete turn
+        finish_reason="FinishReason.MAX_TOKENS",
+    )
+    monkeypatch.setattr(audio_service, "_get_client", lambda: client)
+    with pytest.raises(ValueError, match="output budget exhausted"):
+        asyncio.run(audio_service.annotate_audio(b"bytes", "call.mp3"))
+    assert len(client.aio.models.attempts) == 2    # still retried once
+
+
+_TRUNCATED_MID_LOOP = (
+    '{"schema_version": "gemini_annotate_v1", "language_detected": "es", '
+    '"turns": ['
+    '{"speaker": "agent", "text": "Hola, buenas tardes.", "start_ms": 200, '
+    '"end_ms": 3660}, '
+    '{"speaker": "caller", "text": "uh uh uh uh uh uh uh uh uh uh uh uh'
+)
+
+
+def test_salvage_cuts_to_last_complete_turn():
+    """The observed failure: clean turns, then a repetition loop inside
+    one text field until the budget dies. Salvage keeps the clean turns,
+    structurally discards the looping tail, and stamps the truncation."""
+    from backend.services.audio_service import _salvage_truncated_annotation
+
+    salvaged = _salvage_truncated_annotation(_TRUNCATED_MID_LOOP)
+    assert salvaged is not None
+    assert len(salvaged.turns) == 1
+    assert salvaged.turns[0].text == "Hola, buenas tardes."
+    assert "uh uh" not in json.dumps(salvaged.model_dump())
+    assert any("ANNOTATION TRUNCATED" in o for o in salvaged.call_observations)
+
+
+def test_salvage_returns_none_when_nothing_usable():
+    from backend.services.audio_service import _salvage_truncated_annotation
+
+    assert _salvage_truncated_annotation("") is None
+    assert _salvage_truncated_annotation("not json at all") is None
+    # No complete turn ever closed
+    assert _salvage_truncated_annotation(
+        '{"schema_version": "gemini_annotate_v1", "turns": [{"speaker": "ag'
+    ) is None
+
+
+def test_annotate_audio_salvages_on_final_attempt_only(monkeypatch):
+    """Attempt 1 truncates → retry (no salvage: a fresh sample might be
+    complete). Attempt 2 truncates → salvage the partial artifact."""
+    import backend.services.audio_service as audio_service
+
+    client = _fake_genai_client(
+        _TRUNCATED_MID_LOOP,
+        finish_reason="FinishReason.MAX_TOKENS",
+    )
+    monkeypatch.setattr(audio_service, "_get_client", lambda: client)
+    annotation = asyncio.run(audio_service.annotate_audio(b"bytes", "call.mp3"))
+    assert len(client.aio.models.attempts) == 2    # salvage came second
+    assert len(annotation.turns) == 1
+    assert any("ANNOTATION TRUNCATED" in o for o in annotation.call_observations)
+
+
 def test_annotator_model_env_override(monkeypatch):
     from backend.services.audio_service import annotator_model
     monkeypatch.delenv("ANNOTATOR_MODEL", raising=False)
     assert annotator_model() == "gemini-2.5-flash"
     monkeypatch.setenv("ANNOTATOR_MODEL", "gemini-2.5-pro")
     assert annotator_model() == "gemini-2.5-pro"
+
+
+def test_annotator_thinking_budget_env_override(monkeypatch):
+    from backend.services.audio_service import annotator_thinking_budget
+    monkeypatch.delenv("ANNOTATOR_THINKING_BUDGET", raising=False)
+    assert annotator_thinking_budget() == 4096
+    monkeypatch.setenv("ANNOTATOR_THINKING_BUDGET", "8192")
+    assert annotator_thinking_budget() == 8192
+    monkeypatch.setenv("ANNOTATOR_THINKING_BUDGET", "not-a-number")
+    assert annotator_thinking_budget() == 4096

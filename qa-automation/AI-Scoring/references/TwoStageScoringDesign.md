@@ -19,6 +19,35 @@ structured output); P2 shipped (Stage-A annotator + `annotate_only`).
   `ANNOTATOR_MODEL` (default `gemini-2.5-flash`);
   `scripts/annotate_smoke.py --model both` produces the side-by-side
   files for the Spanish-manager spot-check.
+- **Annotator output-budget doctrine** (hardening, 2026-07-27): the
+  annotation is decoded under a grammar (`response_mime_type` +
+  hand-authored `ANNOTATOR_RESPONSE_SCHEMA` — Gemini's OpenAPI subset
+  rejects pydantic's `additionalProperties`), with ONE retry at a
+  bumped temperature (temp-0 decoding was observed re-serving the same
+  degenerate sample), and **bounded thinking**
+  (`ANNOTATOR_THINKING_BUDGET`, default 4096): thoughts spend from
+  `max_output_tokens`, and a Spanish call burned 62,911 of the 65,536
+  cap thinking, leaving ~2.6k for JSON → MAX_TOKENS truncation on
+  every attempt. The output budget belongs to the transcript.
+  **Repetition loops** are the other budget-killer: a 6.4-min call
+  emitted 24 clean turns then 184KB of "uh uh uh…" in one text field —
+  constrained decoding guarantees syntax, not termination, and Gemini
+  rejects frequency_penalty on 2.5-flash. Guards, in order: the
+  prompt's stutter-collapse rule, the bumped-temp retry, and the
+  **salvage path** — a final-attempt MAX_TOKENS response is repaired
+  to its last complete turn (the loop always lives in the incomplete
+  tail, so salvage structurally discards it) and stamped with an
+  ANNOTATION TRUNCATED call_observation so Stage B and reviewers know
+  the artifact is partial. Live-verified: the looping call salvages
+  22 turns.
+  **Long-call caveat:** the 65,536 cap is Gemini's ceiling; ~61k
+  post-thinking tokens fit roughly 45–60 min of dense annotation.
+  Calls beyond that hit the same salvage path (partial artifact,
+  labeled) or, when nothing salvages, an explicit "output budget
+  exhausted" error and single-stage fallback. Segmented annotation
+  (chunked audio, stitched artifact) is the designated follow-up if
+  long calls matter before the LandGPT era — track truncation rate
+  during the annotate_only window to decide.
 **Owner mandate:** "To incorporate Claude models (until Anthropic releases
 a model that can natively listen to audio) we now have to split the
 scoring work into the two-stage process we have outlined in this repo …
