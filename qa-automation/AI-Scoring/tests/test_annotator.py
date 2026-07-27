@@ -361,3 +361,42 @@ def test_annotator_thinking_budget_env_override(monkeypatch):
     assert annotator_thinking_budget() == 8192
     monkeypatch.setenv("ANNOTATOR_THINKING_BUDGET", "not-a-number")
     assert annotator_thinking_budget() == 4096
+
+
+def test_annotate_audio_fails_fast_on_deterministic_400(monkeypatch):
+    """A 400 INVALID_ARGUMENT (model rejects audio input, unsupported
+    knob) is deterministic — retrying the identical request wastes a
+    call. One attempt, immediate surface."""
+    from google.genai import errors as genai_errors
+    import backend.services.audio_service as audio_service
+
+    attempts = []
+
+    class _AioModels:
+        async def generate_content(self, **kwargs):
+            attempts.append(kwargs)
+            raise genai_errors.ClientError(
+                400, {"error": {"message": "Request contains an invalid argument."}}
+            )
+
+    class _Aio:
+        models = _AioModels()
+
+    class _Files:
+        def upload(self, *, file, config):
+            class _Up:
+                uri = "files/fake"
+                name = "files/fake"
+            return _Up()
+
+        def delete(self, *, name):
+            pass
+
+    class _Client:
+        files = _Files()
+        aio = _Aio()
+
+    monkeypatch.setattr(audio_service, "_get_client", lambda: _Client())
+    with pytest.raises(genai_errors.ClientError):
+        asyncio.run(audio_service.annotate_audio(b"bytes", "call.mp3"))
+    assert len(attempts) == 1    # no retry on a deterministic rejection

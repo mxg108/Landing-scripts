@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
 from backend.prompts.annotator_prompt import (
@@ -386,6 +387,12 @@ async def annotate_audio(
                     allow_salvage=(temperature == _ANNOTATE_ATTEMPT_TEMPS[-1]),
                 )
             except Exception as exc:  # noqa: BLE001 — one retry, then surface
+                if isinstance(exc, genai_errors.APIError) and exc.code == 400:
+                    # Deterministic request rejection (e.g. a model that
+                    # doesn't accept audio input — every Gemini 3.x as of
+                    # 2026-07, "Penalty is not enabled", bad schema).
+                    # Retrying the identical request cannot succeed.
+                    raise
                 last_exc = exc
                 logger.warning(
                     "annotate attempt at temp=%s failed (%s) — %s",
