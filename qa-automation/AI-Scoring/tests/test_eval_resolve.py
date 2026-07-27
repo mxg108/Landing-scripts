@@ -192,3 +192,92 @@ class TestResolveEvaluation:
             return None
         monkeypatch.setattr(eval_store, "_get_pool", no_pool)
         assert await resolve_evaluation("member_support", "5035229460504576") is None
+
+
+# ---------------------------------------------------------------------------
+# S5 helpers — fetch_auto_rescore_state / stamp_auto_rescored /
+# mark_human_review_required (ScorecardActionsDesign §4.2)
+# ---------------------------------------------------------------------------
+
+from backend.services.eval_store import (  # noqa: E402
+    fetch_auto_rescore_state,
+    mark_human_review_required,
+    stamp_auto_rescored,
+)
+
+
+class _S5Conn:
+    def __init__(self, row=None):
+        self.row = row
+        self.fetchrow_calls: list[tuple] = []
+        self.execute_calls: list[tuple] = []
+
+    async def fetchrow(self, query, *args):
+        self.fetchrow_calls.append((query, args))
+        return self.row
+
+    async def execute(self, query, *args):
+        self.execute_calls.append((query, args))
+        return "UPDATE 1"
+
+
+@pytest.mark.asyncio
+class TestAutoRescoreHelpers:
+
+    def _wire(self, monkeypatch, conn):
+        async def fake_get_pool():
+            return FakePool(conn)
+        monkeypatch.setattr(eval_store, "_get_pool", fake_get_pool)
+
+    async def test_fetch_state_maps_row(self, monkeypatch):
+        conn = _S5Conn(row={
+            "source": "ai", "auto_rescored_at": None, "agent_id": 7,
+            "duration_ms": 180000, "dialpad_call_id": "503",
+            "dialpad_entry_point_call_id": "610",
+            "agent_name_raw": "Juan Celso", "agent_email": "j@landing.com",
+            "models_used": json.dumps({"text": {"model": "claude-sonnet-5"}}),
+        })
+        self._wire(monkeypatch, conn)
+        state = await fetch_auto_rescore_state(2377)
+        assert state["source"] == "ai"
+        assert state["auto_rescored_at"] is None
+        assert state["duration_ms"] == 180000.0
+        # The model stamp survives a provider flip — P3+ traceability.
+        assert state["model"] == "claude-sonnet-5"
+        assert conn.fetchrow_calls[0][1] == (2377,)
+
+    async def test_fetch_state_missing_row_is_none(self, monkeypatch):
+        conn = _S5Conn(row=None)
+        self._wire(monkeypatch, conn)
+        assert await fetch_auto_rescore_state(999) is None
+
+    async def test_stamp_latch_wins(self, monkeypatch):
+        conn = _S5Conn(row={"id": 2377})
+        self._wire(monkeypatch, conn)
+        assert await stamp_auto_rescored(2377) is True
+        query, args = conn.fetchrow_calls[0]
+        # The once-EVER guarantee is IN the SQL, not app logic.
+        assert "auto_rescored_at IS NULL" in query
+        assert "RETURNING id" in query
+        assert args == (2377,)
+
+    async def test_stamp_latch_already_stamped_returns_false(self, monkeypatch):
+        conn = _S5Conn(row=None)
+        self._wire(monkeypatch, conn)
+        assert await stamp_auto_rescored(2377) is False
+
+    async def test_mark_queue_preserves_existing_marker(self, monkeypatch):
+        conn = _S5Conn()
+        self._wire(monkeypatch, conn)
+        await mark_human_review_required(2377)
+        query, args = conn.execute_calls[0]
+        assert "COALESCE(human_review_required_at, NOW())" in query
+        assert args == (2377,)
+
+    async def test_no_pool_degrades_quietly(self, monkeypatch):
+        async def no_pool():
+            return None
+        monkeypatch.setattr(eval_store, "_get_pool", no_pool)
+        assert await fetch_auto_rescore_state(1) is None
+        assert await stamp_auto_rescored(1) is False
+        await mark_human_review_required(1)  # no raise
