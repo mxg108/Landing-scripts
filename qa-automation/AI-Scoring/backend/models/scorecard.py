@@ -102,6 +102,18 @@ class ApprovalRequest(BaseModel):
     evaluator_email: Optional[str] = None
 
 
+class RescoreRequest(BaseModel):
+    """POST /score/{job_id}/rescore payload (ScorecardActionsDesign §4.2).
+
+    ``evaluator_email`` identifies the requesting evaluator for the audit
+    row and becomes the fresh job's manager_email — required, because a
+    rescore is a manual trigger and must never be booked to nobody.
+    ``suppress_email`` is the §4.2.7 opt-OUT: the re-finalize dispatches
+    the disclaimer email by default."""
+    evaluator_email: str
+    suppress_email: bool = False
+
+
 class ScorecardWithMeta(Scorecard):
     """Scorecard enriched with call metadata for the pipeline."""
     call_id: Optional[str] = None

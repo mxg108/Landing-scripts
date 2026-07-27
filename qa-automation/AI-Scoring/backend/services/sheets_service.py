@@ -281,12 +281,21 @@ def append_score_audit_row(
 # Apps Script trigger
 # ---------------------------------------------------------------------------
 
-def trigger_apps_script(history_row_num: int, team_id: str) -> dict:
+def trigger_apps_script(
+    history_row_num: int, team_id: str, disclaimer: Optional[str] = None
+) -> dict:
     """POST to the team's Apps Script web app to dispatch the QA email.
 
     The Apps Script reads ``Analyst_History`` row ``history_row_num``
     (already written by the post-approve projection) and sends the
     evaluation email.
+
+    ``disclaimer`` (ScorecardActionsDesign §4.2.7): cause tag for the
+    re-send of a re-scored/overridden evaluation — ``rescore_manual`` /
+    ``rescore_auto`` (S5) / ``override`` (S6). Sent as an extra payload
+    key; today's GAS Main.js ignores unknown keys, and the S7 template
+    slice renders the matching disclaimer block. Omitted entirely from
+    the payload when None so first-pass dispatches are byte-identical.
     """
     import httpx
 
@@ -298,9 +307,12 @@ def trigger_apps_script(history_row_num: int, team_id: str) -> dict:
             f"{'' if team_id == 'member_support' else '_' + team_id.upper()}"
         )
 
+    payload: dict = {"historyRowNumber": history_row_num}
+    if disclaimer:
+        payload["disclaimer"] = disclaimer
     response = httpx.post(
         url,
-        json={"historyRowNumber": history_row_num},
+        json=payload,
         timeout=60.0,
         follow_redirects=True,
     )

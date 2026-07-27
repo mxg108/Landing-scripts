@@ -22,7 +22,7 @@ from backend.middleware.auth import (
     require_api_key,
     team_id_from_path,
 )
-from backend.models.scorecard import ApprovalRequest
+from backend.models.scorecard import ApprovalRequest, RescoreRequest
 from backend.services.history_service import (
     agent_email_for_name,
     agent_name_for_email,
@@ -116,6 +116,44 @@ async def _job_from_db(team_id: str, job_id: str) -> Optional[dict]:
     }
 
 
+def _dispatch_finalize_email(job, history_row, team_id, evaluation_id) -> None:
+    """Apps Script email dispatch at the finalize seam — shared by the
+    auto-flow and the approve path.
+
+    S4 (ScorecardActionsDesign §4.2.7): a job carrying a ``rescore``
+    context re-sends WITH the cause-specific disclaimer by default;
+    ``suppress_email`` opts out and leaves a visible 'suppressed' receipt
+    in the job payload. The context lives on the in-memory job only — a
+    restart between rescore and re-approve loses it, and the re-finalize
+    email goes out disclaimer-less (accepted at current traffic; the
+    audit 'rescored' row still records the intervention)."""
+    if not history_row or history_row <= 0:
+        job["email_dispatch"] = {
+            "status": "skipped", "message": "no Analyst_History row projected",
+        }
+        return
+    rescore = job.get("rescore") or {}
+    if rescore.get("suppress_email"):
+        job["email_dispatch"] = {
+            "status": "suppressed",
+            "message": f"rescore ({rescore.get('cause', '?')}) requested suppress_email",
+        }
+        return
+    disclaimer = f"rescore_{rescore['cause']}" if rescore else None
+    try:
+        job["email_dispatch"] = trigger_apps_script(
+            history_row, team_id, disclaimer=disclaimer
+        )
+    except Exception as e:
+        # Visible, not swallowed-into-print-limbo: the job payload
+        # carries the failure so operators see it in the UI/logs.
+        job["email_dispatch"] = {"status": "error", "message": str(e)}
+        logging.getLogger(__name__).exception(
+            "finalize email dispatch failed for eval %s (retryable)",
+            evaluation_id,
+        )
+
+
 def _sse_eval_id_from_link(link: str) -> str:
     """Trailing path segment of dialpad_link — the /datapoint route key
     (mirrors team_stats._parse_row; see the legacy approve path)."""
@@ -195,21 +233,7 @@ async def _postgres_post_stage1(job, evaluation_id, scorecard, config, team_id):
         key_strengths=scorecard.key_strengths,
         opportunities=scorecard.opportunities,
     )
-    if history_row is not None and history_row > 0:
-        try:
-            script_response = trigger_apps_script(history_row, team_id)
-            job["email_dispatch"] = script_response
-            print(f"[auto-flow] Apps Script response: {script_response}")
-        except Exception as e:
-            # Visible, not swallowed-into-print-limbo: the job payload
-            # carries the failure so operators see it in the UI/logs.
-            job["email_dispatch"] = {"status": "error", "message": str(e)}
-            logging.getLogger(__name__).exception(
-                "auto-flow: Apps Script dispatch failed for eval %s (retryable)",
-                evaluation_id,
-            )
-    else:
-        job["email_dispatch"] = {"status": "skipped", "message": "no Analyst_History row projected"}
+    _dispatch_finalize_email(job, history_row, team_id, evaluation_id)
 
 
 @router.get("/calls")
@@ -687,16 +711,7 @@ async def approve_scorecard(
         history_row = await project_evaluation(
             pool, evaluation_id, config, include_history=True
         )
-        if history_row is not None and history_row > 0:
-            try:
-                script_response = trigger_apps_script(history_row, team_id)
-                job["email_dispatch"] = script_response
-            except Exception as e:
-                job["email_dispatch"] = {"status": "error", "message": str(e)}
-                logging.getLogger(__name__).exception(
-                    "approve: Apps Script dispatch failed for eval %s (retryable)",
-                    evaluation_id,
-                )
+        _dispatch_finalize_email(job, history_row, team_id, evaluation_id)
         await _publish_finalized_event(
             team_id, job,
             agent_name=job.get("agent_name") or sc.get("agent_name"),
@@ -739,6 +754,219 @@ async def approve_scorecard(
         job["status"] = "complete"
         job["error"] = str(e)
         raise HTTPException(status_code=500, detail=f"Engine approval failed: {e}")
+
+
+@router.post("/score/{job_id}/rescore")
+async def rescore_evaluation(
+    request: Request,
+    job_id: str,
+    payload: RescoreRequest,
+    background_tasks: BackgroundTasks,
+    identity: KeyIdentity = Depends(require_api_key),
+):
+    """Manual re-score — REPLACE on the same row id (ScorecardActionsDesign
+    §4.2). Team key (roster-scoped) or privileged; scorecard and datapoint
+    surfaces (job_id or bare call_id — §3 resolution).
+
+    The rescore primitive: re-download the audio by Dialpad call id, run
+    the same score_call pipeline (fresh model pass — including whatever
+    SCORING_PIPELINE stage-A mode is live), land it via the Stage-1 upsert
+    (same row id, every FK preserved), rebuild the agent's stat series so
+    the superseded score doesn't linger in the EWMA chain while the row
+    sits in draft, then let the normal auto-flow decide auto-finalize vs.
+    flagged review. The re-finalize dispatches the disclaimer email by
+    default; ``suppress_email`` opts out (§4.2.7).
+
+    Machine-owned outcome: the manual act here is the *trigger*, not the
+    score — no coaching receipt, no §4.3a acknowledgment (§0.2). The
+    audit row is action='rescored' with the superseded score AND model
+    stamp (``superseded_model=…``), so cross-model re-scores stay
+    traceable once the judge model can differ between passes
+    (TwoStageScoringDesign P3+).
+
+    Concurrency: last-writer-wins by design. qa.evaluations has no
+    updated_at column and these are low-traffic manager tools. If Landing
+    outgrows this (concurrent evaluators on one eval), add updated_at +
+    an If-Unmodified-Since-style optimistic check here — potential design
+    choice deliberately deferred, not overlooked.
+    """
+    team_id = team_id_from_path(request)
+    config = get_team_config(team_id)
+    key = _job_key(team_id, job_id)
+
+    # §4.2: refuse to race an in-flight job for the same key.
+    existing = _jobs.get(key)
+    if existing and existing.get("status") in {"pending", "scoring"}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A scoring job for this call is already {existing['status']}",
+        )
+
+    ref = await eval_store.resolve_evaluation(team_id, job_id)
+    if ref is None:
+        raise HTTPException(status_code=404, detail="No evaluation matches this call id")
+
+    # Auth (§7): roster-scoped for team keys, mirroring /score.
+    is_in_roster = (
+        await email_in_team_mails(ref.agent_email, team_id)
+        if ref.agent_email else False
+    )
+    try:
+        check_scoring_access(
+            identity, team_id, ref.agent_email, is_in_roster=is_in_roster,
+        )
+    except HTTPException as exc:
+        append_score_audit_row(
+            api_key_role=identity.role,
+            evaluator_email=payload.evaluator_email,
+            agent_email=ref.agent_email or "",
+            agent_name=ref.agent_name_raw,
+            call_id=ref.dialpad_call_id or ref.dialpad_entry_point_call_id or "",
+            target_team=team_id,
+            action=audit_cfg.ACTION_DENIED,
+            result_row=None,
+            notes=f"http_{exc.status_code}",
+        )
+        raise
+
+    # §4.2.1: same input, fresh pass — re-download by Dialpad call id.
+    call_id = ref.dialpad_call_id or ref.dialpad_entry_point_call_id or ""
+    try:
+        audio_bytes = await download_recording(call_id)
+    except NoRecordingAvailable:
+        append_score_audit_row(
+            api_key_role=identity.role,
+            evaluator_email=payload.evaluator_email,
+            agent_email=ref.agent_email or "",
+            agent_name=ref.agent_name_raw,
+            call_id=call_id,
+            target_team=team_id,
+            action=audit_cfg.ACTION_DENIED,
+            result_row=None,
+            notes="no_recording",
+        )
+        raise HTTPException(
+            status_code=422,
+            detail="Call has no recording in Dialpad",
+        )
+    except DialpadRateLimited:
+        append_score_audit_row(
+            api_key_role=identity.role,
+            evaluator_email=payload.evaluator_email,
+            agent_email=ref.agent_email or "",
+            agent_name=ref.agent_name_raw,
+            call_id=call_id,
+            target_team=team_id,
+            action=audit_cfg.ACTION_DENIED,
+            result_row=None,
+            notes="rate_limited",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Dialpad rate-limited; retry shortly",
+        )
+
+    # Same pre-fetch pattern as /score (sequential in the handler so
+    # fan-out background tasks don't burst Dialpad).
+    transcript_data = await get_transcript(call_id)
+    try:
+        call_details = await get_call_details(call_id)
+    except DialpadRateLimited:
+        print(f"[rescore] Dialpad rate-limited fetching call_details for {call_id}; proceeding with blanks")
+        call_details = None
+
+    # Audit BEFORE scheduling (crash-safe receipt), with the superseded
+    # score + model stamp — the cross-model traceability hook (P3+).
+    old_score = "unscored" if ref.overall_score is None else ref.overall_score
+    append_score_audit_row(
+        api_key_role=identity.role,
+        evaluator_email=payload.evaluator_email,
+        agent_email=ref.agent_email or "",
+        agent_name=ref.agent_name_raw,
+        call_id=call_id,
+        target_team=team_id,
+        action=audit_cfg.ACTION_RESCORED,
+        result_row=None,
+        notes=f"manual: {old_score}; superseded_model={ref.model}",
+    )
+
+    _jobs[key] = {
+        "status": "pending",
+        "call_id": call_id,
+        "agent_email": ref.agent_email or "",
+        "agent_name": ref.agent_name_raw,
+        "manager_email": payload.evaluator_email,
+        # Consumed by _dispatch_finalize_email on the re-finalize
+        # (in-memory only — see that helper's restart caveat).
+        "rescore": {
+            "cause": "manual",
+            "suppress_email": payload.suppress_email,
+            "superseded_score": ref.overall_score,
+            "superseded_model": ref.model,
+        },
+    }
+
+    semaphore = _semaphore_for_key(identity)
+    agent_name = ref.agent_name_raw
+    duration_ms = float(ref.duration_ms or 0)
+    expected_row_id = ref.id
+    agent_id = ref.agent_id
+
+    async def run():
+        try:
+            _jobs[key]["status"] = "scoring"
+            async with semaphore:
+                scorecard = await score_call(
+                    audio_bytes=audio_bytes,
+                    filename=f"{call_id}.mp3",
+                    call_id=call_id,
+                    agent_name=agent_name,
+                    manager_email=payload.evaluator_email,
+                    config=config,
+                    duration_ms=duration_ms,
+                    transcript_data=transcript_data,
+                    call_details=call_details,
+                )
+            # §4.2.2: the Stage-1 upsert IS the REPLACE — same row id,
+            # lifecycle columns reset, sections replaced wholesale.
+            evaluation_id = await record_draft_evaluation(
+                scorecard, config, strict=True
+            )
+            if evaluation_id != expected_row_id:
+                raise RuntimeError(
+                    f"rescore landed on row {evaluation_id}, expected "
+                    f"{expected_row_id} — REPLACE contract violated "
+                    "(dialpad_link drift?)"
+                )
+            _jobs[key]["evaluation_id"] = evaluation_id
+            _jobs[key]["scorecard"] = scorecard.model_dump()
+            # §4.2.3: row is draft now — drop its stat point and rebuild
+            # the series. Fatal by contract (§5): a failure errors the
+            # whole job loudly rather than leaving a corrupt EWMA chain.
+            if agent_id is not None:
+                pool = await eval_store.get_pool()
+                if pool is None:
+                    raise RuntimeError("rescore: no DB pool for series rebuild")
+                async with pool.acquire() as conn:
+                    async with conn.transaction():
+                        await rebuild_agent_series(conn, agent_id, config)
+            # §4.2.4: the auto-flow decides auto-finalize vs. flagged,
+            # like any first pass — the machine owns the outcome.
+            await _postgres_post_stage1(
+                _jobs[key], evaluation_id, scorecard, config, team_id
+            )
+            _jobs[key]["status"] = "complete"
+        except Exception as e:
+            _jobs[key]["status"] = "error"
+            _jobs[key]["error"] = str(e)
+
+    background_tasks.add_task(run)
+    return {
+        "job_id": job_id,
+        "status": "pending",
+        "evaluation_id": ref.id,
+        "superseded_score": ref.overall_score,
+    }
 
 
 @router.delete("/score/{job_id}")
