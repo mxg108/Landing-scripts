@@ -292,6 +292,24 @@
       <a class="dialpad-btn" id="dialpadLink" href="#" target="_blank">Review Call Recording</a>
     </div>
 
+    <!-- ScorecardActions S7 (§4.1/§4.4): lifecycle actions. This surface
+         deliberately has NO override control — overriding is an
+         approval-flow action, scorecard page only (§4.3). -->
+    <div id="actionsCard" class="card" style="display:none;">
+      <h2>Actions</h2>
+      <div style="font-size:0.7rem; color:var(--muted); margin-bottom:8px;">
+        Every action below is audited. Editing or re-scoring a finalized
+        evaluation notifies the agent by default.
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <a class="dialpad-btn" id="editInEditorLink" href="#">Edit in Scorecard Editor</a>
+        <a class="dialpad-btn" id="rescoreBtn" href="#" onclick="rescoreEval(); return false;">Re-score (fresh AI pass)</a>
+        <a class="dialpad-btn" id="deleteBtn" href="#" style="display:none; background:#7f1d1d;"
+           onclick="deleteEval(); return false;">Delete Evaluation…</a>
+      </div>
+      <div id="actionStatus" style="font-size:0.75rem; margin-top:8px; color:var(--muted);"></div>
+    </div>
+
     <div id="historyCard" class="card" style="display:none;">
       <h2>QA Progression</h2>
       <table class="history-table">
@@ -548,6 +566,9 @@
       document.getElementById('sectionRows').innerHTML = rowsHtml;
       document.getElementById('scoresCard').style.display = '';
 
+      // ScorecardActions S7 — lifecycle action bar (no override here).
+      setupActions(eval_);
+
       // Feedback
       document.getElementById('strengths').textContent = eval_.key_strengths || 'No strengths recorded.';
       document.getElementById('improvements').textContent = eval_.improvements || 'No improvements recorded.';
@@ -583,6 +604,92 @@
       }
 
       document.getElementById('footer').textContent = `DataPoint ${callId} | ${eval_.source} evaluation`;
+    }
+
+    // ── ScorecardActions S7 — lifecycle actions (§4.1 edit, §4.2
+    // rescore, §4.4 delete). NO override on this surface (§4.3).
+    let _evalMeta = null;
+
+    async function setupActions(eval_) {
+      _evalMeta = eval_;
+      document.getElementById('editInEditorLink').href =
+        `/scorecard/${TEAM_ID}/${encodeURIComponent(callId)}`;
+      document.getElementById('actionsCard').style.display = '';
+      // Role-gated rendering (S7): Delete is privileged-only. Rendering
+      // is UX — the route still 403s + audits a denied row.
+      const who = await fetchJSON(`${API_BASE}/whoami`);
+      if (who && who.role === 'privileged') {
+        document.getElementById('deleteBtn').style.display = '';
+      }
+    }
+
+    function evaluatorEmail() {
+      let e = localStorage.getItem('qa_evaluator_email') || '';
+      if (!e) {
+        e = (prompt('Your email (recorded in the audit trail):') || '').trim();
+        if (e) localStorage.setItem('qa_evaluator_email', e);
+      }
+      return e;
+    }
+
+    async function rescoreEval() {
+      const email = evaluatorEmail();
+      if (!email) return;
+      const suppress = !window.confirm(
+        'Re-send the evaluation email (with the re-score disclaimer) when '
+        + 'the fresh pass finalizes?\n\nOK = send (default) · Cancel = suppress');
+      const st = document.getElementById('actionStatus');
+      st.textContent = 'Scheduling fresh AI pass…';
+      try {
+        const res = await fetch(
+          `${API_BASE}/score/${encodeURIComponent(callId)}/rescore`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ evaluator_email: email, suppress_email: suppress }),
+          });
+        const data = await res.json();
+        if (!res.ok) throw new Error(
+          typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail));
+        st.textContent = `Re-score scheduled (superseding ${data.superseded_score}). `
+          + 'The fresh pass replaces this evaluation on the same row — follow it in the Scorecard Editor.';
+      } catch (err) {
+        st.textContent = `Re-score error: ${err.message}`;
+      }
+    }
+
+    async function deleteEval() {
+      // §4.4 UI: type-the-agent-name confirm.
+      const typed = prompt(
+        `PERMANENT DELETE — this removes the evaluation, its sections, and `
+        + `its stat point, and blanks the Sheets row.\n\nType the agent name `
+        + `("${_evalMeta.agent_name}") to confirm:`);
+      if (typed === null) return;
+      if (typed.trim() !== _evalMeta.agent_name) {
+        alert('Name did not match — delete cancelled.');
+        return;
+      }
+      const st = document.getElementById('actionStatus');
+      st.textContent = 'Deleting…';
+      try {
+        const res = await fetch(`${API_BASE}/score/${encodeURIComponent(callId)}`, {
+          method: 'DELETE', headers: authHeaders(),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(
+          typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail));
+        // §4.4.1 — the response snapshot is the caller's backup; save it.
+        const blob = new Blob([JSON.stringify(data.snapshot, null, 2)],
+                              { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `eval_${data.evaluation_id}_backup.json`;
+        a.click();
+        st.textContent = `Deleted evaluation ${data.evaluation_id}. Backup downloaded`
+          + (data.tombstoned_history_row
+             ? `; Sheets row ${data.tombstoned_history_row} blanked.` : '.');
+      } catch (err) {
+        st.textContent = `Delete error: ${err.message}`;
+      }
     }
 
     (async () => {

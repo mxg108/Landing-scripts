@@ -634,7 +634,7 @@ def _stub_engine_path(monkeypatch, captured_approvals):
         lambda config, sections: [],
     )
 
-    s6 = {"receipts": [], "completions": []}
+    s6 = {"receipts": [], "completions": [], "edit_receipts": [], "rebuilds": []}
 
     async def fake_receipt(**kw):
         s6["receipts"].append(kw)
@@ -646,6 +646,18 @@ def _stub_engine_path(monkeypatch, captured_approvals):
         s6["completions"].append({"coaching_id": coaching_id, **kw})
     monkeypatch.setattr(
         scoring_module.eval_store, "complete_coaching_notified", fake_complete)
+
+    # S7 — edit-of-finalized extras (receipt + series rebuild).
+    async def fake_edit_receipt(**kw):
+        s6["edit_receipts"].append(kw)
+        return 92
+    monkeypatch.setattr(
+        scoring_module.eval_store, "create_edit_receipt", fake_edit_receipt)
+
+    async def fake_rebuild(conn, agent_id, config):
+        s6["rebuilds"].append(agent_id)
+        return 3
+    monkeypatch.setattr(scoring_module, "rebuild_agent_series", fake_rebuild)
 
     async def fake_record_approval(config, **kw):
         captured_approvals.append(kw)
@@ -660,7 +672,9 @@ def _stub_engine_path(monkeypatch, captured_approvals):
     monkeypatch.setattr(scoring_module.eval_store, "stamp_and_finalize", fake_stamp)
 
     async def fake_pool():
-        return object()
+        # _NullPool supports acquire()/transaction() for the S7 rebuild
+        # block; defined in the S4 section below (resolved at call time).
+        return _NullPool()
     monkeypatch.setattr(scoring_module.eval_store, "get_pool", fake_pool)
 
     async def fake_project(pool, evaluation_id, config, include_history=True):
@@ -1949,3 +1963,250 @@ def test_review_queue_endpoint(client, monkeypatch):
     assert body["count"] == 1
     assert body["evaluations"][0]["id"] == 2377
     assert body["evaluations"][0]["auto_rescored_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# S7 — POST /datapoints/{call_id}/edit + GET fallback + /whoami
+# (ScorecardActionsDesign §4.1)
+# ---------------------------------------------------------------------------
+
+_EDIT_URL = "/api/member_support/datapoints/5035229460504576/edit"
+
+
+def _edit_payload(**overrides):
+    p = {"sections": [], "key_strengths": "x", "opportunities": "y",
+         "evaluator_email": "ana@landing.com"}
+    p.update(overrides)
+    return p
+
+
+def test_datapoint_edit_draft_is_plain_approval(client, monkeypatch):
+    """A draft target behaves exactly like the scorecard approve — no
+    ack, no receipt, keyed by bare call id."""
+    approvals: list[dict] = []
+    s6 = _stub_engine_path(monkeypatch, approvals)
+    _resolve_stub(
+        monkeypatch, _eval_ref(state="draft", scoring_status="complete"))
+
+    resp = client.post(
+        _EDIT_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json=_edit_payload(),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["state"] == "finalized"
+    assert approvals[0]["resolving_review"] is False
+    assert s6["receipts"] == []
+    assert s6["edit_receipts"] == []
+    assert s6["rebuilds"] == []
+    # Cached under the bare call id (the datapoint surface's key).
+    key = scoring_module._job_key("member_support", "5035229460504576")
+    assert scoring_module._jobs[key]["status"] == "approved"
+
+
+def test_datapoint_edit_flagged_draft_keeps_resolution_protocol(client, monkeypatch):
+    """A flagged draft via the datapoint surface still runs the §4.3a
+    resolution gate + receipt."""
+    approvals: list[dict] = []
+    s6 = _stub_engine_path(monkeypatch, approvals)
+    _resolve_stub(monkeypatch, _eval_ref())  # flagged_human_review draft
+
+    resp = client.post(
+        _EDIT_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json=_edit_payload(),
+    )
+    assert resp.status_code == 422  # no ack
+    resp = client.post(
+        _EDIT_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json=_edit_payload(acknowledged=True),
+    )
+    assert resp.status_code == 200, resp.text
+    assert approvals[0]["resolving_review"] is True
+    assert len(s6["receipts"]) == 1
+    assert s6["edit_receipts"] == []
+
+
+def test_datapoint_edit_finalized_requires_ack(client, monkeypatch):
+    _stub_engine_path(monkeypatch, [])
+    _resolve_stub(
+        monkeypatch,
+        _eval_ref(state="finalized", scoring_status="complete",
+                  overall_score=62.5))
+    resp = client.post(
+        _EDIT_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json=_edit_payload(),
+    )
+    assert resp.status_code == 422
+    assert "acknowledged" in resp.json()["detail"]
+
+
+def test_datapoint_edit_finalized_full_round_trip(client, monkeypatch):
+    """§4.1 checkpoint: edit-of-finalized re-approval — engine re-runs,
+    series rebuilds, edit receipt books, edit_finalized disclaimer
+    dispatches and discharges the receipt, audit note records old → new."""
+    approvals: list[dict] = []
+    s6 = _stub_engine_path(monkeypatch, approvals)
+    dispatches: list[dict] = []
+
+    def fake_trigger(row, team_id, disclaimer=None):
+        dispatches.append({"row": row, "disclaimer": disclaimer})
+        return {"status": "ok"}
+    monkeypatch.setattr(scoring_module, "trigger_apps_script", fake_trigger)
+    _resolve_stub(
+        monkeypatch,
+        _eval_ref(state="finalized", scoring_status="complete",
+                  overall_score=62.5))
+
+    resp = client.post(
+        _EDIT_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json=_edit_payload(acknowledged=True),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "approved"
+    assert body["edited_finalized"] is True
+    assert body["old_score"] == 62.5
+    assert body["overall_score"] == 72.0  # engine recomputed (stub _Detail)
+    assert body["coaching_id"] == 92
+
+    # record_approval ran as a plain (non-resolving) re-approval.
+    assert approvals[0]["resolving_review"] is False
+    # Series rebuilt (mid-chain change), edit receipt booked + discharged.
+    assert s6["rebuilds"] == [7]
+    assert len(s6["edit_receipts"]) == 1
+    assert s6["edit_receipts"][0]["old_score"] == 62.5
+    assert s6["completions"] == [{
+        "coaching_id": 92, "completed_by": "ana@landing.com",
+        "summary": "Agent notified via edit-of-finalized disclaimer email",
+    }]
+    assert dispatches == [{"row": 321, "disclaimer": "edit_finalized"}]
+
+    approved = [r for r in client.audit_rows if r["action"] == "approved"]
+    assert len(approved) == 1
+    assert "edit_of_finalized 62.5 → 72.0" in approved[0]["notes"]
+    assert "ack:ana@landing.com" in approved[0]["notes"]
+    assert "coaching=92" in approved[0]["notes"]
+
+
+def test_datapoint_edit_finalized_suppress_email_leaves_receipt_pending(
+        client, monkeypatch):
+    approvals: list[dict] = []
+    s6 = _stub_engine_path(monkeypatch, approvals)
+    dispatches: list[dict] = []
+
+    def fake_trigger(row, team_id, disclaimer=None):
+        dispatches.append(row)
+        return {"status": "ok"}
+    monkeypatch.setattr(scoring_module, "trigger_apps_script", fake_trigger)
+    _resolve_stub(
+        monkeypatch,
+        _eval_ref(state="finalized", scoring_status="complete",
+                  overall_score=62.5))
+
+    resp = client.post(
+        _EDIT_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json=_edit_payload(acknowledged=True, suppress_email=True),
+    )
+    assert resp.status_code == 200, resp.text
+    assert dispatches == []
+    assert s6["completions"] == []
+    key = scoring_module._job_key("member_support", "5035229460504576")
+    assert scoring_module._jobs[key]["email_dispatch"]["status"] == "suppressed"
+
+
+def test_datapoint_edit_finalized_agentless_422(client, monkeypatch):
+    _stub_engine_path(monkeypatch, [])
+    _resolve_stub(
+        monkeypatch,
+        _eval_ref(state="finalized", scoring_status="complete",
+                  overall_score=62.5, agent_id=None))
+    resp = client.post(
+        _EDIT_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json=_edit_payload(acknowledged=True),
+    )
+    assert resp.status_code == 422
+    assert "coaching receipt" in resp.json()["detail"]
+
+
+def test_datapoint_edit_unrostered_team_key_403(client, monkeypatch):
+    _stub_engine_path(monkeypatch, [])
+    _resolve_stub(
+        monkeypatch,
+        _eval_ref(state="finalized", agent_email="ghost@landing.com"))
+    resp = client.post(
+        _EDIT_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json=_edit_payload(acknowledged=True),
+    )
+    assert resp.status_code == 403
+    denied = [r for r in client.audit_rows if r["action"] == "denied"]
+    assert len(denied) == 1
+
+
+def test_datapoint_edit_cross_surface_in_flight_409(client, monkeypatch):
+    """A rescore keyed <call>_<agent> must block a datapoint edit keyed
+    by the bare call id — the guard scans job payloads, not keys."""
+    _stub_engine_path(monkeypatch, [])
+    _resolve_stub(monkeypatch, _eval_ref(state="draft"))
+    other_key = scoring_module._job_key(
+        "member_support", "5035229460504576_Luis_Rubio")
+    scoring_module._jobs[other_key] = {
+        "status": "scoring", "call_id": "5035229460504576"}
+
+    resp = client.post(
+        _EDIT_URL,
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json=_edit_payload(),
+    )
+    assert resp.status_code == 409
+    assert "scoring" in resp.json()["detail"]
+
+
+def test_get_score_result_restores_from_db(client, monkeypatch):
+    """S7: the scorecard page renders any evaluation forever — GET falls
+    back to the §3 seam on a _jobs miss and caches the restored job."""
+    _resolve_stub(
+        monkeypatch,
+        _eval_ref(state="finalized", scoring_status="complete",
+                  overall_score=88.0))
+    resp = client.get(
+        "/api/member_support/score/5035229460504576_Luis_Rubio",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["restored_from_db"] is True
+    assert body["state"] == "finalized"
+    assert body["overall_score"] == 88.0
+    key = scoring_module._job_key(
+        "member_support", "5035229460504576_Luis_Rubio")
+    assert scoring_module._jobs[key]["restored_from_db"] is True
+
+
+def test_get_score_result_miss_is_404(client, monkeypatch):
+    _resolve_stub(monkeypatch, None)
+    resp = client.get(
+        "/api/member_support/score/999_Nobody",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+    )
+    assert resp.status_code == 404
+
+
+def test_whoami_reports_role(client):
+    resp = client.get(
+        "/api/member_support/whoami",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"role": "team", "team_id": "member_support"}
+    resp = client.get(
+        "/api/member_support/whoami",
+        headers={"Authorization": f"Bearer {PRIV_TOKEN}"},
+    )
+    assert resp.json()["role"] == "privileged"

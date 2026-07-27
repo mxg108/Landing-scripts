@@ -13,7 +13,14 @@
  * This script is a dumb email-dispatcher.
  *
  * Payload shape:
- *   { "historyRowNumber": <int> }
+ *   { "historyRowNumber": <int>,
+ *     "disclaimer": "<cause>"?    // ScorecardActions S7 — optional tag
+ *                                 // (rescore_manual | rescore_auto |
+ *                                 //  override | review_resolution |
+ *                                 //  edit_finalized) rendered as a
+ *                                 //  banner naming why this email
+ *                                 //  supersedes a previous one
+ *   }
  *
  * Response:
  *   { "status": "ok"|"error", "message": "..." }
@@ -23,6 +30,8 @@ function doPost(e) {
   try {
     var payload = JSON.parse(e.postData.contents);
     var rowNum  = payload.historyRowNumber;
+    var disclaimer = (typeof payload.disclaimer === 'string')
+      ? payload.disclaimer : '';
 
     if (!rowNum || typeof rowNum !== 'number') {
       return _jsonResponse({
@@ -49,8 +58,11 @@ function doPost(e) {
       });
     }
 
+    if (disclaimer) {
+      Logger.log('[doPost] disclaimer cause: %s', disclaimer);
+    }
     var entry = QAEntry.fromHistoryRow(row);
-    _processHistoryRow(entry);
+    _processHistoryRow(entry, disclaimer);
 
     return _jsonResponse({
       status: 'ok',
@@ -70,9 +82,11 @@ function doPost(e) {
  * resolved the agent's email via Mails.
  *
  * @param {QAEntry} entry
+ * @param {string=} disclaimer — optional §4.2.7/§4.3a cause tag; rendered
+ *                  as a banner above the cards (see HtmlRenderer).
  * @private
  */
-function _processHistoryRow(entry) {
+function _processHistoryRow(entry, disclaimer) {
   Logger.log('[_processHistoryRow] agent=%s, overallScore=%s, agentEmail=%s',
              entry.agentName, entry.overallScore, entry.agentEmail);
 
@@ -89,7 +103,7 @@ function _processHistoryRow(entry) {
   var scoreCard       = new ScoreCard(entry);
   var feedbackCard    = new FeedbackCard(entry);
   var progressionCard = new ProgressionCard(entry, pastEntries);
-  var renderer        = new HtmlRenderer(entry, scoreCard, feedbackCard, progressionCard);
+  var renderer        = new HtmlRenderer(entry, scoreCard, feedbackCard, progressionCard, disclaimer);
 
   var sender = new EmailSender(entry);
   sender.send(renderer.renderEmail());

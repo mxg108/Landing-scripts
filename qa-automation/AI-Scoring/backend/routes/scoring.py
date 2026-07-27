@@ -93,6 +93,11 @@ async def _job_from_db(team_id: str, job_id: str) -> Optional[dict]:
     ref = await eval_store.resolve_evaluation(team_id, job_id)
     if ref is None:
         return None
+    return _job_from_ref(ref)
+
+
+def _job_from_ref(ref) -> dict:
+    """EvalRef → restored-job dict (the S1 reconstruction shape)."""
     return {
         "status": "complete",
         "state": ref.state,
@@ -116,6 +121,20 @@ async def _job_from_db(team_id: str, job_id: str) -> Optional[dict]:
     }
 
 
+def _call_in_flight(team_id: str, call_ids: set[str]) -> Optional[str]:
+    """Whether any live job for this team is actively scoring one of the
+    given Dialpad call ids. The scorecard and datapoint surfaces key jobs
+    differently (call_id_agent vs bare call id), so an in-flight check by
+    key alone misses cross-surface races — this scans job payloads."""
+    prefix = f"{team_id}:"
+    for k, j in _jobs.items():
+        if (k.startswith(prefix)
+                and j.get("call_id") in call_ids
+                and j.get("status") in {"pending", "scoring"}):
+            return j.get("status")
+    return None
+
+
 async def _await_coro(coro) -> None:
     """BackgroundTasks.add_task takes a callable + args, not a coroutine
     object — this adapts the S5 auto-rescore pass for scheduling."""
@@ -123,7 +142,7 @@ async def _await_coro(coro) -> None:
 
 
 def _dispatch_finalize_email(job, history_row, team_id, evaluation_id,
-                             default_disclaimer=None) -> None:
+                             default_disclaimer=None, suppress=False) -> None:
     """Apps Script email dispatch at the finalize seam — shared by the
     auto-flow and the approve path.
 
@@ -137,10 +156,17 @@ def _dispatch_finalize_email(job, history_row, team_id, evaluation_id,
 
     ``default_disclaimer`` (S6): the caller's cause tag when no rescore
     context rides the job — e.g. 'review_resolution' on a flagged-review
-    approve. A rescore context wins over it."""
+    approve. A rescore context wins over it. ``suppress`` (S7): the
+    caller's own opt-out — the edit-of-finalized §8.1 checkbox."""
     if not history_row or history_row <= 0:
         job["email_dispatch"] = {
             "status": "skipped", "message": "no Analyst_History row projected",
+        }
+        return
+    if suppress:
+        job["email_dispatch"] = {
+            "status": "suppressed",
+            "message": "caller requested suppress_email",
         }
         return
     rescore = job.get("rescore") or {}
@@ -631,12 +657,29 @@ async def score_single_call(
 
 @router.get("/score/{job_id}")
 async def get_score_result(request: Request, job_id: str):
-    """Poll for the result of a scoring job."""
+    """Poll for the result of a scoring job.
+
+    S7: on a `_jobs` miss, restore the context from qa.evaluations (the
+    §3 seam) and cache it — the scorecard page now renders ANY
+    evaluation forever, not just jobs the current process scored. The
+    datapoint page links here as the mirrored edit surface (§4.1)."""
     team_id = team_id_from_path(request)
-    job = _jobs.get(_job_key(team_id, job_id))
+    key = _job_key(team_id, job_id)
+    job = _jobs.get(key)
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        job = await _job_from_db(team_id, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        _jobs[key] = job
     return job
+
+
+@router.get("/whoami")
+async def whoami(identity: KeyIdentity = Depends(require_api_key)):
+    """Resolved identity of the presented API key — lets the frontend
+    role-gate controls (S7: the Delete button renders for privileged
+    keys only). Rendering is UX; the routes still enforce."""
+    return {"role": identity.role, "team_id": identity.team_id}
 
 
 @router.post("/score/batch")
@@ -792,14 +835,33 @@ async def approve_scorecard(
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
         _jobs[key] = job
-    if job["status"] == "approved":
+    return await _approve_core(
+        team_id=team_id, key=key, job=job, approval=approval,
+        identity=identity, background_tasks=background_tasks,
+    )
+
+
+async def _approve_core(*, team_id, key, job, approval, identity,
+                        background_tasks, edit_of_finalized=False,
+                        rebuild_agent_id=None, suppress_email=False):
+    """The shared approval engine — scorecard approve and the S7
+    datapoint edit surface run the same flow (§4.1: extend, don't
+    rebuild). ``edit_of_finalized`` is the one behavioral fork: the
+    finalized read-only wall is bypassed (the caller already enforced
+    the §4.3a acknowledgment), the re-approval books the edit coaching
+    receipt, the stat series is rebuilt after the re-finalize (a
+    mid-chain score change invalidates every later EWMA point), the
+    email carries the edit_finalized disclaimer, and §8.1
+    ``suppress_email`` is honored."""
+    if job["status"] == "approved" and not edit_of_finalized:
         raise HTTPException(status_code=409, detail="Already approved")
-    if job["status"] != "complete":
+    if job["status"] not in ("complete", "approved"):
         raise HTTPException(
             status_code=409,
             detail=f"Job is '{job['status']}', must be 'complete' to approve",
         )
 
+    old_score = job.get("overall_score")
     job["status"] = "approving"
     config = get_team_config(team_id)
 
@@ -815,8 +877,10 @@ async def approve_scorecard(
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Approval payload invalid: {e}")
 
-    # Post-flip: finalized evaluations are immutable from the UI.
-    if job.get("state") == "finalized":
+    # Post-flip: finalized evaluations are immutable from the UI — except
+    # through the S7 edit-of-finalized doorway, whose caller enforced the
+    # §4.3a acknowledgment before setting the flag.
+    if job.get("state") == "finalized" and not edit_of_finalized:
         job["status"] = "complete"
         raise HTTPException(status_code=409, detail="Evaluation is finalized (engine-scored) — read-only")
 
@@ -877,6 +941,15 @@ async def approve_scorecard(
         detail = await eval_store.stamp_and_finalize(
             evaluation_id, config, evaluator_email=evaluator_email
         )
+        # S7 (§4.1): a re-approved finalized score is a mid-chain change —
+        # every later EWMA/SPC point is stale until the series rebuilds.
+        # Loud on failure (500 + retryable), never silent.
+        if edit_of_finalized and rebuild_agent_id is not None:
+            pool = await eval_store.get_pool()
+            if pool is not None:
+                async with pool.acquire() as conn:
+                    async with conn.transaction():
+                        await rebuild_agent_series(conn, rebuild_agent_id, config)
         # S5 (§4.2): the approve path is a finalize seam too. On a fire,
         # suppress projection/SSE/email for this pass and schedule the
         # machine's retry after the response is sent.
@@ -891,12 +964,22 @@ async def approve_scorecard(
         # when the auto-rescore fired (the human DID resolve; the
         # suppressed email leaves the receipt pending, correctly).
         coaching_id = None
+        receipt_summary = None
         if resolving:
             coaching_id = await eval_store.create_resolution_receipt(
                 evaluation_id=evaluation_id, team_id=team_id,
                 evaluator_email=evaluator_email,
                 agent_name=job.get("agent_name") or sc.get("agent_name") or "the agent",
             )
+            receipt_summary = "Agent notified via review-resolution email"
+        elif edit_of_finalized:
+            coaching_id = await eval_store.create_edit_receipt(
+                evaluation_id=evaluation_id, team_id=team_id,
+                evaluator_email=evaluator_email,
+                agent_name=job.get("agent_name") or sc.get("agent_name") or "the agent",
+                old_score=old_score,
+            )
+            receipt_summary = "Agent notified via edit-of-finalized disclaimer email"
         history_row = None
         if followup is None:
             pool = await eval_store.get_pool()
@@ -905,7 +988,11 @@ async def approve_scorecard(
             )
             _dispatch_finalize_email(
                 job, history_row, team_id, evaluation_id,
-                default_disclaimer="review_resolution" if resolving else None,
+                default_disclaimer=(
+                    "review_resolution" if resolving
+                    else "edit_finalized" if edit_of_finalized else None
+                ),
+                suppress=suppress_email,
             )
             await _publish_finalized_event(
                 team_id, job,
@@ -924,12 +1011,18 @@ async def approve_scorecard(
             if coaching_id is not None and dispatched_ok:
                 await eval_store.complete_coaching_notified(
                     coaching_id, completed_by=evaluator_email,
-                    summary="Agent notified via review-resolution email",
+                    summary=receipt_summary,
                 )
         approve_notes = "engine-scored"
         if resolving:
             approve_notes += (
                 f"; resolved_review ack:{evaluator_email}"
+                f"; coaching={coaching_id if coaching_id is not None else 'none'}"
+            )
+        elif edit_of_finalized:
+            approve_notes += (
+                f"; edit_of_finalized {old_score} → {float(detail.overall_score)}"
+                f" ack:{evaluator_email}"
                 f"; coaching={coaching_id if coaching_id is not None else 'none'}"
             )
         append_score_audit_row(
@@ -956,6 +1049,11 @@ async def approve_scorecard(
             "overall_score": float(detail.overall_score),
             "history_row": history_row,
             **({"auto_rescore": "scheduled"} if followup is not None else {}),
+            **({
+                "edited_finalized": True,
+                "old_score": old_score,
+                "coaching_id": coaching_id,
+            } if edit_of_finalized else {}),
         }
     except HTTPException:
         job["status"] = "complete"
@@ -1374,6 +1472,107 @@ async def override_scorecard(
         "history_row": history_row,
         "email_dispatch": email_dispatch,
     }
+
+
+@router.post("/datapoints/{call_id}/edit")
+async def edit_datapoint(
+    request: Request,
+    call_id: str,
+    approval: ApprovalRequest,
+    background_tasks: BackgroundTasks,
+    identity: KeyIdentity = Depends(require_api_key),
+):
+    """The mirrored edit surface (ScorecardActionsDesign §4.1, S7) —
+    keyed by Dialpad call id (or a full job id; §3 resolution accepts
+    both), so it survives restarts and reaches years-old evaluations.
+
+    Draft target → identical semantics to the scorecard approve (same
+    payload, same validation, flagged-review resolutions included with
+    their §4.3a gate). FINALIZED target → a re-approval: requires
+    `acknowledged` (422 otherwise), re-runs the engine (which clears any
+    standing S6 override — overall_score is recomputed from sections),
+    re-projects, rebuilds the stat series, books the §4.3a edit coaching
+    receipt, and re-sends with the edit_finalized disclaimer
+    (`suppress_email` opts out; a successful dispatch discharges the
+    receipt).
+
+    Concurrency: last-writer-wins by design. qa.evaluations has no
+    updated_at column and these are low-traffic manager tools. If Landing
+    outgrows this (concurrent evaluators on one eval), add updated_at +
+    an If-Unmodified-Since-style optimistic check here — potential design
+    choice deliberately deferred, not overlooked.
+    """
+    team_id = team_id_from_path(request)
+    key = _job_key(team_id, call_id)
+
+    ref = await eval_store.resolve_evaluation(team_id, call_id)
+    if ref is None:
+        raise HTTPException(status_code=404, detail="No evaluation matches this call id")
+
+    # Roster-scoped team keys or privileged (§7), mirroring rescore/override.
+    is_in_roster = (
+        await email_in_team_mails(ref.agent_email, team_id)
+        if ref.agent_email else False
+    )
+    try:
+        check_scoring_access(
+            identity, team_id, ref.agent_email, is_in_roster=is_in_roster,
+        )
+    except HTTPException as exc:
+        append_score_audit_row(
+            api_key_role=identity.role,
+            evaluator_email=approval.evaluator_email or "",
+            agent_email=ref.agent_email or "",
+            agent_name=ref.agent_name_raw,
+            call_id=ref.dialpad_call_id or ref.dialpad_entry_point_call_id or "",
+            target_team=team_id,
+            action=audit_cfg.ACTION_DENIED,
+            result_row=None,
+            notes=f"http_{exc.status_code}",
+        )
+        raise
+
+    # Cross-surface race guard: the scorecard keys jobs as
+    # <call_id>_<agent>, this surface as the bare call id — check by
+    # payload, not key.
+    in_flight = _call_in_flight(
+        team_id,
+        {c for c in (ref.dialpad_call_id, ref.dialpad_entry_point_call_id) if c},
+    )
+    if in_flight:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A scoring job for this call is already {in_flight}",
+        )
+
+    edit_of_finalized = ref.state == "finalized"
+    if edit_of_finalized:
+        if approval.acknowledged is not True:
+            raise HTTPException(
+                status_code=422,
+                detail="acknowledged required: editing a finalized "
+                       "evaluation binds the evaluator to notify the agent "
+                       "that their progression was manually modified (§4.3a)",
+            )
+        if ref.agent_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Evaluation has no linked agent (qa.agents) — the "
+                       "coaching receipt cannot be created. Import the "
+                       "agent first (scripts/import_agents.py).",
+            )
+
+    # Always rebuild the context from DB truth — this surface's whole
+    # point is not trusting process memory.
+    job = _job_from_ref(ref)
+    _jobs[key] = job
+    return await _approve_core(
+        team_id=team_id, key=key, job=job, approval=approval,
+        identity=identity, background_tasks=background_tasks,
+        edit_of_finalized=edit_of_finalized,
+        rebuild_agent_id=ref.agent_id if edit_of_finalized else None,
+        suppress_email=approval.suppress_email if edit_of_finalized else False,
+    )
 
 
 @router.get("/review-queue")

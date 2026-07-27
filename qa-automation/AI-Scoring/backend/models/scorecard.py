@@ -103,8 +103,12 @@ class ApprovalRequest(BaseModel):
     # ScorecardActionsDesign §4.3a (S6): required (literally true) when
     # the approval resolves a flagged human review — the acknowledgment
     # binds the evaluator to notify the agent that a human manually
-    # modified their progression. Plain approvals ignore it.
+    # modified their progression. Plain approvals ignore it. S7: the
+    # edit-of-finalized re-approval requires it too.
     acknowledged: bool = False
+    # §8.1 opt-out (S7): honored only on the edit-of-finalized re-send —
+    # plain approvals always dispatch, as before.
+    suppress_email: bool = False
 
 
 class RescoreRequest(BaseModel):

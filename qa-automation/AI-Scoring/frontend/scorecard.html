@@ -375,6 +375,7 @@ function renderPanel(data) {
     scoring_status: data.scoring_status || null,
     state: data.state || null,
     overall_score: data.overall_score != null ? data.overall_score : null,
+    agent_name: data.agent_name || '',
   };
   const loadingRow = document.getElementById('loadingRow');
   if (loadingRow) loadingRow.remove();
@@ -413,6 +414,7 @@ function renderPanel(data) {
     document.getElementById('scHeaderMeta').textContent =
       `Job ${JOB_ID} — ${TEAM_ID} — finalized (read-only)`;
     injectOverrideBar(panel, data);
+    injectFinalizedActions(panel);
   }
 }
 
@@ -819,6 +821,47 @@ async function approveScorecard(jobId) {
   btn.textContent = 'Sending...';
   statusEl.textContent = 'Updating sheets and sending email...';
 
+  const payload = buildApprovalPayload(jobId);
+  payload.acknowledged = resolvingReview;  // §4.3a — the route 422s a resolution without it
+
+  try {
+    const res = await fetch(`${API_BASE}/score/${jobId}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(payload),
+    });
+
+    if (res.status === 401) {
+      localStorage.removeItem('qa_api_key');
+      alert('Invalid API key. Please reload and try again.');
+      btn.disabled = false;
+      btn.textContent = 'Approve & Send';
+      return;
+    }
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || 'Unknown error');
+    }
+
+    const data = await res.json();
+
+    btn.textContent = 'Sent';
+    btn.style.background = '#065f46';
+    statusEl.textContent = `Approved — destination row ${data.destination_row}. Email dispatched.`;
+    panel.querySelectorAll('select, textarea').forEach(el => el.disabled = true);
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}. You can retry.`;
+    statusEl.style.color = '#fca5a5';
+    btn.disabled = false;
+    btn.textContent = 'Retry Approve & Send';
+  }
+}
+
+// Collects the full ApprovalRequest sections payload from the DOM —
+// shared by the normal approve and the S7 edit-of-finalized re-approval.
+function buildApprovalPayload(jobId) {
+  const panel = document.getElementById(`scorecard-${jobId}`);
   const sc = _scorecardData[jobId];
 
   const sections = sc.sections.map(s => {
@@ -888,44 +931,171 @@ async function approveScorecard(jobId) {
       });
     });
 
-  const payload = {
+  return {
     sections,
     key_strengths: document.getElementById(`strengths-${jobId}`).value,
     opportunities: document.getElementById(`opportunities-${jobId}`).value,
-    acknowledged: resolvingReview,  // §4.3a — the route 422s a resolution without it
   };
+}
+
+// --------------------------------------------------------------------
+// S7 — finalized lifecycle actions: unlock-to-edit (§4.1), rescore
+// (§4.2), delete (§4.4, privileged-only rendering via /whoami).
+// --------------------------------------------------------------------
+
+function getEvaluatorEmail() {
+  let e = localStorage.getItem('qa_evaluator_email') || '';
+  if (!e) {
+    e = (prompt('Your email (recorded in the audit trail):') || '').trim();
+    if (e) localStorage.setItem('qa_evaluator_email', e);
+  }
+  return e;
+}
+
+async function injectFinalizedActions(panel) {
+  const bar = document.createElement('div');
+  bar.className = 'approve-bar';
+  bar.id = `actions-bar-${JOB_ID}`;
+  bar.innerHTML = `
+    <span class="approve-status">Lifecycle actions (audited):</span>
+    <button class="btn-approve" id="unlock-btn-${JOB_ID}"
+            onclick="unlockForEdit()">Unlock to Edit…</button>
+    <button class="btn-approve" id="rescore-btn-${JOB_ID}"
+            onclick="rescoreFromScorecard()">Re-score (fresh AI pass)</button>
+    <button class="btn-approve" id="delete-btn-${JOB_ID}" style="display:none; background:#7f1d1d;"
+            onclick="deleteFromScorecard()">Delete…</button>
+    <span class="approve-status" id="actions-status-${JOB_ID}"></span>`;
+  panel.appendChild(bar);
+  try {
+    const res = await fetch(`${API_BASE}/whoami`, { headers: authHeaders() });
+    if (res.ok) {
+      const who = await res.json();
+      if (who.role === 'privileged') {
+        document.getElementById(`delete-btn-${JOB_ID}`).style.display = '';
+      }
+    }
+  } catch (e) { /* rendering only — routes still enforce */ }
+}
+
+function unlockForEdit() {
+  if (!window.confirm(ACK_TEXT + '\n\nUnlock this finalized evaluation for editing?')) return;
+  const panel = document.getElementById(`scorecard-${JOB_ID}`);
+  panel.querySelectorAll('select, textarea').forEach(el => el.disabled = false);
+  const btn = document.getElementById(`approve-btn-${JOB_ID}`);
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = 'Re-approve & Send';
+    btn.style.background = '#7c2d12';
+    btn.onclick = reapproveFinalized;
+  }
+  const statusEl = document.getElementById(`approve-status-${JOB_ID}`);
+  if (statusEl) {
+    statusEl.textContent =
+      'UNLOCKED (§4.3a acknowledged) — re-approving re-runs the engine and clears any manual override.';
+  }
+  const unlockBtn = document.getElementById(`unlock-btn-${JOB_ID}`);
+  if (unlockBtn) unlockBtn.disabled = true;
+}
+
+async function reapproveFinalized() {
+  const btn = document.getElementById(`approve-btn-${JOB_ID}`);
+  const statusEl = document.getElementById(`approve-status-${JOB_ID}`);
+  const panel = document.getElementById(`scorecard-${JOB_ID}`);
+  const email = getEvaluatorEmail();
+  if (!email) return;
+  const suppress = !window.confirm(
+    'Re-send the evaluation email (with the edit disclaimer)?\n\n'
+    + 'OK = send (default) · Cancel = suppress');
+
+  btn.disabled = true;
+  btn.textContent = 'Re-approving…';
+  const payload = buildApprovalPayload(JOB_ID);
+  payload.acknowledged = true;       // §4.3a — acknowledged at unlock
+  payload.suppress_email = suppress;
+  payload.evaluator_email = email;
 
   try {
-    const res = await fetch(`${API_BASE}/score/${jobId}/approve`, {
+    const res = await fetch(`${API_BASE}/datapoints/${encodeURIComponent(JOB_ID)}/edit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(payload),
     });
-
-    if (res.status === 401) {
-      localStorage.removeItem('qa_api_key');
-      alert('Invalid API key. Please reload and try again.');
-      btn.disabled = false;
-      btn.textContent = 'Approve & Send';
-      return;
-    }
-
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Unknown error');
-    }
-
     const data = await res.json();
-
-    btn.textContent = 'Sent';
+    if (!res.ok) throw new Error(
+      typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail));
+    btn.textContent = 'Re-approved';
     btn.style.background = '#065f46';
-    statusEl.textContent = `Approved — destination row ${data.destination_row}. Email dispatched.`;
+    const duty = data.coaching_id
+      ? (suppress
+         ? ` Notification duty PENDING (coaching #${data.coaching_id}) — you owe the agent a conversation.`
+         : ' Agent notified via the disclaimer email.')
+      : '';
+    statusEl.textContent =
+      `Re-approved — engine score ${data.old_score} → ${data.overall_score}.${duty}`;
     panel.querySelectorAll('select, textarea').forEach(el => el.disabled = true);
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}. You can retry.`;
     statusEl.style.color = '#fca5a5';
     btn.disabled = false;
-    btn.textContent = 'Retry Approve & Send';
+    btn.textContent = 'Re-approve & Send';
+  }
+}
+
+async function rescoreFromScorecard() {
+  const statusEl = document.getElementById(`actions-status-${JOB_ID}`);
+  const email = getEvaluatorEmail();
+  if (!email) return;
+  if (!window.confirm(
+      'Re-score discards this AI pass and re-runs the pipeline on the same '
+      + 'call (same row, audited). Continue?')) return;
+  const suppress = !window.confirm(
+    'Re-send the evaluation email (with the re-score disclaimer) when the '
+    + 'fresh pass finalizes?\n\nOK = send (default) · Cancel = suppress');
+  statusEl.textContent = 'Scheduling fresh AI pass…';
+  try {
+    const res = await fetch(`${API_BASE}/score/${JOB_ID}/rescore`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ evaluator_email: email, suppress_email: suppress }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(
+      typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail));
+    statusEl.textContent =
+      `Re-score scheduled (superseding ${data.superseded_score}). Reload to follow the fresh pass.`;
+  } catch (err) {
+    statusEl.textContent = `Re-score error: ${err.message}`;
+  }
+}
+
+async function deleteFromScorecard() {
+  const statusEl = document.getElementById(`actions-status-${JOB_ID}`);
+  const agentName = (_scorecardData[JOB_ID] || {}).agent_name || _jobMeta.agent_name || '';
+  const typed = prompt(
+    `PERMANENT DELETE — removes the evaluation, sections, and stat point, `
+    + `and blanks the Sheets row.\n\nType the agent name ("${agentName}") to confirm:`);
+  if (typed === null) return;
+  if (typed.trim() !== agentName) {
+    alert('Name did not match — delete cancelled.');
+    return;
+  }
+  statusEl.textContent = 'Deleting…';
+  try {
+    const res = await fetch(`${API_BASE}/score/${JOB_ID}`, {
+      method: 'DELETE', headers: authHeaders(),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(
+      typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail));
+    const blob = new Blob([JSON.stringify(data.snapshot, null, 2)],
+                          { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `eval_${data.evaluation_id}_backup.json`;
+    a.click();
+    statusEl.textContent = `Deleted evaluation ${data.evaluation_id}. Backup downloaded.`;
+  } catch (err) {
+    statusEl.textContent = `Delete error: ${err.message}`;
   }
 }
 </script>
