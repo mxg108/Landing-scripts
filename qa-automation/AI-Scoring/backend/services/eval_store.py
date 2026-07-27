@@ -963,6 +963,168 @@ async def stamp_auto_rescored(evaluation_id: int) -> bool:
     return row is not None
 
 
+async def create_notification_coaching(
+    conn: Any, *, agent_id: int, team_id: str, conducted_by_role: str,
+    conducted_by_email: str, action_plan: str, per_eval_note: str,
+    evaluation_id: int,
+) -> int:
+    """The §4.3a coaching receipt: a pending qa.coachings row with the
+    3-day notification deadline + the coaching_evaluations link carrying
+    the reasoning and the row's opportunities snapshot. Two inserts, one
+    (sub)transaction. Returns the coaching id."""
+    async with conn.transaction():
+        coaching_id = (await conn.fetchrow(
+            "INSERT INTO qa.coachings "
+            "  (agent_id, team_id, conducted_by_role, conducted_by_email, "
+            "   status, action_plan, action_plan_deadline) "
+            "VALUES ($1, $2, $3, $4, 'pending', $5, NOW() + interval '3 days') "
+            "RETURNING id",
+            agent_id, team_id, conducted_by_role, conducted_by_email,
+            action_plan,
+        ))["id"]
+        await conn.execute(
+            "INSERT INTO qa.coaching_evaluations "
+            "  (coaching_id, evaluation_id, per_eval_note, opportunities_snapshot) "
+            "SELECT $1, $2, $3, opportunities FROM qa.evaluations WHERE id = $2",
+            coaching_id, evaluation_id, per_eval_note,
+        )
+    return coaching_id
+
+
+async def complete_coaching_notified(
+    coaching_id: int, *, completed_by: str, summary: str,
+) -> None:
+    """Mechanical discharge of the §4.3a notification duty — the
+    disclaimer email went out, so the pending receipt completes. Own
+    connection: runs after the mutating transaction committed AND the
+    email actually dispatched."""
+    pool = await _get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE qa.coachings SET status = 'completed', "
+            "  coaching_summary = $2, completed_by = $3, completed_at = NOW() "
+            "WHERE id = $1 AND status = 'pending'",
+            coaching_id, summary, completed_by,
+        )
+
+
+async def apply_override(
+    *, evaluation_id: int, team_id: str, agent_id: int, agent_name: str,
+    old_score: Optional[float], new_score: float, reasoning: str,
+    conducted_by_role: str, evaluator_email: str, config: Any,
+) -> int:
+    """The §4.3 override transaction — SUPERSEDE riding source='ai_reviewed'.
+
+    One transaction: (1) overall_score := new, source := 'ai_reviewed' —
+    sections and formula_version STAY, so the superseded engine score is
+    reproducible forever; a standing review-queue entry is resolved
+    (human_review_completed_at) since the override IS the human look.
+    (2) The coaching receipt (§4.3a) — pending + 3-day deadline.
+    (3) Stat point rebuilt (§5) — fatal by contract, rolls everything
+    back on failure. Returns the coaching id."""
+    from backend.services.stat_points import rebuild_agent_series
+
+    pool = await _get_pool()
+    if pool is None:
+        raise RuntimeError(f"override for {team_id} requires a DATABASE_URL")
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "UPDATE qa.evaluations SET "
+                "  overall_score = $2, "
+                "  source = 'ai_reviewed', "
+                "  human_review_completed_at = CASE "
+                "    WHEN human_review_required_at IS NOT NULL "
+                "    THEN COALESCE(human_review_completed_at, NOW()) "
+                "    ELSE human_review_completed_at END "
+                "WHERE id = $1",
+                evaluation_id, new_score,
+            )
+            coaching_id = await create_notification_coaching(
+                conn, agent_id=agent_id, team_id=team_id,
+                conducted_by_role=conducted_by_role,
+                conducted_by_email=evaluator_email,
+                action_plan=(
+                    f"Notify {agent_name}: score manually overridden "
+                    f"{old_score} → {new_score}"
+                ),
+                per_eval_note=reasoning,
+                evaluation_id=evaluation_id,
+            )
+            await rebuild_agent_series(conn, agent_id, config)
+    return coaching_id
+
+
+async def create_resolution_receipt(
+    *, evaluation_id: int, team_id: str, evaluator_email: str,
+    agent_name: str,
+) -> Optional[int]:
+    """§4.3a.3 — a human-review resolution creates the same receipt: the
+    flag said 'a human must look'; this records that a human looked AND
+    owes the agent notice. Returns None (logged) when the row has no
+    linked agent — the resolution itself must not be blocked on roster
+    hygiene, and the audit note records the gap."""
+    pool = await _get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT agent_id FROM qa.evaluations WHERE id = $1", evaluation_id)
+        if row is None or row["agent_id"] is None:
+            logger.warning(
+                "resolution receipt skipped for eval %s: no linked agent",
+                evaluation_id)
+            return None
+        return await create_notification_coaching(
+            conn, agent_id=row["agent_id"], team_id=team_id,
+            conducted_by_role="manager",
+            conducted_by_email=evaluator_email,
+            action_plan=(
+                f"Notify {agent_name}: flagged evaluation resolved by "
+                "human review"
+            ),
+            per_eval_note=f"Human-review resolution (ack:{evaluator_email})",
+            evaluation_id=evaluation_id,
+        )
+
+
+async def list_review_queue(team_id: str) -> list[dict[str, Any]]:
+    """The §0.3 review queue — every eval that WOULD require a human look
+    and hasn't had one: human_review_required_at IS NOT NULL AND
+    human_review_completed_at IS NULL. Covers blocked drafts
+    (authoritative mode), shipped-but-queued rows (informative mode),
+    and still-low auto-rescore survivors. Exits: analyst resolution
+    (record_approval stamps completed_at) or override (apply_override
+    does). Empty when dual-write is off."""
+    pool = await _get_pool()
+    if pool is None:
+        return []
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, dialpad_call_id, dialpad_entry_point_call_id, "
+            "  agent_name_raw, agent_email, overall_score, state, "
+            "  scoring_status, source, human_review_required_at, "
+            "  auto_rescored_at, finalized_at "
+            "FROM qa.evaluations "
+            "WHERE team_id = $1 AND human_review_required_at IS NOT NULL "
+            "  AND human_review_completed_at IS NULL "
+            "ORDER BY human_review_required_at",
+            team_id,
+        )
+    return [
+        {
+            **dict(r),
+            "overall_score": (
+                float(r["overall_score"])
+                if r["overall_score"] is not None else None
+            ),
+        }
+        for r in rows
+    ]
+
+
 async def mark_human_review_required(evaluation_id: int) -> None:
     """Enter the §0.3 review queue (required_at IS NOT NULL AND
     completed_at IS NULL) without disturbing an existing marker —
@@ -1023,6 +1185,11 @@ __all__ = [
     "fetch_auto_rescore_state",
     "stamp_auto_rescored",
     "mark_human_review_required",
+    "apply_override",
+    "create_notification_coaching",
+    "complete_coaching_notified",
+    "create_resolution_receipt",
+    "list_review_queue",
     "get_pool",
     "build_draft_row",
     "build_draft_sections",
