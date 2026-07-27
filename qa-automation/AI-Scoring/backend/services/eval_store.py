@@ -43,7 +43,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-from backend.models.formula import EvaluationSection, Formula, ModelInfo, ModelsUsed
+from backend.models.formula import EvaluationSection, FallbackInfo, Formula, ModelInfo, ModelsUsed
 
 if TYPE_CHECKING:
     from backend.config.team_config import TeamConfig
@@ -149,9 +149,20 @@ def build_draft_row(scorecard: "ScorecardWithMeta", config: "TeamConfig") -> dic
             model=scorecard.annotator_model,
             version="gemini_annotate_v1",
         )
+    # §8.1 text leg = the SCORE AUTHOR: the Stage-B judge in two_stage
+    # (any provider behind the llm/ seam), single-stage Gemini otherwise.
+    # §8.1 fallback records a two_stage run rescued by single-stage
+    # (sections=[] — the whole scorecard rerouted, not a §8.3a subset).
+    fallback = None
+    if scorecard.pipeline_fallback_reason:
+        fallback = FallbackInfo(
+            provider="gemini", sections=[],
+            reason=scorecard.pipeline_fallback_reason,
+        )
     models_used = ModelsUsed(
         audio=audio_leg,
-        text=ModelInfo(provider="gemini", model=scorecard.model),
+        text=ModelInfo(provider=scorecard.scorer_provider, model=scorecard.model),
+        fallback=fallback,
     )
     duration_ms = int(scorecard.duration_ms) if scorecard.duration_ms else None
     # §3.14 gate beats long-call telemetry when both apply — the human-review
@@ -186,7 +197,7 @@ def build_draft_row(scorecard: "ScorecardWithMeta", config: "TeamConfig") -> dic
         "key_strengths": scorecard.key_strengths or None,
         "opportunities": scorecard.opportunities or None,
         "models_used": json.dumps(models_used.model_dump(exclude_none=True)),
-        "ai_provider_primary": "gemini",
+        "ai_provider_primary": scorecard.scorer_provider,
         "scoring_status": scoring_status,
         "human_review_required_at": datetime.now(timezone.utc) if flagged_review else None,
         # DispositionDesign §5 step 4 — CC-match stamps (migration 016).
@@ -213,6 +224,13 @@ def build_draft_row(scorecard: "ScorecardWithMeta", config: "TeamConfig") -> dic
             # corpus evolves, so the eval records exactly which docs
             # (id + updated stamp + score) grounded its SOP context.
             "pulpo_docs": scorecard.pulpo_docs,
+            # TwoStageScoringDesign §6 — shadow-week compare stamp
+            # (judge meta + per-section results or the judge error);
+            # absent outside two_stage_shadow.
+            **(
+                {"two_stage_shadow": scorecard.two_stage_shadow}
+                if scorecard.two_stage_shadow is not None else {}
+            ),
         }),
     }
 

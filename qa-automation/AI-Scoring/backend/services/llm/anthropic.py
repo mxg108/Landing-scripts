@@ -69,6 +69,7 @@ class AnthropicTextProvider(TextModelProvider):
         model: str,
         max_output_tokens: int,
         json_schema: Optional[dict] = None,
+        system: Optional[str] = None,
     ) -> LlmResult:
         client = self._get_client()
         kwargs: dict = {
@@ -77,6 +78,8 @@ class AnthropicTextProvider(TextModelProvider):
             "thinking": {"type": "adaptive"},
             "messages": [{"role": "user", "content": prompt}],
         }
+        if system:
+            kwargs["system"] = system
         if json_schema is not None:
             # Provider-enforced structured output — replaces markdown-fence
             # stripping entirely on this path (guaranteed-valid JSON).

@@ -101,6 +101,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import TYPE_CHECKING, Optional
 
 from backend.models.scorecard import ScorecardWithMeta
@@ -117,6 +118,7 @@ from backend.services.dialpad_client import (
     get_call_details,
     get_transcript,
 )
+from backend.services.judge_service import score_annotation
 from backend.services.rag.sop_retrieval import fetch_sop_context, pulpo_sop_mode
 
 if TYPE_CHECKING:
@@ -132,16 +134,81 @@ def scoring_pipeline() -> str:
     unknown values collapse to the off-state).
 
       single           today's one-call Gemini scoring (default)
-      annotate_only    P2: Stage A runs alongside single-stage scoring;
-                       the annotation persists, the prompt is untouched —
+      annotate_only    Stage A runs alongside single-stage scoring; the
+                       annotation persists, the prompt is untouched —
                        inspectable audio evidence accumulates before any
                        judge change
-      two_stage_shadow / two_stage — land with P3; until then they run
-                       as annotate_only (with a warning) rather than
-                       silently doing nothing
+      two_stage_shadow single-stage result is SERVED; the Stage-B judge
+                       also runs on the annotation and the compare stamp
+                       rides dialpad_call_metadata.two_stage_shadow
+      two_stage        the Stage-B judge is the score author; Stage
+                       failures fall back to single-stage
+                       (models_used.fallback records why)
     """
     mode = os.environ.get("SCORING_PIPELINE", "single").strip().lower()
     return mode if mode in _PIPELINE_MODES else "single"
+
+
+def _shadow_sections(scorecard) -> dict:
+    """Compact per-section view for the shadow stamp — enough for the
+    report to compute agreement without re-parsing full scorecards."""
+    return {
+        s.id: {"score": s.score, "yn_value": s.yn_value, "confidence": s.confidence}
+        for s in scorecard.sections
+    }
+
+
+async def _run_shadow_judge(
+    annotation, config, primary_scorecard, *,
+    sop_data, agent_name, extra_notes, call_context_text, call_id,
+) -> dict:
+    """Run the Stage-B judge in shadow (§6): compare against the served
+    single-stage scorecard, log the disagreement summary, and return the
+    stamp for dialpad_call_metadata. Never raises."""
+    started = time.monotonic()
+    try:
+        shadow_sc, judge_result = await score_annotation(
+            annotation,
+            config,
+            sop_title=sop_data["sop_title"],
+            sop_content=sop_data["sop_content"],
+            agent_name=agent_name,
+            extra_notes=extra_notes,
+            call_context_text=call_context_text,
+        )
+    except Exception as exc:  # noqa: BLE001 — shadow never blocks scoring
+        logger.exception(
+            "two_stage_shadow judge failed for call=%s — stamped as error",
+            call_id,
+        )
+        return {
+            "error": f"{type(exc).__name__}: {exc}"[:300],
+            "elapsed_s": round(time.monotonic() - started, 1),
+        }
+
+    primary = _shadow_sections(primary_scorecard)
+    shadow = _shadow_sections(shadow_sc)
+    mismatches = [
+        sid for sid, vals in shadow.items()
+        if sid in primary
+        and (vals["score"], vals["yn_value"])
+        != (primary[sid]["score"], primary[sid]["yn_value"])
+    ]
+    logger.info(
+        "two_stage_shadow call=%s judge=%s/%s: %d/%d sections disagree%s",
+        call_id, judge_result.provider, judge_result.model,
+        len(mismatches), len(shadow),
+        f" ({', '.join(mismatches)})" if mismatches else "",
+    )
+    return {
+        "scorer_provider": judge_result.provider,
+        "scorer_model": judge_result.model,
+        "sections": shadow,
+        "mismatched_section_ids": mismatches,
+        "key_strengths": shadow_sc.key_strengths,
+        "opportunities": shadow_sc.opportunities,
+        "elapsed_s": round(time.monotonic() - started, 1),
+    }
 
 
 async def score_call(
@@ -228,18 +295,14 @@ async def score_call(
 
     # Step 2.5: Stage-A annotation (TwoStageScoringDesign §3). In
     # annotate_only the artifact persists while the scoring prompt stays
-    # untouched — same log-only instinct as the CC/Pulpo shadow modes.
-    # Non-fatal throughout: annotation is an enhancement, never a
-    # scoring blocker (the cc_context doctrine).
+    # untouched; the two_stage modes judge from it (Step 3). Non-fatal
+    # throughout: annotation is an enhancement, never a scoring blocker
+    # (the cc_context doctrine) — a two_stage run without an annotation
+    # falls back to single-stage scoring.
     pipeline = scoring_pipeline()
     annotation = None
     annotation_model = None
     if pipeline != "single":
-        if pipeline in ("two_stage_shadow", "two_stage"):
-            logger.warning(
-                "SCORING_PIPELINE=%s: Stage-B judging lands with P3 — "
-                "running annotation only for call=%s", pipeline, call_id,
-            )
         try:
             annotation_model = annotator_model()
             annotation = await annotate_audio(
@@ -288,17 +351,71 @@ async def score_call(
                 "delays, or pacing issues, including timestamps. "
             )
 
-    scorecard = await score_audio(
-        audio_bytes=audio_bytes,
-        filename=filename,
-        config=config,
-        transcript_text=transcript_text,
-        sop_title=sop_data["sop_title"],
-        sop_content=sop_data["sop_content"],
-        agent_name=agent_name,
-        extra_notes=extra_notes,
-        call_context_text=call_context_text,
-    )
+    # Step 3a — two_stage: the Stage-B judge IS the score author
+    # (TwoStageScoringDesign §4); single-stage score_audio survives as
+    # Plan B (§5) so a Stage failure never loses a scoring day.
+    scorecard = None
+    scorer_provider = "gemini"
+    scorer_model = None
+    pipeline_fallback_reason = None
+    if pipeline == "two_stage":
+        if annotation is None:
+            pipeline_fallback_reason = "annotate_failed"
+        else:
+            try:
+                scorecard, judge_result = await score_annotation(
+                    annotation,
+                    config,
+                    sop_title=sop_data["sop_title"],
+                    sop_content=sop_data["sop_content"],
+                    agent_name=agent_name,
+                    extra_notes=extra_notes,
+                    call_context_text=call_context_text,
+                )
+                scorer_provider = judge_result.provider
+                scorer_model = judge_result.model
+                logger.info(
+                    "two_stage call=%s judged by %s/%s",
+                    call_id, scorer_provider, scorer_model,
+                )
+            except Exception:
+                logger.exception(
+                    "two_stage judge failed for call=%s — falling back to "
+                    "single-stage scoring", call_id,
+                )
+                pipeline_fallback_reason = "text_scorer_failed"
+        if pipeline_fallback_reason:
+            logger.warning(
+                "two_stage fallback (%s) for call=%s — models_used.fallback "
+                "will record it", pipeline_fallback_reason, call_id,
+            )
+
+    # Step 3b — single-stage Gemini scoring: the primary in single /
+    # annotate_only / two_stage_shadow, and two_stage's Plan B.
+    if scorecard is None:
+        scorecard = await score_audio(
+            audio_bytes=audio_bytes,
+            filename=filename,
+            config=config,
+            transcript_text=transcript_text,
+            sop_title=sop_data["sop_title"],
+            sop_content=sop_data["sop_content"],
+            agent_name=agent_name,
+            extra_notes=extra_notes,
+            call_context_text=call_context_text,
+        )
+
+    # Step 3c — shadow judging (§6): the served result stays single-stage;
+    # the judge runs on the same inputs and the compare stamp rides
+    # dialpad_call_metadata.two_stage_shadow for the report. Never blocks.
+    two_stage_shadow = None
+    if pipeline == "two_stage_shadow" and annotation is not None:
+        two_stage_shadow = await _run_shadow_judge(
+            annotation, config, scorecard,
+            sop_data=sop_data, agent_name=agent_name,
+            extra_notes=extra_notes, call_context_text=call_context_text,
+            call_id=call_id,
+        )
 
     return ScorecardWithMeta(
         **scorecard.model_dump(),
@@ -333,4 +450,11 @@ async def score_call(
         # model stamp (eval_store fills models_used.audio from these).
         annotated_transcript=annotation.model_dump() if annotation else None,
         annotator_model=annotation_model if annotation else None,
+        # §4 text-leg provenance + §5 fallback + §6 shadow stamp.
+        # `model` identifies the score author; single-stage keeps its
+        # (pre-existing) default when scorer_model is None.
+        scorer_provider=scorer_provider,
+        pipeline_fallback_reason=pipeline_fallback_reason,
+        two_stage_shadow=two_stage_shadow,
+        **({"model": scorer_model} if scorer_model else {}),
     )

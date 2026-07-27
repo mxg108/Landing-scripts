@@ -102,7 +102,7 @@ def test_factory_unknown_provider_collapses_to_gemini(monkeypatch):
 
 def test_factory_rejects_unknown_stage():
     with pytest.raises(ValueError):
-        resolve_stage("scoring", load_test_config("sales_lite"))
+        resolve_stage("annotation", load_test_config("sales_lite"))
 
 
 # ---------------------------------------------------------------------------
