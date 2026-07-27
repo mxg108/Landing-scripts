@@ -159,3 +159,11 @@ def test_get_all_team_ids_returns_configured_teams():
     assert "member_support" in ids
     assert "sales" in ids
     assert ids == sorted(ids)
+
+
+def test_scorecard_actions_knobs_default(config: TeamConfig):
+    """ScorecardActionsDesign §4.2/§0.3 (S5): every team gets the
+    auto-rescore threshold and the human-review mode without JSON edits —
+    absent keys mean threshold 50, authoritative (blocking) review."""
+    assert config.rescore.threshold == 50.0
+    assert config.human_review.mode == "authoritative"

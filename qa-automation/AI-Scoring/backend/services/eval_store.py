@@ -765,6 +765,17 @@ async def stamp_and_finalize(
 _CONFIDENCE_UNMAP = {"HIGH": "high", "MED": "medium", "LOW": "low"}
 
 
+def _model_from_models_used(value: Any) -> str:
+    """Text-leg model out of a qa.evaluations.models_used value — str
+    (no JSONB codec) or dict (codec) both accepted."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value or "{}")
+        except ValueError:
+            value = {}
+    return ((value or {}).get("text") or {}).get("model") or "gemini-2.5-flash"
+
+
 @dataclass
 class EvalRef:
     """A qa.evaluations row resolved by Dialpad call id, plus its AI
@@ -848,13 +859,7 @@ async def resolve_evaluation(team_id: str, job_id: str) -> Optional[EvalRef]:
             row["id"],
         )
 
-    models_used = row["models_used"]
-    if isinstance(models_used, str):
-        try:
-            models_used = json.loads(models_used or "{}")
-        except ValueError:
-            models_used = {}
-    model = ((models_used or {}).get("text") or {}).get("model") or "gemini-2.5-flash"
+    model = _model_from_models_used(row["models_used"])
 
     # AI rows only, reshaped to the Stage-1 dump (job['scorecard']
     # ['sections']) that build_approval_sections diffs against. Manual /
@@ -904,6 +909,78 @@ async def resolve_evaluation(team_id: str, job_id: str) -> Optional[EvalRef]:
 
 
 # ---------------------------------------------------------------------------
+# Auto-rescore support (ScorecardActionsDesign §4.2, slice S5)
+# ---------------------------------------------------------------------------
+
+async def fetch_auto_rescore_state(evaluation_id: int) -> Optional[dict[str, Any]]:
+    """The row facts the finalize-seam auto-rescore hook needs: fire
+    eligibility (source, latch) plus enough context to schedule the
+    fresh pass without a second probe. None when dual-write is off or
+    the row is gone."""
+    pool = await _get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT source, auto_rescored_at, agent_id, duration_ms, "
+            "  dialpad_call_id, dialpad_entry_point_call_id, "
+            "  agent_name_raw, agent_email, models_used "
+            "FROM qa.evaluations WHERE id = $1",
+            evaluation_id,
+        )
+    if row is None:
+        return None
+    return {
+        "source": row["source"],
+        "auto_rescored_at": row["auto_rescored_at"],
+        "agent_id": row["agent_id"],
+        "duration_ms": (
+            float(row["duration_ms"]) if row["duration_ms"] is not None else None
+        ),
+        "dialpad_call_id": row["dialpad_call_id"],
+        "dialpad_entry_point_call_id": row["dialpad_entry_point_call_id"],
+        "agent_name_raw": row["agent_name_raw"],
+        "agent_email": row["agent_email"],
+        "model": _model_from_models_used(row["models_used"]),
+    }
+
+
+async def stamp_auto_rescored(evaluation_id: int) -> bool:
+    """The once-EVER latch (§4.2): atomically stamp auto_rescored_at,
+    returning True only for the request that won the stamp. Stamped
+    BEFORE the re-run is scheduled, so a crash mid-rescore can't loop —
+    and the WHERE ... IS NULL guard makes a concurrent double-finalize
+    race resolve to exactly one retry."""
+    pool = await _get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE qa.evaluations SET auto_rescored_at = NOW() "
+            "WHERE id = $1 AND auto_rescored_at IS NULL RETURNING id",
+            evaluation_id,
+        )
+    return row is not None
+
+
+async def mark_human_review_required(evaluation_id: int) -> None:
+    """Enter the §0.3 review queue (required_at IS NOT NULL AND
+    completed_at IS NULL) without disturbing an existing marker —
+    COALESCE keeps the original timestamp. Used by the still-low
+    second pass (§4.2) and as informative-mode insurance for flagged
+    rows whose draft write predates the marker."""
+    pool = await _get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE qa.evaluations SET human_review_required_at = "
+            "  COALESCE(human_review_required_at, NOW()) WHERE id = $1",
+            evaluation_id,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Pool lifecycle
 # ---------------------------------------------------------------------------
 
@@ -943,6 +1020,9 @@ __all__ = [
     "resolve_evaluation",
     "call_id_from_job_id",
     "EvalRef",
+    "fetch_auto_rescore_state",
+    "stamp_auto_rescored",
+    "mark_human_review_required",
     "get_pool",
     "build_draft_row",
     "build_draft_sections",

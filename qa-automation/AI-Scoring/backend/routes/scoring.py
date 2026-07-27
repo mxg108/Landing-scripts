@@ -116,6 +116,12 @@ async def _job_from_db(team_id: str, job_id: str) -> Optional[dict]:
     }
 
 
+async def _await_coro(coro) -> None:
+    """BackgroundTasks.add_task takes a callable + args, not a coroutine
+    object — this adapts the S5 auto-rescore pass for scheduling."""
+    await coro
+
+
 def _dispatch_finalize_email(job, history_row, team_id, evaluation_id) -> None:
     """Apps Script email dispatch at the finalize seam — shared by the
     auto-flow and the approve path.
@@ -192,41 +198,75 @@ async def _publish_finalized_event(
         print(f"[sse] eval_approved publish failed (non-fatal): {e}")
 
 
-async def _postgres_post_stage1(job, evaluation_id, scorecard, config, team_id):
+async def _postgres_post_stage1(job, evaluation_id, scorecard, config, team_id,
+                                *, key=None, api_key_role="", semaphore=None):
     """Post-flip auto-flow (CutoverDesign §2): after the Stage-1 draft row
     lands, decide auto-finalize vs. human-review pause.
 
     CLEAN → engine computes + stamps versions, row finalizes, Analyst_History
     is projected from the DB row, the GAS email fires — zero analyst touch.
-    FLAGGED → the row stays draft with scoring_status='flagged_human_review';
-    the operator resolves it via the (red) editor + approve.
+    FLAGGED → mode-dependent (ScorecardActionsDesign §0.3, S5):
+    ``authoritative`` (default) holds the row in draft at
+    scoring_status='flagged_human_review' until an analyst resolves it;
+    ``informative`` finalizes and ships it like any other row, keeping
+    human_review_required_at as the queue marker.
+
+    S5 auto-rescore hook (§4.2): a finalize landing ≤ config.rescore
+    .threshold on a source='ai' row with the auto_rescored_at latch
+    unstamped takes the machine's one retry — this pass's projection,
+    SSE toast, and email are SUPPRESSED (the agent must not see a score
+    about to change) and the rescore pass is returned as a coroutine for
+    the CALLER to run (callers already inside a background task await it
+    after closing their own job bookkeeping; the approve route schedules
+    it via BackgroundTasks). A still-low score with the latch already
+    stamped enters the review queue instead (marker stamp; the coaching
+    → override escalation cue).
 
     Job payload gains state/scoring_status/overall_score so the lookup UI can
-    color the button (CutoverDesign §5)."""
+    color the button (CutoverDesign §5). Returns the rescore coroutine, or
+    None when the flow completed here."""
     flagged = eval_store.human_review_trigger_fired(
         eval_store._active_formula(team_id), scorecard.sections
     ) or eval_store.requires_analyst_review(config)
-    if flagged:
+    if flagged and config.human_review.mode == "authoritative":
         job["state"] = "draft"
         job["scoring_status"] = "flagged_human_review"
-        return
+        return None
 
     detail = await eval_store.stamp_and_finalize(
         evaluation_id, config, evaluator_email=scorecard.manager_email or ""
     )
+    score = float(detail.overall_score)
+    job["state"] = "finalized"
+    job["scoring_status"] = "complete"
+    job["overall_score"] = score
+
+    followup = await _maybe_auto_rescore(
+        job, evaluation_id, score, config, team_id,
+        key=key, api_key_role=api_key_role, semaphore=semaphore,
+        manager_email=scorecard.manager_email or "",
+    )
+    if followup is not None:
+        return followup
+
+    if flagged:
+        # Informative mode (§0.3): the row shipped; the queue marker is
+        # the annotation. Insurance stamp — build_draft_row set required_at
+        # for §3.14 triggers, but requires_analyst_review-only teams
+        # never got one.
+        await eval_store.mark_human_review_required(evaluation_id)
+        job["human_review_queued"] = True
+
     pool = await eval_store.get_pool()
     history_row = await project_evaluation(
         pool, evaluation_id, config, include_history=True
     )
-    job["state"] = "finalized"
-    job["scoring_status"] = "complete"
-    job["overall_score"] = float(detail.overall_score)
     job["history_row"] = history_row
     await _publish_finalized_event(
         team_id, job,
         agent_name=scorecard.agent_name,
         evaluator_email=scorecard.manager_email or "",
-        overall_score=float(detail.overall_score),
+        overall_score=score,
         history_row=history_row,
         dialpad_link=scorecard.dialpad_link,
         call_summary=scorecard.call_summary,
@@ -234,6 +274,102 @@ async def _postgres_post_stage1(job, evaluation_id, scorecard, config, team_id):
         opportunities=scorecard.opportunities,
     )
     _dispatch_finalize_email(job, history_row, team_id, evaluation_id)
+    return None
+
+
+async def _maybe_auto_rescore(job, evaluation_id, score, config, team_id,
+                              *, key, api_key_role, semaphore, manager_email):
+    """The §4.2 finalize-seam decision. Returns the auto-rescore pass as
+    an un-started coroutine when it fires (latch won), else None — and
+    handles the still-low-after-retry queue entry as a side effect.
+
+    Eligibility: score ≤ threshold AND source='ai' (a human-approved low
+    score is a human's judgment — never discard edits; escalation for
+    those is the S6 override) AND the once-EVER latch is unstamped. The
+    latch stamp is atomic and happens BEFORE the pass is scheduled, so a
+    crash mid-rescore can't loop (§4.2 "once means once")."""
+    threshold = config.rescore.threshold
+    if score > threshold:
+        return None
+    state = await eval_store.fetch_auto_rescore_state(evaluation_id)
+    if state is None:
+        return None
+
+    if state["auto_rescored_at"] is not None:
+        # The machine already took its one retry; a still-low score is
+        # evidence about the call (or the SOP context), not a retry cue.
+        await eval_store.mark_human_review_required(evaluation_id)
+        job["human_review_queued"] = True
+        return None
+    if state["source"] != "ai":
+        return None
+    if key is None or semaphore is None:
+        # Defensive: a caller that can't host the follow-up pass (none
+        # today) must not strand a stamped latch.
+        logging.getLogger(__name__).error(
+            "auto-rescore for eval %s skipped: no job key/semaphore", evaluation_id)
+        return None
+    if not await eval_store.stamp_auto_rescored(evaluation_id):
+        return None  # lost the race — exactly one retry, someone else's
+
+    call_id = (
+        state["dialpad_call_id"] or state["dialpad_entry_point_call_id"]
+        or job.get("call_id") or ""
+    )
+    # Machine-initiated: NOT tampering (§0.2) — audit row with the
+    # triggering key's role, no evaluator, no coaching receipt. Same
+    # superseded_model stamp as the S4 manual path (P3+ traceability).
+    append_score_audit_row(
+        api_key_role=api_key_role,
+        evaluator_email="",
+        agent_email=state["agent_email"] or "",
+        agent_name=state["agent_name_raw"],
+        call_id=call_id,
+        target_team=team_id,
+        action=audit_cfg.ACTION_RESCORED,
+        result_row=None,
+        notes=f"auto: {score} ≤ {threshold}; superseded_model={state['model']}",
+    )
+    job["auto_rescore"] = "scheduled"
+
+    async def followup():
+        _jobs[key] = {
+            "status": "pending",
+            "call_id": call_id,
+            "agent_email": state["agent_email"] or "",
+            "agent_name": state["agent_name_raw"],
+            "manager_email": manager_email,
+            "rescore": {
+                "cause": "auto",
+                "suppress_email": False,
+                "superseded_score": score,
+                "superseded_model": state["model"],
+            },
+        }
+        try:
+            audio_bytes = await download_recording(call_id)
+            transcript_data = await get_transcript(call_id)
+            try:
+                call_details = await get_call_details(call_id)
+            except DialpadRateLimited:
+                call_details = None
+            await _rescore_core(
+                key=key, team_id=team_id, config=config, call_id=call_id,
+                agent_name=state["agent_name_raw"], manager_email=manager_email,
+                duration_ms=float(state["duration_ms"] or 0),
+                expected_row_id=evaluation_id, agent_id=state["agent_id"],
+                semaphore=semaphore, api_key_role=api_key_role,
+                audio_bytes=audio_bytes, transcript_data=transcript_data,
+                call_details=call_details,
+            )
+        except Exception as e:
+            # Latch already stamped — a dead pass can't loop; the audit
+            # 'rescored' row + this error are the operator's cue to use
+            # the S4 manual rescore.
+            _jobs[key]["status"] = "error"
+            _jobs[key]["error"] = str(e)
+
+    return followup()
 
 
 @router.get("/calls")
@@ -469,11 +605,17 @@ async def score_single_call(
             )
             _jobs[key]["evaluation_id"] = evaluation_id
             _jobs[key]["scorecard"] = scorecard.model_dump()
+            followup = None
             if evaluation_id is not None:
-                await _postgres_post_stage1(
-                    _jobs[key], evaluation_id, scorecard, config, team_id
+                followup = await _postgres_post_stage1(
+                    _jobs[key], evaluation_id, scorecard, config, team_id,
+                    key=key, api_key_role=identity.role, semaphore=semaphore,
                 )
             _jobs[key]["status"] = "complete"
+            if followup is not None:
+                # S5 auto-rescore fired: this job's books are closed; the
+                # pass replaces _jobs[key] and runs its own lifecycle.
+                await followup
         except Exception as e:
             _jobs[key]["status"] = "error"
             _jobs[key]["error"] = str(e)
@@ -588,11 +730,15 @@ async def score_batch(
                 )
                 _jobs[k]["evaluation_id"] = evaluation_id
                 _jobs[k]["scorecard"] = scorecard.model_dump()
+                followup = None
                 if evaluation_id is not None:
-                    await _postgres_post_stage1(
-                        _jobs[k], evaluation_id, scorecard, config, team_id
+                    followup = await _postgres_post_stage1(
+                        _jobs[k], evaluation_id, scorecard, config, team_id,
+                        key=k, api_key_role=identity.role, semaphore=semaphore,
                     )
                 _jobs[k]["status"] = "complete"
+                if followup is not None:
+                    await followup
             except Exception as e:
                 _jobs[k]["status"] = "error"
                 _jobs[k]["error"] = str(e)
@@ -607,6 +753,7 @@ async def approve_scorecard(
     request: Request,
     job_id: str,
     approval: ApprovalRequest,
+    background_tasks: BackgroundTasks,
     identity: KeyIdentity = Depends(require_api_key),
 ):
     """
@@ -621,6 +768,13 @@ async def approve_scorecard(
     Writes a Score_Audit row with action="approved" once the evaluation
     finalizes — captured before the Apps Script email dispatch so an
     Apps Script failure still leaves the audit trail intact.
+
+    S5 (ScorecardActionsDesign §4.2): the approve path is a finalize
+    seam, so the auto-rescore hook runs here too — an unedited approval
+    (source still 'ai') landing ≤ threshold with the latch unstamped
+    suppresses projection/email and schedules the machine's one retry
+    via BackgroundTasks; the response says so (`auto_rescore`). An
+    edited approval flips source to 'ai_reviewed' and never fires.
     """
     team_id = team_id_from_path(request)
     key = _job_key(team_id, job_id)
@@ -707,22 +861,33 @@ async def approve_scorecard(
         detail = await eval_store.stamp_and_finalize(
             evaluation_id, config, evaluator_email=evaluator_email
         )
-        pool = await eval_store.get_pool()
-        history_row = await project_evaluation(
-            pool, evaluation_id, config, include_history=True
+        # S5 (§4.2): the approve path is a finalize seam too. On a fire,
+        # suppress projection/SSE/email for this pass and schedule the
+        # machine's retry after the response is sent.
+        followup = await _maybe_auto_rescore(
+            job, evaluation_id, float(detail.overall_score), config, team_id,
+            key=key, api_key_role=identity.role,
+            semaphore=_semaphore_for_key(identity),
+            manager_email=evaluator_email,
         )
-        _dispatch_finalize_email(job, history_row, team_id, evaluation_id)
-        await _publish_finalized_event(
-            team_id, job,
-            agent_name=job.get("agent_name") or sc.get("agent_name"),
-            evaluator_email=evaluator_email,
-            overall_score=float(detail.overall_score),
-            history_row=history_row,
-            dialpad_link=sc.get("dialpad_link"),
-            call_summary=sc.get("call_summary", ""),
-            key_strengths=approval.key_strengths,
-            opportunities=approval.opportunities,
-        )
+        history_row = None
+        if followup is None:
+            pool = await eval_store.get_pool()
+            history_row = await project_evaluation(
+                pool, evaluation_id, config, include_history=True
+            )
+            _dispatch_finalize_email(job, history_row, team_id, evaluation_id)
+            await _publish_finalized_event(
+                team_id, job,
+                agent_name=job.get("agent_name") or sc.get("agent_name"),
+                evaluator_email=evaluator_email,
+                overall_score=float(detail.overall_score),
+                history_row=history_row,
+                dialpad_link=sc.get("dialpad_link"),
+                call_summary=sc.get("call_summary", ""),
+                key_strengths=approval.key_strengths,
+                opportunities=approval.opportunities,
+            )
         append_score_audit_row(
             api_key_role=identity.role,
             evaluator_email=evaluator_email,
@@ -739,11 +904,14 @@ async def approve_scorecard(
         job["scoring_status"] = "complete"
         job["overall_score"] = float(detail.overall_score)
         job["evaluation_id"] = evaluation_id
+        if followup is not None:
+            background_tasks.add_task(_await_coro, followup)
         return {
             "status": "approved",
             "state": "finalized",
             "overall_score": float(detail.overall_score),
             "history_row": history_row,
+            **({"auto_rescore": "scheduled"} if followup is not None else {}),
         }
     except HTTPException:
         job["status"] = "complete"
@@ -754,6 +922,69 @@ async def approve_scorecard(
         job["status"] = "complete"
         job["error"] = str(e)
         raise HTTPException(status_code=500, detail=f"Engine approval failed: {e}")
+
+
+async def _rescore_core(*, key, team_id, config, call_id, agent_name,
+                        manager_email, duration_ms, expected_row_id, agent_id,
+                        semaphore, api_key_role, audio_bytes, transcript_data,
+                        call_details):
+    """The §4.2 rescore primitive body, shared by the manual route and
+    the S5 auto trigger: fresh score_call pass → Stage-1 upsert (REPLACE,
+    same row id, loud guard) → series rebuild while the row is draft →
+    normal auto-flow. Owns the job's status transitions, including the
+    error state — callers just await it."""
+    try:
+        _jobs[key]["status"] = "scoring"
+        async with semaphore:
+            scorecard = await score_call(
+                audio_bytes=audio_bytes,
+                filename=f"{call_id}.mp3",
+                call_id=call_id,
+                agent_name=agent_name,
+                manager_email=manager_email,
+                config=config,
+                duration_ms=duration_ms,
+                transcript_data=transcript_data,
+                call_details=call_details,
+            )
+        # §4.2.2: the Stage-1 upsert IS the REPLACE — same row id,
+        # lifecycle columns reset, sections replaced wholesale.
+        evaluation_id = await record_draft_evaluation(
+            scorecard, config, strict=True
+        )
+        if evaluation_id != expected_row_id:
+            raise RuntimeError(
+                f"rescore landed on row {evaluation_id}, expected "
+                f"{expected_row_id} — REPLACE contract violated "
+                "(dialpad_link drift?)"
+            )
+        _jobs[key]["evaluation_id"] = evaluation_id
+        _jobs[key]["scorecard"] = scorecard.model_dump()
+        # §4.2.3: row is draft now — drop its stat point and rebuild
+        # the series. Fatal by contract (§5): a failure errors the
+        # whole job loudly rather than leaving a corrupt EWMA chain.
+        if agent_id is not None:
+            pool = await eval_store.get_pool()
+            if pool is None:
+                raise RuntimeError("rescore: no DB pool for series rebuild")
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await rebuild_agent_series(conn, agent_id, config)
+        # §4.2.4: the auto-flow decides auto-finalize vs. flagged,
+        # like any first pass — the machine owns the outcome. A manual
+        # rescore landing ≤ threshold with the latch unstamped hands
+        # over to the machine's one auto retry (finalize seam is
+        # universal); the latch bounds the recursion at depth one.
+        followup = await _postgres_post_stage1(
+            _jobs[key], evaluation_id, scorecard, config, team_id,
+            key=key, api_key_role=api_key_role, semaphore=semaphore,
+        )
+        _jobs[key]["status"] = "complete"
+        if followup is not None:
+            await followup
+    except Exception as e:
+        _jobs[key]["status"] = "error"
+        _jobs[key]["error"] = str(e)
 
 
 @router.post("/score/{job_id}/rescore")
@@ -913,52 +1144,14 @@ async def rescore_evaluation(
     agent_id = ref.agent_id
 
     async def run():
-        try:
-            _jobs[key]["status"] = "scoring"
-            async with semaphore:
-                scorecard = await score_call(
-                    audio_bytes=audio_bytes,
-                    filename=f"{call_id}.mp3",
-                    call_id=call_id,
-                    agent_name=agent_name,
-                    manager_email=payload.evaluator_email,
-                    config=config,
-                    duration_ms=duration_ms,
-                    transcript_data=transcript_data,
-                    call_details=call_details,
-                )
-            # §4.2.2: the Stage-1 upsert IS the REPLACE — same row id,
-            # lifecycle columns reset, sections replaced wholesale.
-            evaluation_id = await record_draft_evaluation(
-                scorecard, config, strict=True
-            )
-            if evaluation_id != expected_row_id:
-                raise RuntimeError(
-                    f"rescore landed on row {evaluation_id}, expected "
-                    f"{expected_row_id} — REPLACE contract violated "
-                    "(dialpad_link drift?)"
-                )
-            _jobs[key]["evaluation_id"] = evaluation_id
-            _jobs[key]["scorecard"] = scorecard.model_dump()
-            # §4.2.3: row is draft now — drop its stat point and rebuild
-            # the series. Fatal by contract (§5): a failure errors the
-            # whole job loudly rather than leaving a corrupt EWMA chain.
-            if agent_id is not None:
-                pool = await eval_store.get_pool()
-                if pool is None:
-                    raise RuntimeError("rescore: no DB pool for series rebuild")
-                async with pool.acquire() as conn:
-                    async with conn.transaction():
-                        await rebuild_agent_series(conn, agent_id, config)
-            # §4.2.4: the auto-flow decides auto-finalize vs. flagged,
-            # like any first pass — the machine owns the outcome.
-            await _postgres_post_stage1(
-                _jobs[key], evaluation_id, scorecard, config, team_id
-            )
-            _jobs[key]["status"] = "complete"
-        except Exception as e:
-            _jobs[key]["status"] = "error"
-            _jobs[key]["error"] = str(e)
+        await _rescore_core(
+            key=key, team_id=team_id, config=config, call_id=call_id,
+            agent_name=agent_name, manager_email=payload.evaluator_email,
+            duration_ms=duration_ms, expected_row_id=expected_row_id,
+            agent_id=agent_id, semaphore=semaphore,
+            api_key_role=identity.role, audio_bytes=audio_bytes,
+            transcript_data=transcript_data, call_details=call_details,
+        )
 
     background_tasks.add_task(run)
     return {

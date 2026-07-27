@@ -1014,15 +1014,24 @@ class _FakeScorecard:
 
 
 def _stub_rescore_pipeline(monkeypatch, *, flagged=False, draft_row_id=2377,
-                           engine_score=88.0):
+                           engine_score=88.0, engine_scores=None,
+                           auto_state=None, latch_wins=True, hr_mode=None):
     """Stub the whole rescore background pipeline, recording operation
     order in caps['ops'] — the §4.2 order proof (draft → rebuild → stamp)
-    rides on it."""
+    rides on it.
+
+    S5 knobs: ``engine_scores`` = successive stamp_and_finalize results
+    (falls back to the constant ``engine_score``); ``auto_state`` overrides
+    the fetch_auto_rescore_state row (stateful — the fake latch stamp
+    mutates it, so a second fetch sees auto_rescored_at set, mirroring the
+    DB); ``latch_wins=False`` simulates losing the stamp race;
+    ``hr_mode`` overrides config.human_review.mode via get_team_config."""
     caps = {"score_calls": [], "ops": [], "rebuilds": [], "dispatches": [],
-            "approvals": []}
+            "approvals": [], "downloads": [], "finalized_scores": []}
 
     async def fake_download(call_id):
         caps["download"] = call_id
+        caps["downloads"].append(call_id)
         return b"AUDIO"
     monkeypatch.setattr(scoring_module, "download_recording", fake_download)
 
@@ -1052,14 +1061,58 @@ def _stub_rescore_pipeline(monkeypatch, *, flagged=False, draft_row_id=2377,
         scoring_module.eval_store, "requires_analyst_review",
         lambda config: False)
 
-    class _Detail:
-        overall_score = engine_score
+    scores = list(engine_scores) if engine_scores is not None else None
 
     async def fake_stamp(evaluation_id, config, evaluator_email):
         caps["ops"].append("stamp")
+        s = scores.pop(0) if scores else engine_score
+        caps["finalized_scores"].append(s)
+
+        class _Detail:
+            overall_score = s
         return _Detail()
     monkeypatch.setattr(
         scoring_module.eval_store, "stamp_and_finalize", fake_stamp)
+
+    # S5 — auto-rescore state trio, stateful like the DB.
+    state = dict(auto_state) if auto_state else {
+        "source": "ai", "auto_rescored_at": None, "agent_id": 7,
+        "duration_ms": 180000.0, "dialpad_call_id": "5035229460504576",
+        "dialpad_entry_point_call_id": "6105002063634432",
+        "agent_name_raw": "Luis Rubio", "agent_email": "luis@landing.com",
+        "model": "gemini-2.5-flash",
+    }
+    caps["auto_state"] = state
+
+    async def fake_fetch_state(evaluation_id):
+        caps["ops"].append("fetch_state")
+        return dict(state)
+    monkeypatch.setattr(
+        scoring_module.eval_store, "fetch_auto_rescore_state", fake_fetch_state)
+
+    async def fake_stamp_latch(evaluation_id):
+        caps["ops"].append("stamp_latch")
+        if not latch_wins:
+            return False
+        state["auto_rescored_at"] = "2026-07-26T12:00:00+00:00"
+        return True
+    monkeypatch.setattr(
+        scoring_module.eval_store, "stamp_auto_rescored", fake_stamp_latch)
+
+    async def fake_mark_queue(evaluation_id):
+        caps["ops"].append("mark_queue")
+    monkeypatch.setattr(
+        scoring_module.eval_store, "mark_human_review_required", fake_mark_queue)
+
+    if hr_mode is not None:
+        from backend.config.team_config import (
+            HumanReviewConfig, get_team_config as _real_get_config,
+        )
+        base = _real_get_config("member_support")
+        patched = base.model_copy(
+            update={"human_review": HumanReviewConfig(mode=hr_mode)})
+        monkeypatch.setattr(
+            scoring_module, "get_team_config", lambda team_id: patched)
 
     pool = _NullPool()
 
@@ -1330,3 +1383,228 @@ def test_rescore_privileged_key_unrostered_allowed(client, monkeypatch):
     rescored = [r for r in client.audit_rows if r["action"] == "rescored"]
     assert len(rescored) == 1
     assert rescored[0]["api_key_role"] == "privileged"
+
+
+# ---------------------------------------------------------------------------
+# S5 — auto rescore at the finalize seam + human_review.mode
+# (ScorecardActionsDesign §4.2 auto / §0.3)
+# ---------------------------------------------------------------------------
+
+_SCORE_URL = "/api/member_support/score"
+_SCORE_FORM = {
+    "call_id": "call-abc",
+    "agent_email": "luis@landing.com",
+    "manager_email": "ana@landing.com",
+}
+_SCORE_KEY = ("member_support", "call-abc_Luis_Rubio")
+
+
+def test_low_first_pass_fires_auto_rescore_once(client, monkeypatch):
+    """§4.2 auto: finalize lands ≤ threshold on source='ai' → latch stamps
+    BEFORE the re-run, this pass's projection + email are suppressed, the
+    machine's one retry runs to a normal finalize with the rescore_auto
+    disclaimer."""
+    caps = _stub_rescore_pipeline(monkeypatch, engine_scores=[42.0, 88.0])
+
+    resp = client.post(
+        _SCORE_URL, headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        data=_SCORE_FORM,
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Order proof: latch stamped before the fresh pass starts (§4.2
+    # "once means once"), and exactly ONE projection — the low first
+    # pass never reached the sheet or the agent.
+    assert caps["ops"] == [
+        "draft", "stamp", "fetch_state", "stamp_latch",   # pass 1: fired
+        "draft", "rebuild", "stamp", "project",           # pass 2: normal
+    ]
+    assert caps["downloads"] == ["call-abc", "5035229460504576"]
+    assert caps["dispatches"] == [{"row": 321, "disclaimer": "rescore_auto"}]
+
+    # Machine receipt: 'rescored' audit row, no evaluator, model stamp.
+    actions = [r["action"] for r in client.audit_rows]
+    assert actions == ["scored", "rescored"]
+    rescored = client.audit_rows[1]
+    assert rescored["notes"] == "auto: 42.0 ≤ 50.0; superseded_model=gemini-2.5-flash"
+    assert rescored["evaluator_email"] == ""
+    assert rescored["api_key_role"] == "team"
+
+    job = scoring_module._jobs[scoring_module._job_key(*_SCORE_KEY)]
+    assert job["status"] == "complete"
+    assert job["state"] == "finalized"
+    assert job["overall_score"] == 88.0
+    assert job["rescore"]["cause"] == "auto"
+    assert job["rescore"]["superseded_score"] == 42.0
+
+
+def test_exact_threshold_fires(client, monkeypatch):
+    """The trigger is ≤, not < (design: 'lands overall_score ≤ 50')."""
+    caps = _stub_rescore_pipeline(monkeypatch, engine_scores=[50.0, 88.0])
+    resp = client.post(
+        _SCORE_URL, headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        data=_SCORE_FORM,
+    )
+    assert resp.status_code == 200, resp.text
+    assert "stamp_latch" in caps["ops"]
+    assert caps["finalized_scores"] == [50.0, 88.0]
+
+
+def test_low_ai_reviewed_does_not_fire(client, monkeypatch):
+    """§4.2: a human-approved low score is a human's judgment — never
+    discarded by the machine. Normal projection + email proceed."""
+    caps = _stub_rescore_pipeline(
+        monkeypatch, engine_scores=[42.0],
+        auto_state={
+            "source": "ai_reviewed", "auto_rescored_at": None, "agent_id": 7,
+            "duration_ms": 180000.0, "dialpad_call_id": "5035229460504576",
+            "dialpad_entry_point_call_id": None,
+            "agent_name_raw": "Luis Rubio", "agent_email": "luis@landing.com",
+            "model": "gemini-2.5-flash",
+        },
+    )
+    resp = client.post(
+        _SCORE_URL, headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        data=_SCORE_FORM,
+    )
+    assert resp.status_code == 200, resp.text
+    assert caps["ops"] == ["draft", "stamp", "fetch_state", "project"]
+    assert caps["dispatches"] == [{"row": 321, "disclaimer": None}]
+    assert [r["action"] for r in client.audit_rows] == ["scored"]
+    job = scoring_module._jobs[scoring_module._job_key(*_SCORE_KEY)]
+    assert job["state"] == "finalized"
+    assert "human_review_queued" not in job
+
+
+def test_latch_already_stamped_no_loop_enters_queue(client, monkeypatch):
+    """Crash-sim (§4.2 'once means once'): the latch survived a dead
+    rescore attempt — the next low finalize does NOT re-fire; the eval
+    enters the review queue and ships normally."""
+    caps = _stub_rescore_pipeline(monkeypatch, engine_scores=[42.0])
+    caps["auto_state"]["auto_rescored_at"] = "2026-07-25T09:00:00+00:00"
+
+    resp = client.post(
+        _SCORE_URL, headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        data=_SCORE_FORM,
+    )
+    assert resp.status_code == 200, resp.text
+    assert caps["ops"] == ["draft", "stamp", "fetch_state", "mark_queue", "project"]
+    assert "stamp_latch" not in caps["ops"]
+    assert len(caps["dispatches"]) == 1
+    job = scoring_module._jobs[scoring_module._job_key(*_SCORE_KEY)]
+    assert job["human_review_queued"] is True
+    assert job["state"] == "finalized"
+
+
+def test_still_low_second_pass_enters_review_queue(client, monkeypatch):
+    """The full ladder rung: fire → retry lands still-low → review queue
+    (the coaching → override escalation cue), projected + emailed with
+    the disclaimer."""
+    caps = _stub_rescore_pipeline(monkeypatch, engine_scores=[42.0, 45.0])
+
+    resp = client.post(
+        _SCORE_URL, headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        data=_SCORE_FORM,
+    )
+    assert resp.status_code == 200, resp.text
+    assert caps["ops"] == [
+        "draft", "stamp", "fetch_state", "stamp_latch",
+        "draft", "rebuild", "stamp", "fetch_state", "mark_queue", "project",
+    ]
+    assert caps["dispatches"] == [{"row": 321, "disclaimer": "rescore_auto"}]
+    job = scoring_module._jobs[scoring_module._job_key(*_SCORE_KEY)]
+    assert job["overall_score"] == 45.0
+    assert job["human_review_queued"] is True
+    # Exactly one 'rescored' receipt — the second low did NOT re-fire.
+    assert [r["action"] for r in client.audit_rows] == ["scored", "rescored"]
+
+
+def test_lost_latch_race_proceeds_normally(client, monkeypatch):
+    """stamp_auto_rescored returning False means another finalize won the
+    one retry — this pass ships as normal, no second run."""
+    caps = _stub_rescore_pipeline(
+        monkeypatch, engine_scores=[42.0], latch_wins=False)
+    resp = client.post(
+        _SCORE_URL, headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        data=_SCORE_FORM,
+    )
+    assert resp.status_code == 200, resp.text
+    assert caps["ops"] == ["draft", "stamp", "fetch_state", "stamp_latch", "project"]
+    assert len(caps["dispatches"]) == 1
+    assert [r["action"] for r in client.audit_rows] == ["scored"]
+
+
+def test_informative_mode_finalizes_flagged_with_queue_marker(client, monkeypatch):
+    """§0.3: informative mode ships flagged rows — finalized, projected,
+    emailed — keeping the review-queue marker instead of blocking."""
+    caps = _stub_rescore_pipeline(
+        monkeypatch, flagged=True, engine_score=88.0, hr_mode="informative")
+
+    resp = client.post(
+        _SCORE_URL, headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        data=_SCORE_FORM,
+    )
+    assert resp.status_code == 200, resp.text
+    assert caps["ops"] == ["draft", "stamp", "mark_queue", "project"]
+    assert len(caps["dispatches"]) == 1
+    job = scoring_module._jobs[scoring_module._job_key(*_SCORE_KEY)]
+    assert job["state"] == "finalized"
+    assert job["scoring_status"] == "complete"
+    assert job["human_review_queued"] is True
+
+
+def test_authoritative_mode_still_blocks_flagged(client, monkeypatch):
+    """Default mode unchanged: flagged rows hold in draft for resolution."""
+    caps = _stub_rescore_pipeline(monkeypatch, flagged=True, engine_score=88.0)
+    resp = client.post(
+        _SCORE_URL, headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        data=_SCORE_FORM,
+    )
+    assert resp.status_code == 200, resp.text
+    assert caps["ops"] == ["draft"]
+    assert caps["dispatches"] == []
+    job = scoring_module._jobs[scoring_module._job_key(*_SCORE_KEY)]
+    assert job["state"] == "draft"
+    assert job["scoring_status"] == "flagged_human_review"
+
+
+def test_approve_low_unedited_fires_auto_rescore(client, monkeypatch):
+    """§4.2: the approve path is a finalize seam too. An approval whose
+    row is still source='ai' landing ≤ threshold suppresses projection/
+    email, responds with auto_rescore=scheduled, and the retry runs after
+    the response."""
+    caps = _stub_rescore_pipeline(monkeypatch, engine_scores=[42.0, 88.0])
+    _resolve_stub(monkeypatch, _eval_ref())
+
+    resp = client.post(
+        "/api/member_support/score/5035229460504576_Luis_Rubio/approve",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={
+            "sections": [], "key_strengths": "x", "opportunities": "y",
+            "evaluator_email": "ana@landing.com",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["auto_rescore"] == "scheduled"
+    assert body["history_row"] is None
+    assert body["overall_score"] == 42.0
+
+    # The retry ran via BackgroundTasks after the response: one projection
+    # + one disclaimer dispatch total, both from the second pass.
+    assert caps["ops"] == [
+        "stamp", "fetch_state", "stamp_latch",            # approve: fired
+        "draft", "rebuild", "stamp", "project",           # retry pass
+    ]
+    assert caps["dispatches"] == [{"row": 321, "disclaimer": "rescore_auto"}]
+    actions = [r["action"] for r in client.audit_rows]
+    assert actions == ["rescored", "approved"]
+    assert client.audit_rows[1]["result_row"] is None
+
+    key = scoring_module._job_key(
+        "member_support", "5035229460504576_Luis_Rubio")
+    job = scoring_module._jobs[key]
+    assert job["status"] == "complete"
+    assert job["state"] == "finalized"
+    assert job["overall_score"] == 88.0
+    assert job["rescore"]["cause"] == "auto"

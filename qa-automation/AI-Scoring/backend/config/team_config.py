@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -97,6 +97,29 @@ class StatsConfig(BaseModel):
     spc_sigma_multiplier: float = 2.0
 
 
+class RescoreConfig(BaseModel):
+    """ScorecardActionsDesign §4.2 — the auto-rescore knob.
+
+    A finalize landing ``overall_score <= threshold`` on a ``source='ai'``
+    row triggers the machine's one retry (once EVER per evaluation —
+    the ``auto_rescored_at`` latch). Lives in team JSON beside the stats
+    knobs; absent → default 50."""
+    threshold: float = 50.0
+
+
+class HumanReviewConfig(BaseModel):
+    """ScorecardActionsDesign §0.3 — the Human-Review pipeline mode.
+
+    ``authoritative`` (default): a fired §3.14 trigger BLOCKS finalize —
+    the row holds in draft at scoring_status='flagged_human_review' until
+    an analyst resolves it. ``informative``: flagged rows finalize and
+    ship like any other; ``human_review_required_at`` stays as the queue
+    marker (required_at IS NOT NULL AND completed_at IS NULL) and the
+    blocking scoring_status is never set. Designed now so the flip lands
+    as team-JSON config, not a redesign."""
+    mode: Literal["authoritative", "informative"] = "authoritative"
+
+
 class HrExportSectionConfig(BaseModel):
     """One HR-visible section: rubric section id + the header HR sees."""
     id: str
@@ -141,6 +164,8 @@ class TeamConfig(BaseModel):
     sheets: SheetsConfig
     rubric: Rubric
     stats: StatsConfig = Field(default_factory=StatsConfig)
+    rescore: RescoreConfig = Field(default_factory=RescoreConfig)
+    human_review: HumanReviewConfig = Field(default_factory=HumanReviewConfig)
     hr_export: Optional[HrExportConfig] = None
     hr_internal_section_ids: list[str] = Field(
         default_factory=list,
