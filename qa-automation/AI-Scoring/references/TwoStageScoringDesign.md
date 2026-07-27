@@ -317,6 +317,17 @@ this design needs **no migration** (column 006, JSONB stamps only).
 4. **Annotator model:** trial **both** `gemini-2.5-flash` AND
    `gemini-2.5-pro` — the P2 smoke runs the same calls through each and
    the Spanish spot-check compares annotations side by side.
+   **CLOSED BY WALKOVER (2026-07-28):** `gemini-2.5-pro` is shut to new
+   API users, and a live probe matrix showed **every Gemini 3.x model
+   rejects audio input on our key** (400 on file-URI and inline alike;
+   identical requests succeed text-only). `gemini-2.5-flash` is
+   currently the ONLY audio-capable Gemini available to us — flash by
+   default and by necessity. ⚠ Strategic note: the whole audio leg
+   (Stage A + single-stage scoring) rides on one model that Google
+   could gate the way it gated 2.5-pro. This strengthens both the
+   two-stage split (the judge is already provider-portable) and the
+   LandGPT audio-leg independence case. Re-probe occasionally with
+   `scripts/annotate_smoke.py --model gemini-pro-latest`.
 5. **PII surface:** carried as **debt**, deliberately. The forcing
    function is the future **Agent view** — agents monitoring their own
    progress/performance — where raw transcriptions must NOT appear.

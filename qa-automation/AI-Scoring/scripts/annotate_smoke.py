@@ -38,10 +38,15 @@ from backend.services.dialpad_client import (  # noqa: E402
 )
 
 _OUT_DIR = Path(__file__).resolve().parent / "annotations"
-# "pro" is Google's rolling alias — gemini-2.5-pro 404s for new API users
-# (observed 2026-07-26: "no longer available to new users"). Any raw
-# model id also works as --model (e.g. gemini-3-pro-preview,
-# gemini-3.5-flash) for one-off trials.
+# AUDIO-CAPABILITY STATUS (probed live 2026-07-28): gemini-2.5-flash is
+# the ONLY model on this key that accepts audio input. gemini-2.5-pro is
+# closed to new API users (404), and EVERY Gemini 3.x model (pro-latest,
+# 3.1-pro-preview, 3.5-flash, 3-flash-preview, flash-latest) returns
+# 400 INVALID_ARGUMENT on audio parts — file-URI and inline alike; the
+# same requests succeed text-only. §10.4's flash-vs-pro trial therefore
+# closed by walkover. The "pro" alias stays pointed at the rolling name
+# so it starts working the day Google re-opens audio; any raw model id
+# also works as --model for re-probing.
 _MODELS = {
     "flash": "gemini-2.5-flash",
     "pro": "gemini-pro-latest",
