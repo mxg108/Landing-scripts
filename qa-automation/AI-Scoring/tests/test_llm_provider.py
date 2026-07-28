@@ -50,7 +50,9 @@ class FakeGenaiClient:
 
 
 class FakeAnthropicClient:
-    """Mimics the anthropic SDK's messages.create; records the call."""
+    """Mimics the anthropic SDK's messages.stream (the provider always
+    streams — the SDK refuses non-streaming calls at judge-sized
+    max_tokens); records the call kwargs."""
 
     def __init__(self, stop_reason="end_turn", text="hello"):
         self.calls = []
@@ -65,10 +67,20 @@ class FakeAnthropicClient:
             content = [_Block()] if text else []
         _Resp.stop_reason = stop_reason
 
-        class _Messages:
-            async def create(self, **kwargs):
-                outer.calls.append(kwargs)
+        class _StreamManager:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get_final_message(self):
                 return _Resp()
+
+        class _Messages:
+            def stream(self, **kwargs):
+                outer.calls.append(kwargs)
+                return _StreamManager()
 
         self.messages = _Messages()
 
