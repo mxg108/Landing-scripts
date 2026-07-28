@@ -2210,3 +2210,25 @@ def test_whoami_reports_role(client):
         headers={"Authorization": f"Bearer {PRIV_TOKEN}"},
     )
     assert resp.json()["role"] == "privileged"
+
+
+def test_rescore_link_tail_row_downloads_by_link_tail(client, monkeypatch):
+    """A row resolved via the link-tail arm can have NULL/foreign id
+    columns — the fresh pass must still download audio by the link's
+    trailing segment (2026-07-27 report)."""
+    caps = _stub_rescore_pipeline(monkeypatch)
+    _resolve_stub(
+        monkeypatch,
+        _eval_ref(state="finalized", overall_score=62.5,
+                  dialpad_call_id=None, dialpad_entry_point_call_id=None,
+                  dialpad_link="https://dialpad.com/callhistory/callreview/6537476115210240"),
+    )
+    resp = client.post(
+        "/api/member_support/score/6537476115210240/rescore",
+        headers={"Authorization": f"Bearer {TEAM_TOKEN}"},
+        json={"evaluator_email": "ana@landing.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert caps["downloads"][0] == "6537476115210240"
+    rescored = [r for r in client.audit_rows if r["action"] == "rescored"]
+    assert rescored[0]["call_id"] == "6537476115210240"

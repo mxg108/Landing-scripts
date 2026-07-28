@@ -817,6 +817,30 @@ def call_id_from_job_id(job_id: str) -> str:
     return head if head.isdigit() else ""
 
 
+def call_id_from_dialpad_link(link: Optional[str]) -> str:
+    """Trailing path segment of dialpad_link — the id the read surfaces
+    key on (the /datapoint URL, SSE eval_id, Analyst_History link cell).
+    Mirrors the frontends' parser: strip markdown '[' wrapping and query
+    strings, trim a trailing slash."""
+    if not link:
+        return ""
+    clean = link.split("[")[0].strip().split("?")[0].strip()
+    return clean.rstrip("/").rsplit("/", 1)[-1]
+
+
+# One literal on purpose — tests/test_schema_alignment.py reads SELECT
+# lists out of the source, so the column list must sit in a single
+# string with its FROM clause.
+_RESOLVE_SELECT = (
+    "SELECT id, team_id, state, source, scoring_status, "
+    "  agent_name_raw, agent_email, evaluator_email, "
+    "  dialpad_call_id, dialpad_entry_point_call_id, dialpad_link, "
+    "  call_summary, key_strengths, opportunities, overall_score, "
+    "  models_used, agent_id, call_duration_ms "
+    "FROM qa.evaluations "
+)
+
+
 async def resolve_evaluation(team_id: str, job_id: str) -> Optional[EvalRef]:
     """Resolve an action target from Postgres, not the in-memory job store.
 
@@ -828,6 +852,14 @@ async def resolve_evaluation(team_id: str, job_id: str) -> Optional[EvalRef]:
     picks. Unlike that read-path helper, drafts resolve too — actions
     target any lifecycle state.
 
+    THIRD arm (2026-07-27 report): the datapoint read path falls back to
+    matching the dialpad_link's TRAILING SEGMENT (routes/datapoints.py
+    365-day scan), so rows whose link-tail id matches neither id column
+    are still reachable — and were then unresolvable for actions. On an
+    id-column miss we probe by link substring and verify the exact tail
+    in Python, so anything the datapoint page can render, the actions
+    can resolve.
+
     Returns None when dual-write is off (no pool), the job_id has no
     numeric call id, or nothing matches."""
     call_id = call_id_from_job_id(job_id)
@@ -838,17 +870,24 @@ async def resolve_evaluation(team_id: str, job_id: str) -> Optional[EvalRef]:
         return None
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, team_id, state, source, scoring_status, "
-            "  agent_name_raw, agent_email, evaluator_email, "
-            "  dialpad_call_id, dialpad_entry_point_call_id, dialpad_link, "
-            "  call_summary, key_strengths, opportunities, overall_score, "
-            "  models_used, agent_id, call_duration_ms "
-            "FROM qa.evaluations "
+            _RESOLVE_SELECT +
             "WHERE team_id = $1 "
             "AND (dialpad_entry_point_call_id = $2 OR dialpad_call_id = $2) "
             "ORDER BY COALESCE(call_connected_at, created_at) LIMIT 1",
             team_id, call_id,
         )
+        if row is None:
+            candidates = await conn.fetch(
+                _RESOLVE_SELECT +
+                "WHERE team_id = $1 AND dialpad_link LIKE '%' || $2 || '%' "
+                "ORDER BY COALESCE(call_connected_at, created_at)",
+                team_id, call_id,
+            )
+            row = next(
+                (c for c in candidates
+                 if call_id_from_dialpad_link(c["dialpad_link"]) == call_id),
+                None,
+            )
         if row is None:
             return None
         section_rows = await conn.fetch(
@@ -1219,6 +1258,7 @@ __all__ = [
     "stamp_and_finalize",
     "resolve_evaluation",
     "call_id_from_job_id",
+    "call_id_from_dialpad_link",
     "EvalRef",
     "fetch_auto_rescore_state",
     "stamp_auto_rescored",
