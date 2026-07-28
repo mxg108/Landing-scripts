@@ -842,7 +842,7 @@ async def resolve_evaluation(team_id: str, job_id: str) -> Optional[EvalRef]:
             "  agent_name_raw, agent_email, evaluator_email, "
             "  dialpad_call_id, dialpad_entry_point_call_id, dialpad_link, "
             "  call_summary, key_strengths, opportunities, overall_score, "
-            "  models_used, agent_id, duration_ms "
+            "  models_used, agent_id, call_duration_ms "
             "FROM qa.evaluations "
             "WHERE team_id = $1 "
             "AND (dialpad_entry_point_call_id = $2 OR dialpad_call_id = $2) "
@@ -902,8 +902,12 @@ async def resolve_evaluation(team_id: str, job_id: str) -> Optional[EvalRef]:
         model=model,
         sections=sections,
         agent_id=row["agent_id"],
+        # Column is call_duration_ms (migration 006) — the EvalRef field
+        # keeps the scorecard-model name. The 2026-07-27 prod incident:
+        # SELECTing the model-side name 500'd every §3 resolution.
         duration_ms=(
-            float(row["duration_ms"]) if row["duration_ms"] is not None else None
+            float(row["call_duration_ms"])
+            if row["call_duration_ms"] is not None else None
         ),
     )
 
@@ -922,7 +926,7 @@ async def fetch_auto_rescore_state(evaluation_id: int) -> Optional[dict[str, Any
         return None
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT source, auto_rescored_at, agent_id, duration_ms, "
+            "SELECT source, auto_rescored_at, agent_id, call_duration_ms, "
             "  dialpad_call_id, dialpad_entry_point_call_id, "
             "  agent_name_raw, agent_email, models_used "
             "FROM qa.evaluations WHERE id = $1",
@@ -935,7 +939,8 @@ async def fetch_auto_rescore_state(evaluation_id: int) -> Optional[dict[str, Any
         "auto_rescored_at": row["auto_rescored_at"],
         "agent_id": row["agent_id"],
         "duration_ms": (
-            float(row["duration_ms"]) if row["duration_ms"] is not None else None
+            float(row["call_duration_ms"])
+            if row["call_duration_ms"] is not None else None
         ),
         "dialpad_call_id": row["dialpad_call_id"],
         "dialpad_entry_point_call_id": row["dialpad_entry_point_call_id"],

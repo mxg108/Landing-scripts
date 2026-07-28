@@ -81,3 +81,23 @@ class TestGasDisclaimerTemplate:
         main = (self.GAS / "src" / "Main.js").read_text()
         assert "payload.disclaimer" in main
         assert "_processHistoryRow(entry, disclaimer)" in main
+
+
+class TestOverrideFormTheming:
+    """2026-07-27 report: the override form's unstyled labels inherited
+    the page's dark body color onto the dark approve-bar — invisible
+    dark-on-dark, including the §4.3a acknowledgment text. The form must
+    carry the explicit light-on-dark theme class."""
+
+    def test_override_form_uses_theme_class(self):
+        assert 'class="override-form"' in SCORECARD
+
+    def test_theme_class_styles_labels_and_inputs(self):
+        assert ".override-form label" in SCORECARD
+        assert "color: rgba(255,255,255,0.85)" in SCORECARD
+        assert ".override-form textarea" in SCORECARD
+
+    def test_toggle_keys_off_explicit_block(self):
+        # Class-based display:none leaves inline style empty — comparing
+        # to 'none' would invert the first click.
+        assert "form.style.display === 'block' ? 'none' : 'block'" in SCORECARD

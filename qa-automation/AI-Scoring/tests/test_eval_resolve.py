@@ -68,7 +68,7 @@ def _eval_row(**overrides):
             {"text": {"provider": "gemini", "model": "gemini-2.5-flash"}}
         ),
         "agent_id": 7,
-        "duration_ms": 180000,
+        "call_duration_ms": 180000,
     }
     row.update(overrides)
     return row
@@ -232,7 +232,7 @@ class TestAutoRescoreHelpers:
     async def test_fetch_state_maps_row(self, monkeypatch):
         conn = _S5Conn(row={
             "source": "ai", "auto_rescored_at": None, "agent_id": 7,
-            "duration_ms": 180000, "dialpad_call_id": "503",
+            "call_duration_ms": 180000, "dialpad_call_id": "503",
             "dialpad_entry_point_call_id": "610",
             "agent_name_raw": "Juan Celso", "agent_email": "j@landing.com",
             "models_used": json.dumps({"text": {"model": "claude-sonnet-5"}}),
