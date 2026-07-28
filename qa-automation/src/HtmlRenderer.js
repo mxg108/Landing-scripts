@@ -14,12 +14,20 @@ class HtmlRenderer {
    * @param {ScoreCard}       scoreCard
    * @param {FeedbackCard}    feedbackCard
    * @param {ProgressionCard} progressionCard
+   * @param {string=}         disclaimer — ScorecardActionsDesign §4.2.7/
+   *                          §4.3a cause tag sent by the backend when this
+   *                          email supersedes or resolves a previous score
+   *                          (rescore_manual | rescore_auto | override |
+   *                          review_resolution | edit_finalized). Empty/
+   *                          unknown → no banner (first-pass emails are
+   *                          byte-identical to before).
    */
-  constructor(entry, scoreCard, feedbackCard, progressionCard) {
+  constructor(entry, scoreCard, feedbackCard, progressionCard, disclaimer) {
     this.entry           = entry;
     this.scoreCard       = scoreCard;
     this.feedbackCard    = feedbackCard;
     this.progressionCard = progressionCard;
+    this.disclaimer      = disclaimer || '';
   }
 
   /**
@@ -39,6 +47,9 @@ class HtmlRenderer {
 
     // ── Email header ──────────────────────────────────────────────
     html += this._renderHeader();
+
+    // ── Disclaimer banner (ScorecardActions S7) ───────────────────
+    html += this._renderDisclaimer();
 
     // ── Card slots ────────────────────────────────────────────────
     html += '<tr><td style="padding:24px;">';
@@ -61,6 +72,49 @@ class HtmlRenderer {
   // ────────────────────────────────────────────────────────────────
 
   /** @private */
+  /**
+   * The §4.2.7/§4.3a disclaimer banner — rendered only when the backend
+   * tagged the dispatch with a cause. The copy names WHY this email
+   * supersedes/resolves a previous score; unknown tags get the generic
+   * superseded text (forward-compatible with new causes).
+   * @private
+   */
+  _renderDisclaimer() {
+    if (!this.disclaimer) return '';
+    var TEXTS = {
+      rescore_manual:
+        'This call was re-evaluated at your team’s request. This email '
+        + 'replaces any previous evaluation you received for this call.',
+      rescore_auto:
+        'As part of routine quality control, the scoring system '
+        + 'automatically re-evaluated this call once. This email replaces '
+        + 'any previous evaluation you received for this call.',
+      override:
+        'The overall score in this evaluation was set by a human reviewer '
+        + 'and supersedes the automated score. Your team lead or manager '
+        + 'will follow up with you about this change.',
+      review_resolution:
+        'This evaluation was flagged for human review and has been '
+        + 'reviewed and finalized by a person before sending.',
+      edit_finalized:
+        'This evaluation was manually revised by a human reviewer after '
+        + 'its original delivery and re-finalized. This email replaces the '
+        + 'previous evaluation you received for this call.',
+    };
+    var text = TEXTS[this.disclaimer]
+      || ('This evaluation was updated after its original processing. '
+          + 'This email replaces any previous version you received for '
+          + 'this call.');
+    return '<tr><td style="'
+         + 'background:#FFF7ED;'
+         + 'border-bottom:1px solid #FDBA74;'
+         + 'padding:12px 24px;'
+         + 'font-family:Arial,sans-serif;font-size:12px;line-height:1.5;'
+         + 'color:#7C2D12;">'
+         + '<strong>Please note:</strong> ' + text
+         + '</td></tr>';
+  }
+
   _renderHeader() {
     return '<tr><td style="'
          + 'background:' + CONFIG.COLORS.DARK_NAVY + ';'

@@ -1057,15 +1057,15 @@ async def apply_override(
     return coaching_id
 
 
-async def create_resolution_receipt(
+async def _receipt_for_eval(
     *, evaluation_id: int, team_id: str, evaluator_email: str,
-    agent_name: str,
+    action_plan: str, per_eval_note: str,
 ) -> Optional[int]:
-    """§4.3a.3 — a human-review resolution creates the same receipt: the
-    flag said 'a human must look'; this records that a human looked AND
-    owes the agent notice. Returns None (logged) when the row has no
-    linked agent — the resolution itself must not be blocked on roster
-    hygiene, and the audit note records the gap."""
+    """Shared §4.3a receipt writer keyed by evaluation: fetches the
+    agent link, then books the pending coaching + link. Returns None
+    (logged) when the row has no linked agent — the triggering action
+    must not be blocked on roster hygiene, and the audit note records
+    the gap."""
     pool = await _get_pool()
     if pool is None:
         return None
@@ -1074,20 +1074,53 @@ async def create_resolution_receipt(
             "SELECT agent_id FROM qa.evaluations WHERE id = $1", evaluation_id)
         if row is None or row["agent_id"] is None:
             logger.warning(
-                "resolution receipt skipped for eval %s: no linked agent",
+                "coaching receipt skipped for eval %s: no linked agent",
                 evaluation_id)
             return None
         return await create_notification_coaching(
             conn, agent_id=row["agent_id"], team_id=team_id,
             conducted_by_role="manager",
             conducted_by_email=evaluator_email,
-            action_plan=(
-                f"Notify {agent_name}: flagged evaluation resolved by "
-                "human review"
-            ),
-            per_eval_note=f"Human-review resolution (ack:{evaluator_email})",
+            action_plan=action_plan,
+            per_eval_note=per_eval_note,
             evaluation_id=evaluation_id,
         )
+
+
+async def create_resolution_receipt(
+    *, evaluation_id: int, team_id: str, evaluator_email: str,
+    agent_name: str,
+) -> Optional[int]:
+    """§4.3a.3 — a human-review resolution creates the same receipt: the
+    flag said 'a human must look'; this records that a human looked AND
+    owes the agent notice."""
+    return await _receipt_for_eval(
+        evaluation_id=evaluation_id, team_id=team_id,
+        evaluator_email=evaluator_email,
+        action_plan=(
+            f"Notify {agent_name}: flagged evaluation resolved by "
+            "human review"
+        ),
+        per_eval_note=f"Human-review resolution (ack:{evaluator_email})",
+    )
+
+
+async def create_edit_receipt(
+    *, evaluation_id: int, team_id: str, evaluator_email: str,
+    agent_name: str, old_score: Optional[float],
+) -> Optional[int]:
+    """§4.1 / §4.3a (S7) — editing a FINALIZED evaluation is manual
+    tampering with a shipped score: same receipt, same notification
+    duty as an override."""
+    return await _receipt_for_eval(
+        evaluation_id=evaluation_id, team_id=team_id,
+        evaluator_email=evaluator_email,
+        action_plan=(
+            f"Notify {agent_name}: finalized evaluation re-edited "
+            f"(previous score {old_score}); engine recomputed the score"
+        ),
+        per_eval_note=f"Edit of finalized evaluation (ack:{evaluator_email})",
+    )
 
 
 async def list_review_queue(team_id: str) -> list[dict[str, Any]]:
@@ -1189,6 +1222,7 @@ __all__ = [
     "create_notification_coaching",
     "complete_coaching_notified",
     "create_resolution_receipt",
+    "create_edit_receipt",
     "list_review_queue",
     "get_pool",
     "build_draft_row",
