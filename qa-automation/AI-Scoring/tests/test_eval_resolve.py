@@ -97,16 +97,21 @@ def _section_rows():
 
 
 class FakeConn:
-    def __init__(self, row, sections):
+    def __init__(self, row, sections, candidates=()):
         self.row = row
         self.sections = sections
+        self.candidates = list(candidates)  # link-tail fallback results
         self.fetchrow_args = None
+        self.fallback_queries: list[tuple] = []
 
     async def fetchrow(self, query, *args):
         self.fetchrow_args = (query, args)
         return self.row
 
     async def fetch(self, query, *args):
+        if "FROM qa.evaluations" in query:
+            self.fallback_queries.append((query, args))
+            return self.candidates
         return self.sections
 
 
@@ -490,3 +495,88 @@ class TestListReviewQueue:
             return None
         monkeypatch.setattr(eval_store, "_get_pool", no_pool)
         assert await list_review_queue("member_support") == []
+
+
+# ---------------------------------------------------------------------------
+# Link-tail resolution arm (2026-07-27 report) — rows the datapoint read
+# path reaches via the dialpad_link trailing segment must resolve for
+# actions too, even when neither id column matches.
+# ---------------------------------------------------------------------------
+
+from backend.services.eval_store import call_id_from_dialpad_link  # noqa: E402
+
+
+class TestCallIdFromDialpadLink:
+
+    def test_plain_link(self):
+        assert call_id_from_dialpad_link(
+            "https://dialpad.com/callhistory/callreview/6537476115210240"
+        ) == "6537476115210240"
+
+    def test_trailing_slash_and_query_string(self):
+        assert call_id_from_dialpad_link(
+            "https://dialpad.com/callreview/123/?utm=x") == "123"
+
+    def test_markdown_wrapped_link(self):
+        # Some legacy rows store markdown-ish links; the parser mirrors
+        # the frontends' split-on-'[' handling.
+        assert call_id_from_dialpad_link(
+            "https://dialpad.com/callreview/123 [view]") == "123"
+
+    def test_empty(self):
+        assert call_id_from_dialpad_link("") == ""
+        assert call_id_from_dialpad_link(None) == ""
+
+
+@pytest.mark.asyncio
+class TestResolveLinkTailFallback:
+
+    def _wire(self, monkeypatch, conn):
+        async def fake_get_pool():
+            return FakePool(conn)
+        monkeypatch.setattr(eval_store, "_get_pool", fake_get_pool)
+
+    async def test_id_column_hit_skips_fallback(self, monkeypatch):
+        conn = FakeConn(_eval_row(), _section_rows())
+        self._wire(monkeypatch, conn)
+        ref = await resolve_evaluation("member_support", "5035229460504576")
+        assert ref is not None
+        assert conn.fallback_queries == []
+
+    async def test_link_tail_resolves_when_columns_miss(self, monkeypatch):
+        """The 2026-07-27 case: the page's call id matches the link tail
+        but NEITHER id column — the fallback arm must find it."""
+        target = _eval_row(
+            dialpad_call_id="9999999999999999",
+            dialpad_entry_point_call_id="8888888888888888",
+            dialpad_link="https://dialpad.com/callhistory/callreview/6537476115210240",
+        )
+        conn = FakeConn(None, _section_rows(), candidates=[target])
+        self._wire(monkeypatch, conn)
+        ref = await resolve_evaluation("member_support", "6537476115210240")
+        assert ref is not None
+        assert ref.id == 2377
+        # The fallback probed by link substring, team-scoped.
+        query, args = conn.fallback_queries[0]
+        assert "dialpad_link LIKE" in query
+        assert args == ("member_support", "6537476115210240")
+
+    async def test_superstring_link_does_not_false_positive(self, monkeypatch):
+        """LIKE matches substrings — the Python tail check must reject a
+        row whose link merely CONTAINS the id (e.g. id 123 vs .../91230)."""
+        decoy = _eval_row(
+            dialpad_link="https://dialpad.com/callreview/9123045")
+        conn = FakeConn(None, _section_rows(), candidates=[decoy])
+        self._wire(monkeypatch, conn)
+        assert await resolve_evaluation("member_support", "123") is None
+
+    async def test_first_matching_candidate_wins_in_scan_order(self, monkeypatch):
+        decoy = _eval_row(
+            id=1, dialpad_link="https://dialpad.com/callreview/9123045")
+        target = _eval_row(
+            id=2, dialpad_link="https://dialpad.com/callreview/123")
+        conn = FakeConn(None, _section_rows(), candidates=[decoy, target])
+        self._wire(monkeypatch, conn)
+        ref = await resolve_evaluation("member_support", "123")
+        assert ref is not None
+        assert ref.id == 2

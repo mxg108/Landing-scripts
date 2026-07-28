@@ -96,6 +96,17 @@ async def _job_from_db(team_id: str, job_id: str) -> Optional[dict]:
     return _job_from_ref(ref)
 
 
+def _ref_call_id(ref) -> str:
+    """The best Dialpad call id for a resolved eval: the verified id
+    columns first, then the dialpad_link's trailing segment — rows
+    resolved via the link-tail arm (2026-07-27) may have NULL/foreign id
+    columns, and audio download + audit rows still need an id."""
+    return (
+        ref.dialpad_call_id or ref.dialpad_entry_point_call_id
+        or eval_store.call_id_from_dialpad_link(ref.dialpad_link)
+    )
+
+
 def _job_from_ref(ref) -> dict:
     """EvalRef → restored-job dict (the S1 reconstruction shape)."""
     return {
@@ -103,7 +114,7 @@ def _job_from_ref(ref) -> dict:
         "state": ref.state,
         "scoring_status": ref.scoring_status,
         "evaluation_id": ref.id,
-        "call_id": ref.dialpad_call_id or ref.dialpad_entry_point_call_id or "",
+        "call_id": _ref_call_id(ref),
         "agent_name": ref.agent_name_raw,
         "agent_email": ref.agent_email or "",
         "overall_score": ref.overall_score,
@@ -194,10 +205,7 @@ def _dispatch_finalize_email(job, history_row, team_id, evaluation_id,
 def _sse_eval_id_from_link(link: str) -> str:
     """Trailing path segment of dialpad_link — the /datapoint route key
     (mirrors team_stats._parse_row; see the legacy approve path)."""
-    if not link:
-        return ""
-    clean = link.split("[")[0].strip().split("?")[0].strip()
-    return clean.rstrip("/").split("/")[-1]
+    return eval_store.call_id_from_dialpad_link(link)
 
 
 async def _publish_finalized_event(
@@ -1194,7 +1202,7 @@ async def rescore_evaluation(
             evaluator_email=payload.evaluator_email,
             agent_email=ref.agent_email or "",
             agent_name=ref.agent_name_raw,
-            call_id=ref.dialpad_call_id or ref.dialpad_entry_point_call_id or "",
+            call_id=_ref_call_id(ref),
             target_team=team_id,
             action=audit_cfg.ACTION_DENIED,
             result_row=None,
@@ -1203,7 +1211,7 @@ async def rescore_evaluation(
         raise
 
     # §4.2.1: same input, fresh pass — re-download by Dialpad call id.
-    call_id = ref.dialpad_call_id or ref.dialpad_entry_point_call_id or ""
+    call_id = _ref_call_id(ref)
     try:
         audio_bytes = await download_recording(call_id)
     except NoRecordingAvailable:
@@ -1374,7 +1382,7 @@ async def override_scorecard(
             evaluator_email=payload.evaluator_email,
             agent_email=ref.agent_email or "",
             agent_name=ref.agent_name_raw,
-            call_id=ref.dialpad_call_id or ref.dialpad_entry_point_call_id or "",
+            call_id=_ref_call_id(ref),
             target_team=team_id,
             action=audit_cfg.ACTION_DENIED,
             result_row=None,
@@ -1424,7 +1432,7 @@ async def override_scorecard(
         evaluator_email=payload.evaluator_email,
         agent_email=ref.agent_email or "",
         agent_name=ref.agent_name_raw,
-        call_id=ref.dialpad_call_id or ref.dialpad_entry_point_call_id or "",
+        call_id=_ref_call_id(ref),
         target_team=team_id,
         action=audit_cfg.ACTION_OVERRIDDEN,
         result_row=history_row,
@@ -1524,7 +1532,7 @@ async def edit_datapoint(
             evaluator_email=approval.evaluator_email or "",
             agent_email=ref.agent_email or "",
             agent_name=ref.agent_name_raw,
-            call_id=ref.dialpad_call_id or ref.dialpad_entry_point_call_id or "",
+            call_id=_ref_call_id(ref),
             target_team=team_id,
             action=audit_cfg.ACTION_DENIED,
             result_row=None,
@@ -1696,7 +1704,7 @@ async def delete_evaluation(
         evaluator_email="",
         agent_email=ref.agent_email or "",
         agent_name=ref.agent_name_raw,
-        call_id=ref.dialpad_call_id or ref.dialpad_entry_point_call_id or "",
+        call_id=_ref_call_id(ref),
         target_team=team_id,
         action=audit_cfg.ACTION_ORPHANED,
         result_row=tombstone_row,
