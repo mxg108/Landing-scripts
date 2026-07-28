@@ -233,6 +233,27 @@
     .btn-approve:hover { background: #245a42; }
     .btn-approve:disabled { background: var(--border); cursor: not-allowed; }
     .approve-status { font-size: 0.78rem; color: rgba(255,255,255,0.7); }
+    /* S7 override form — lives on the dark approve-bar, so every text
+       element needs explicit light color (body text is dark and labels
+       would otherwise inherit it: invisible dark-on-dark, the 2026-07-27
+       report). Inputs get explicit white bg + dark text. */
+    .override-form {
+      display: none; width: 100%; margin-top: 0.75rem; padding: 0.75rem;
+      border: 1px solid rgba(255,255,255,0.25); border-radius: 8px;
+      background: rgba(255,255,255,0.05);
+    }
+    .override-form label {
+      font-size: 0.8rem; color: rgba(255,255,255,0.85);
+    }
+    .override-form input[type="number"],
+    .override-form input[type="email"],
+    .override-form select,
+    .override-form textarea {
+      background: #ffffff; color: #1a2238;
+      border: 1px solid var(--border); border-radius: 4px;
+      padding: 4px 6px; font-family: inherit; font-size: 0.8rem;
+    }
+    .override-form input[type="checkbox"] { accent-color: #7c2d12; }
   </style>
 </head>
 <body>
@@ -433,41 +454,41 @@ function injectOverrideBar(panel, data) {
   const bar = document.createElement('div');
   bar.className = 'approve-bar';
   bar.id = `override-bar-${JOB_ID}`;
+  bar.style.flexWrap = 'wrap';
   bar.innerHTML = `
     <span class="approve-status">Wrong score? A human can stand behind a different one.</span>
     <button class="btn-approve" style="background:#7c2d12;" id="override-toggle-${JOB_ID}"
             onclick="toggleOverrideForm()">Override Score…</button>
-    <div id="override-form-${JOB_ID}" style="display:none; width:100%; margin-top:0.75rem;
-         padding:0.75rem; border:1px solid var(--border); border-radius:8px;">
+    <div class="override-form" id="override-form-${JOB_ID}">
       <div style="display:flex; gap:0.75rem; flex-wrap:wrap; margin-bottom:0.5rem;">
-        <label style="font-size:0.8rem;">New score (0–100)
+        <label>New score (0–100)
           <input type="number" id="ov-score-${JOB_ID}" min="0" max="100" step="0.1"
-                 style="width:6rem; display:block;">
+                 style="width:6rem; display:block; margin-top:2px;">
         </label>
-        <label style="font-size:0.8rem;">Your role
-          <select id="ov-role-${JOB_ID}" style="display:block;">
+        <label>Your role
+          <select id="ov-role-${JOB_ID}" style="display:block; margin-top:2px;">
             <option value="team_lead">Team lead</option>
             <option value="manager" selected>Manager</option>
             <option value="hr">HR</option>
             <option value="external">External</option>
           </select>
         </label>
-        <label style="font-size:0.8rem;">Your email
+        <label>Your email
           <input type="email" id="ov-email-${JOB_ID}" placeholder="you@landing.com"
-                 style="display:block; width:14rem;">
+                 style="display:block; width:14rem; margin-top:2px;">
         </label>
       </div>
-      <label style="font-size:0.8rem; display:block; margin-bottom:0.5rem;">Reasoning (required — this is the audit record)
-        <textarea id="ov-reasoning-${JOB_ID}" rows="2" style="width:100%;"></textarea>
+      <label style="display:block; margin-bottom:0.5rem;">Reasoning (required — this is the audit record)
+        <textarea id="ov-reasoning-${JOB_ID}" rows="2" style="width:100%; margin-top:2px;"></textarea>
       </label>
-      <label style="font-size:0.8rem; display:block; margin-bottom:0.5rem;">SOP gap (optional — outdated/missing SOP evidence)
-        <textarea id="ov-sopgap-${JOB_ID}" rows="1" style="width:100%;"></textarea>
+      <label style="display:block; margin-bottom:0.5rem;">SOP gap (optional — outdated/missing SOP evidence)
+        <textarea id="ov-sopgap-${JOB_ID}" rows="1" style="width:100%; margin-top:2px;"></textarea>
       </label>
-      <label style="font-size:0.8rem; display:block; margin-bottom:0.35rem;">
+      <label style="display:block; margin-bottom:0.35rem;">
         <input type="checkbox" id="ov-suppress-${JOB_ID}"> Do NOT re-send the evaluation email
         (leaves your notification duty pending)
       </label>
-      <label style="font-size:0.8rem; display:block; margin-bottom:0.6rem;">
+      <label style="display:block; margin-bottom:0.6rem;">
         <input type="checkbox" id="ov-ack-${JOB_ID}"> ${ACK_TEXT}
       </label>
       <button class="btn-approve" style="background:#7c2d12;" id="ov-submit-${JOB_ID}"
@@ -480,8 +501,10 @@ function injectOverrideBar(panel, data) {
 }
 
 function toggleOverrideForm() {
+  // The CSS class hides the form by default (inline style starts empty),
+  // so key off the explicit 'block' rather than comparing to 'none'.
   const form = document.getElementById(`override-form-${JOB_ID}`);
-  if (form) form.style.display = form.style.display === 'none' ? 'block' : 'none';
+  if (form) form.style.display = form.style.display === 'block' ? 'none' : 'block';
 }
 
 async function submitOverride() {
