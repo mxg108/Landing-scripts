@@ -86,7 +86,14 @@ class AnthropicTextProvider(TextModelProvider):
             kwargs["output_config"] = {
                 "format": {"type": "json_schema", "schema": json_schema}
             }
-        response = await client.messages.create(**kwargs)
+        # Always stream and collect: the SDK REFUSES non-streaming
+        # requests whose max_tokens could exceed ~10 minutes (the judge's
+        # 65k scoring budget trips it — observed live 2026-07-27:
+        # "ValueError: Streaming is required for operations that may take
+        # longer than 10 minutes"). get_final_message() gives the same
+        # Message object create() would have returned.
+        async with client.messages.stream(**kwargs) as stream:
+            response = await stream.get_final_message()
 
         if response.stop_reason == "refusal":
             raise LlmProviderError(f"model {model} refused the request")
