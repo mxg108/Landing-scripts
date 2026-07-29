@@ -24,6 +24,12 @@ from fastapi import APIRouter, HTTPException, Request
 
 from command_center.services import fold, store
 
+# App-side seam ONLY here in the route adapter: fold/store stay
+# framework-free (Sandy carries them verbatim); the event bus is the
+# hosting app's live-dashboard plumbing and is re-pointed at re-platform
+# time along with the subscription URL.
+from backend.services.event_bus import get_event_bus
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -95,4 +101,46 @@ async def dialpad_webhook(request: Request) -> dict:
         return {"status": "unmatched"}
 
     status = await store.ingest_event(team_id, payload)
+
+    # Live pulse: surface agent-status changes on the team dashboard via
+    # the existing SSE stream. Skip dedupe hits — a Dialpad redelivery
+    # must not re-toast. Publish failures never break the ack (Dialpad
+    # drops subscriptions that persistently error).
+    if status != "duplicate":
+        ev = fold.normalize_event(payload)
+        if ev.event_kind == "agent_status":
+            await _publish_agent_status(team_id, ev)
     return {"status": status}
+
+
+async def _publish_agent_status(team_id: str, ev: fold.NormalizedEvent) -> None:
+    """SSE 'agent_status' → the team dashboard's toast rail.
+
+    Payload-shape defensiveness mirrors DispositionDesign §9: the agent
+    display name is target.name when the target is the user, with
+    payload-level name fields as fallbacks; the status label is the
+    event's state. Both may be blank on shapes we haven't observed —
+    the client renders placeholders rather than dropping the event.
+    """
+    payload = ev.payload
+    target = payload.get("target") or {}
+    name = ""
+    if isinstance(target, dict) and target.get("type") == "user":
+        name = str(target.get("name") or "")
+    if not name:
+        name = str(payload.get("name") or payload.get("display_name") or "")
+    status_label = str(ev.state or payload.get("agent_state") or "")
+
+    logger.info(
+        "cc.webhooks: agent_status agent=%s state=%s keys=%s",
+        ev.dialpad_agent_id, status_label or "?", sorted(payload.keys()),
+    )
+    try:
+        await get_event_bus().publish(team_id, "agent_status", {
+            "agent_id": ev.dialpad_agent_id,
+            "agent": name,
+            "status": status_label,
+            "at": ev.event_timestamp.isoformat(),
+        })
+    except Exception:
+        logger.exception("cc.webhooks: agent_status publish failed (non-fatal)")
