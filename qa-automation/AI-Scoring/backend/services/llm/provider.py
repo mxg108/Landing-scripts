@@ -36,6 +36,14 @@ class TextModelProvider(ABC):
 
     name: str = "unknown"
 
+    # Whether generate() can ENFORCE json_schema (provider-side constrained
+    # decoding). Callers holding a schema consult this flag instead of
+    # try/except — passing json_schema to a provider that can't enforce it
+    # raises LlmProviderError by contract (see generate()), which is the
+    # wrong outcome when the caller has a perfectly good prompt-schema +
+    # parse path to fall back on.
+    supports_json_schema: bool = False
+
     @abstractmethod
     async def generate(
         self,

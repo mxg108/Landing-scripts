@@ -25,8 +25,27 @@ from backend.services.llm.provider import (
 )
 
 
+def _close_object_schemas(node):
+    """Anthropic structured output REQUIRES ``additionalProperties: false``
+    on every object node (400 otherwise — probed live 2026-07-28); pydantic's
+    model_json_schema() omits it. Returns a closed COPY (walks $defs,
+    properties, items, anyOf alike); the caller's schema is never mutated.
+    Closing is the only accepted shape, so this is dialect adaptation, not
+    a semantic choice — the Gemini modules do the mirror-image dance for
+    Gemini's response_schema subset."""
+    if isinstance(node, dict):
+        node = {k: _close_object_schemas(v) for k, v in node.items()}
+        if node.get("type") == "object":
+            node.setdefault("additionalProperties", False)
+        return node
+    if isinstance(node, list):
+        return [_close_object_schemas(v) for v in node]
+    return node
+
+
 class AnthropicTextProvider(TextModelProvider):
     name = "anthropic"
+    supports_json_schema = True
 
     def __init__(self, client=None):
         """*client* is a test seam; production constructs lazily from env
@@ -84,7 +103,10 @@ class AnthropicTextProvider(TextModelProvider):
             # Provider-enforced structured output — replaces markdown-fence
             # stripping entirely on this path (guaranteed-valid JSON).
             kwargs["output_config"] = {
-                "format": {"type": "json_schema", "schema": json_schema}
+                "format": {
+                    "type": "json_schema",
+                    "schema": _close_object_schemas(json_schema),
+                }
             }
         # Always stream and collect: the SDK REFUSES non-streaming
         # requests whose max_tokens could exceed ~10 minutes (the judge's
@@ -97,6 +119,18 @@ class AnthropicTextProvider(TextModelProvider):
 
         if response.stop_reason == "refusal":
             raise LlmProviderError(f"model {model} refused the request")
+        if response.stop_reason == "max_tokens":
+            # Truncated output would otherwise surface downstream as a
+            # confusing parse error — name the budget exhaustion here,
+            # with token usage, same lesson the annotator's
+            # _finish_diagnostics already paid for on the Gemini leg.
+            usage = getattr(response, "usage", None)
+            raise LlmProviderError(
+                f"model {model} exhausted the {max_output_tokens}-token "
+                f"output budget (stop_reason='max_tokens'"
+                + (f", usage={usage}" if usage is not None else "")
+                + ") — output truncated"
+            )
         text = "".join(
             block.text for block in response.content if block.type == "text"
         )

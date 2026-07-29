@@ -59,11 +59,22 @@ async def score_annotation(
     )
 
     stage = resolve_stage("scoring", config)
+    kwargs: dict = {}
+    if stage.provider.supports_json_schema:
+        # Provider-enforced structured output where available: guarantees
+        # syntactically valid JSON, eliminating the free-text slip class
+        # observed live (a trailing comma killed an otherwise-complete
+        # Claude judgment, eval 2444). The schema IS the validation model
+        # below — zero drift by construction. Providers without the
+        # capability (Gemini) keep the prompt-schema + fence-tolerant
+        # parse path unchanged.
+        kwargs["json_schema"] = Scorecard.model_json_schema()
     result = await stage.provider.generate(
         prompt,
         model=stage.model,
         max_output_tokens=stage.max_output_tokens,
         system=build_judge_system_prompt(config),
+        **kwargs,
     )
 
     sections_by_id = {s.id: s for s in config.sections}

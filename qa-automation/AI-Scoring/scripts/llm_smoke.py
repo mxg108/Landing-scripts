@@ -5,10 +5,15 @@ Usage (from qa-automation/AI-Scoring, .env loaded):
     .venv/bin/python scripts/llm_smoke.py                    # gemini
     .venv/bin/python scripts/llm_smoke.py --provider anthropic
     .venv/bin/python scripts/llm_smoke.py --provider anthropic --json
+    .venv/bin/python scripts/llm_smoke.py --provider anthropic --scorecard-schema
 
 Gemini works today; anthropic needs ANTHROPIC_API_KEY (owner adds it —
 TwoStageScoringDesign §10.1). --json exercises the structured-output
-path (anthropic only until the Gemini mapping lands with P3).
+path with a toy schema (anthropic only until the Gemini mapping lands);
+--scorecard-schema sends the REAL Scorecard.model_json_schema() the
+judge now passes and round-trips the reply through
+Scorecard.model_validate — proves the API accepts pydantic's schema
+dialect end-to-end.
 """
 
 from __future__ import annotations
@@ -39,6 +44,14 @@ _SCHEMA = {
     "additionalProperties": False,
 }
 _MODELS = {"gemini": "gemini-2.5-flash", "anthropic": "claude-sonnet-5"}
+_SCORECARD_PROMPT = (
+    "Produce a demo scorecard for a flawless IMAGINARY support call: "
+    "two sections — id 'greeting' (name 'Greeting', score_type 'yn', "
+    "yn_value 'Y', score null) and id 'comms' (name 'Communication', "
+    "score_type 'numeric', score 5, yn_value null) — each with "
+    "confidence 'high' and one-sentence reasoning; brief call_summary, "
+    "key_strengths, opportunities."
+)
 
 
 async def main() -> int:
@@ -48,7 +61,10 @@ async def main() -> int:
     parser.add_argument("--model", default=None,
                         help=f"override the default ({_MODELS})")
     parser.add_argument("--json", action="store_true",
-                        help="exercise the structured-output path")
+                        help="exercise the structured-output path (toy schema)")
+    parser.add_argument("--scorecard-schema", action="store_true",
+                        help="structured output with the REAL judge schema "
+                             "(Scorecard.model_json_schema) + validate reply")
     args = parser.parse_args()
 
     provider = (GeminiTextProvider() if args.provider == "gemini"
@@ -57,14 +73,26 @@ async def main() -> int:
 
     kwargs: dict = {"model": model, "max_output_tokens": 1024}
     prompt = _PROMPT
-    if args.json:
+    if args.scorecard_schema:
+        from backend.models.scorecard import Scorecard
+        kwargs["json_schema"] = Scorecard.model_json_schema()
+        kwargs["max_output_tokens"] = 8192
+        prompt = _SCORECARD_PROMPT
+    elif args.json:
         kwargs["json_schema"] = _SCHEMA
         prompt = _JSON_PROMPT
 
-    print(f"→ {args.provider} / {model} (json={args.json})")
+    print(f"→ {args.provider} / {model} "
+          f"(json={args.json or args.scorecard_schema})")
     result = await provider.generate(prompt, **kwargs)
     print(f"← provider={result.provider} model={result.model}")
     print(result.text)
+    if args.scorecard_schema:
+        import json as _json
+        from backend.models.scorecard import Scorecard
+        scorecard = Scorecard.model_validate(_json.loads(result.text))
+        print(f"✓ Scorecard.model_validate passed "
+              f"({len(scorecard.sections)} sections)")
     return 0
 
 

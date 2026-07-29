@@ -184,8 +184,48 @@ def test_anthropic_json_schema_sets_structured_output():
     ))
     (call,) = fake.calls
     assert call["output_config"] == {
-        "format": {"type": "json_schema", "schema": {"type": "object"}}
+        "format": {"type": "json_schema",
+                   "schema": {"type": "object", "additionalProperties": False}}
     }
+
+
+def test_anthropic_closes_every_object_node_for_the_api():
+    """The API 400s unless every object sets additionalProperties: false
+    (probed live) — pydantic schemas omit it, the provider closes them,
+    recursively, without mutating the caller's dict."""
+    fake = FakeAnthropicClient(text="{}")
+    provider = AnthropicTextProvider(client=fake)
+    original = {"type": "object", "properties": {
+        "s": {"type": "object", "properties": {}}}}
+    asyncio.run(provider.generate(
+        "x", model="claude-sonnet-5", max_output_tokens=10,
+        json_schema=original,
+    ))
+    (call,) = fake.calls
+    schema = call["output_config"]["format"]["schema"]
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["s"]["additionalProperties"] is False
+    assert "additionalProperties" not in original    # caller's copy intact
+
+
+def test_structured_output_capability_flags():
+    """The judge consults this flag to decide whether to send a schema —
+    a provider that raises on json_schema must advertise False."""
+    assert AnthropicTextProvider.supports_json_schema is True
+    assert GeminiTextProvider.supports_json_schema is False
+
+
+def test_anthropic_max_tokens_raises_named_budget_error():
+    """Truncated output must fail HERE with a named budget error, not
+    downstream as a baffling JSON parse error — even when partial text
+    came back (it did: the fake carries text)."""
+    provider = AnthropicTextProvider(
+        client=FakeAnthropicClient(stop_reason="max_tokens")
+    )
+    with pytest.raises(LlmProviderError, match="output budget"):
+        asyncio.run(provider.generate(
+            "x", model="claude-sonnet-5", max_output_tokens=1,
+        ))
 
 
 def test_anthropic_refusal_raises():

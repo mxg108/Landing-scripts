@@ -154,7 +154,8 @@ class FakeJudgeProvider(TextModelProvider):
 
     async def generate(self, prompt, *, model, max_output_tokens,
                        json_schema=None, system=None):
-        self.calls.append({"prompt": prompt, "model": model, "system": system})
+        self.calls.append({"prompt": prompt, "model": model,
+                           "system": system, "json_schema": json_schema})
         return LlmResult(text=self._text, provider="anthropic", model=model)
 
 
@@ -193,6 +194,55 @@ def test_score_annotation_surfaces_parse_failure(monkeypatch, config):
     )
     with pytest.raises(ValueError):
         asyncio.run(judge_service.score_annotation(_annotation(), config))
+
+
+def test_judge_passes_schema_only_when_provider_supports_it(monkeypatch, config):
+    """Capability-aware structured output: a provider that can enforce
+    json_schema receives the Scorecard's own pydantic schema (zero drift
+    with the validation model); one that can't (Gemini raises on
+    json_schema by contract) keeps the prompt-schema path — None."""
+    from backend.models.scorecard import Scorecard
+    from backend.services import judge_service
+    from backend.services.llm.factory import StageModel
+
+    raw = json.dumps(make_gemini_scoring_json(config))
+
+    class StructuredFake(FakeJudgeProvider):
+        supports_json_schema = True
+
+    for fake, expected in (
+        (StructuredFake(raw), Scorecard.model_json_schema()),
+        (FakeJudgeProvider(raw), None),
+    ):
+        monkeypatch.setattr(
+            judge_service, "resolve_stage",
+            lambda stage, cfg, fake=fake: StageModel(
+                provider=fake, model="m", max_output_tokens=8192),
+        )
+        asyncio.run(judge_service.score_annotation(_annotation(), config))
+        (call,) = fake.calls
+        assert call["json_schema"] == expected
+
+
+# ---------------------------------------------------------------------------
+# _extract_json — trailing-comma salvage (the eval-2444 failure class)
+# ---------------------------------------------------------------------------
+
+def test_extract_json_salvages_trailing_commas():
+    from backend.services.audio_service import _extract_json
+    assert _extract_json('{"a": 1, "b": [1, 2,], }') == {"a": 1, "b": [1, 2]}
+
+
+def test_extract_json_never_touches_string_contents():
+    from backend.services.audio_service import _extract_json
+    parsed = _extract_json('{"note": "clear, }", "x": 1,}')
+    assert parsed == {"note": "clear, }", "x": 1}
+
+
+def test_extract_json_still_raises_on_broken_json():
+    from backend.services.audio_service import _extract_json
+    with pytest.raises(ValueError, match="JSON parse failed"):
+        _extract_json('{"a": nope}')
 
 
 # ---------------------------------------------------------------------------
