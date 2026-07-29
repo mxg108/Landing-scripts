@@ -1,8 +1,33 @@
 # TwoStageScoringDesign — Gemini annotates, any LLM scores
 
-**Status:** v1.3 — P1 (#140), P2 (#142 + hardening #143), **P3 built**:
+**Status:** v1.4 — P1 (#140), P2 (#142 + hardening #143), **P3 built**:
 Stage-B judge + `two_stage_shadow` / `two_stage` are live code.
-**Date:** 2026-07-24 (v1) … 2026-07-26 (v1.2), 2026-07-29 (v1.3)
+**Date:** 2026-07-24 (v1) … 2026-07-26 (v1.2), 2026-07-29 (v1.3),
+2026-07-28 (v1.4)
+
+**v1.4 amendments (judge output hardening — the "later tightening"
+v1.3 promised):**
+- Provider-enforced structured output on the judge, capability-gated:
+  `TextModelProvider.supports_json_schema` (anthropic True / gemini
+  False — its dialect still can't express ours). When True, the judge
+  passes `Scorecard.model_json_schema()` — the schema IS the
+  validation model, zero drift by construction. Motivated by a live
+  shadow error (eval 2444): a trailing comma killed an
+  otherwise-complete Claude judgment (~1/29 of Claude shadow samples).
+- Anthropic dialect adaptation lives in the provider:
+  `_close_object_schemas` sets `additionalProperties: false` on every
+  object node — the API 400s without it (probed live 2026-07-28) and
+  pydantic omits it. Mirror-image of the Gemini modules' hand-authored
+  `ANNOTATOR_RESPONSE_SCHEMA` dance. Live-verified round-trip:
+  `llm_smoke.py --scorecard-schema` → API accepts →
+  `Scorecard.model_validate` passes.
+- Belt-and-suspenders: `_extract_json` gains a string-literal-aware
+  trailing-comma salvage pass (both providers, judge AND single-stage);
+  anything still broken raises the original error, same stamp shape.
+- `AnthropicTextProvider` names budget exhaustion:
+  `stop_reason='max_tokens'` → `LlmProviderError` with token usage,
+  instead of a baffling downstream parse error on truncated JSON (the
+  annotator's `_finish_diagnostics` lesson, applied to the text leg).
 
 **v1.3 amendments (P3):**
 - Judge resolution: `SCORING_MODEL_PROVIDER` = gemini (default) |

@@ -59,6 +59,41 @@ def _get_mime_type(filename: str) -> str:
     return SUPPORTED_MIME_TYPES[ext]
 
 
+def _strip_trailing_commas(json_str: str) -> str:
+    """Drop commas that directly precede a closing brace/bracket, outside
+    string literals — models occasionally emit ``, }`` (observed live on a
+    Claude judgment, eval 2444). String contents pass through untouched
+    (same in_str/esc walk as _salvage_truncated_annotation)."""
+    out: list[str] = []
+    in_str = esc = False
+    i, n = 0, len(json_str)
+    while i < n:
+        ch = json_str[i]
+        if in_str:
+            out.append(ch)
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+            out.append(ch)
+        elif ch == ",":
+            j = i + 1
+            while j < n and json_str[j] in " \t\r\n":
+                j += 1
+            if j < n and json_str[j] in "}]":
+                i += 1          # drop the comma; ws + bracket emit later
+                continue
+            out.append(ch)
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def _extract_json(text: str) -> dict:
     text = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.IGNORECASE)
     text = re.sub(r"\s*```$", "", text.strip())
@@ -69,8 +104,16 @@ def _extract_json(text: str) -> dict:
     json_str = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text[start:end])
     try:
         return json.loads(json_str)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"JSON parse failed: {e}\n\nSnippet:\n{json_str[:500]}")
+    except json.JSONDecodeError as first_err:
+        # One salvage pass for the trailing-comma slip; anything still
+        # broken re-raises the ORIGINAL error (what the model actually
+        # emitted), same message shape the shadow stamps already carry.
+        try:
+            return json.loads(_strip_trailing_commas(json_str))
+        except json.JSONDecodeError:
+            raise ValueError(
+                f"JSON parse failed: {first_err}\n\nSnippet:\n{json_str[:500]}"
+            ) from first_err
 
 
 async def score_audio(

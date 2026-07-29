@@ -23,6 +23,7 @@ from backend.services.llm.provider import (
 
 class GeminiTextProvider(TextModelProvider):
     name = "gemini"
+    supports_json_schema = False    # generate() raises on json_schema, below
 
     def __init__(self, temperature: Optional[float] = None, client=None):
         """*temperature* is a Gemini-specific knob mapped at construction
