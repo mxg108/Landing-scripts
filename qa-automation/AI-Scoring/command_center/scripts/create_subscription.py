@@ -4,7 +4,7 @@ DispositionDesign §4 — creates (1) a webhook endpoint pointing at the
 Railway app and (2) a call-event subscription for the MS call center,
 signed with a fresh secret.
 
-Usage (from the repo root):
+Usage (from qa-automation/AI-Scoring, where the package now lives):
 
     python -m command_center.scripts.create_subscription \
         --url https://<railway-host>/api/webhooks/dialpad \
@@ -50,10 +50,9 @@ MS_CALL_CENTER_ID = "4716644561813504"
 def _api_key() -> str:
     key = os.environ.get("DIALPAD_API_KEY", "")
     if not key:
-        env_path = (
-            Path(__file__).resolve().parents[2]
-            / "qa-automation" / "AI-Scoring" / ".env"
-        )
+        # parents[2] = the AI-Scoring app root (this package lives at
+        # <app-root>/command_center/ since the 2026-07-29 move).
+        env_path = Path(__file__).resolve().parents[2] / ".env"
         try:
             from dotenv import load_dotenv
             if env_path.exists():
