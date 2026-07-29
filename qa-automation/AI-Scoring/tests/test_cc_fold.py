@@ -89,6 +89,46 @@ def test_agent_status_kind_without_call_id():
     assert ev.dialpad_agent_id == "42"
 
 
+def test_agent_status_live_shape_2026_07_29():
+    """The real Dialpad agent-status payload carries NO `state` key and
+    only `date` as a clock (§9). Blank state violated 005's
+    webhook_events_state_not_blank CHECK and 500'd every delivery — the
+    fold must produce a non-blank fallback and accept `date`."""
+    ev = fold.normalize_event({
+        "date": _ms(T0),
+        "target": {"id": 5853449125445632, "type": "user", "name": "Ana"},
+    })
+    assert ev.event_kind == "agent_status"
+    assert ev.state == "unknown"
+    assert ev.event_timestamp == T0
+    assert ev.dialpad_agent_id == "5853449125445632"
+
+
+def test_agent_status_candidate_status_keys():
+    """Until the live status key is pinned (§9), every candidate must
+    resolve — whichever one Dialpad actually uses."""
+    for key in ("new_status", "status", "agent_state", "on_duty_status"):
+        ev = fold.normalize_event({
+            "date": _ms(T0),
+            key: "available",
+            "target": {"id": 1, "type": "user"},
+        })
+        assert ev.state == "available", key
+
+
+def test_call_event_clock_not_redated_by_generic_date():
+    """`date` is a LAST-RESORT clock: a call event's lifecycle field must
+    still win, or reconnects get misdated (same trap as
+    test_event_clock_beats_lifecycle_dates)."""
+    ev = fold.normalize_event({
+        "call_id": "DP-9",
+        "state": "connected",
+        "date": _ms(_at(500)),
+        "date_connected": _ms(_at(30)),
+    })
+    assert ev.event_timestamp == _at(30)
+
+
 def test_event_clock_beats_lifecycle_dates():
     """A post-hold `connected` event may still carry the ORIGINAL
     date_connected — the explicit event clock must win or the reconnect

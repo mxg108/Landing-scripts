@@ -46,7 +46,21 @@ _STATE_TS_FIELDS = {
     "connected": ("date_connected",),
     "hangup": ("date_ended",),
 }
-_TS_LAST_RESORT = ("date_started",)
+# `date` observed live 2026-07-29 as the ONLY clock on agent-status
+# events (§9); listed before date_started but after the call-lifecycle
+# fields so call-event resolution is unchanged.
+_TS_LAST_RESORT = ("date", "date_started")
+
+# Agent-status payloads carry NO `state` key (live 2026-07-29 — the C2
+# synthetic wrongly assumed one; the blank '' violated 005's
+# webhook_events_state_not_blank CHECK and 500'd every delivery, which
+# is the sustained-error pattern that gets Dialpad to auto-disable the
+# subscription). The status value's real key is still unverified (§9) —
+# these candidates are tried in order after `state` itself; the
+# non-blank fallback satisfies the CHECK and keeps the agent-status
+# dedupe index (agent_id, state, event_timestamp) meaningful.
+_AGENT_STATUS_KEYS = ("new_status", "status", "agent_state", "on_duty_status")
+_AGENT_STATUS_FALLBACK = "unknown"
 
 
 class SignatureError(Exception):
@@ -99,6 +113,16 @@ def normalize_event(payload: dict, *, received_at: Optional[datetime] = None) ->
     state = str(payload.get("state", "") or "")
     call_id = payload.get("call_id")
     call_id = str(call_id) if call_id not in (None, "") else None
+
+    if call_id is None and not state:
+        # Agent-status shape: resolve the status from candidate keys,
+        # never blank (see _AGENT_STATUS_KEYS above).
+        for field in _AGENT_STATUS_KEYS:
+            if payload.get(field) not in (None, ""):
+                state = str(payload[field])
+                break
+        else:
+            state = _AGENT_STATUS_FALLBACK
 
     ts = None
     for field in (

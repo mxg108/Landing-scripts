@@ -100,12 +100,25 @@ async def dialpad_webhook(request: Request) -> dict:
         )
         return {"status": "unmatched"}
 
-    status = await store.ingest_event(team_id, payload)
+    try:
+        status = await store.ingest_event(team_id, payload)
+    except Exception:
+        # Response discipline (module docstring): a storage fault must be
+        # loud in logs, not in status codes — Dialpad's retries cannot fix
+        # a shape/DB fault, and persistent 5xx gets the subscription
+        # auto-disabled (nearly happened 2026-07-29: blank agent-status
+        # `state` violated the 005 CHECK and 500'd every delivery).
+        logger.exception(
+            "cc.webhooks: ingest failed — event acked 200, NOT stored "
+            "(state=%s call_id=%s)",
+            payload.get("state"), payload.get("call_id"),
+        )
+        status = "error"
 
     # Live pulse: surface agent-status changes on the team dashboard via
     # the existing SSE stream. Skip dedupe hits — a Dialpad redelivery
-    # must not re-toast. Publish failures never break the ack (Dialpad
-    # drops subscriptions that persistently error).
+    # must not re-toast. The pulse is independent of persistence, so an
+    # 'error' ingest still toasts. Publish failures never break the ack.
     if status != "duplicate":
         ev = fold.normalize_event(payload)
         if ev.event_kind == "agent_status":
