@@ -25,40 +25,22 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s — %(message)s",
 )
 
-# Command Center mount (LandingOpsCommandCenter.md §6): the top-level
-# command_center/ package lives at the repo root — WALK UP to find it,
-# never count parents. The Railway service builds from the
-# qa-automation/AI-Scoring subtree (service Root Directory), so in that
-# container /app/backend/main.py has only three ancestors and the repo
-# root — command_center/ included — is not in the image at all;
-# parents[3] crash-looped the 2026-07-20 deploy. Until the service
-# builds from the repo root, the app must boot WITHOUT the CC webhook
-# routes, loudly.
+# Command Center mount (LandingOpsCommandCenter.md §6): command_center/
+# lives INSIDE this subtree as a sibling of backend/ — moved from the
+# repo root 2026-07-29. The Railway service builds from
+# qa-automation/AI-Scoring (service Root Directory), so the old
+# top-level location was never in the image: the import failed and the
+# app booted without /api/webhooks/dialpad, 404ing every Dialpad
+# delivery. In-tree, absence is a build defect — the import is
+# unconditional so breakage fails the boot instead of silently dropping
+# webhook ingress.
 import sys
-_cc_repo_root = next(
-    (p for p in Path(__file__).resolve().parents
-     if (p / "command_center").is_dir()),
-    None,
-)
-if _cc_repo_root is not None and str(_cc_repo_root) not in sys.path:
-    sys.path.insert(0, str(_cc_repo_root))
+_app_root = Path(__file__).resolve().parent.parent
+if str(_app_root) not in sys.path:
+    sys.path.insert(0, str(_app_root))
 
-try:
-    from command_center.routes.webhooks import router as cc_webhooks_router
-    from command_center.services.store import close_pool as cc_close_pool
-except ImportError:
-    cc_webhooks_router = None
-
-    async def cc_close_pool() -> None:
-        return None
-
-    logging.getLogger(__name__).error(
-        "command_center package not found — /api/webhooks/dialpad NOT "
-        "mounted. The build root excludes the repo root (Railway Root "
-        "Directory = qa-automation/AI-Scoring); switch the service to "
-        "build from the repo root before going live with the Dialpad "
-        "subscription."
-    )
+from command_center.routes.webhooks import router as cc_webhooks_router
+from command_center.services.store import close_pool as cc_close_pool
 
 from backend.services.version_ship import run_startup_ship
 from backend.routes.scoring import router as scoring_router
@@ -145,10 +127,8 @@ for r in (scoring_router, dashboard_router, team_router, datapoints_router, look
 
 # Command Center webhook ingress — NO API-key dependency: Dialpad is the
 # caller and the JWT body signature is the authentication (DispositionDesign
-# §4). Distinct URL space from the QA routers above. Absent when the build
-# root excludes the top-level package (see the import guard above).
-if cc_webhooks_router is not None:
-    app.include_router(cc_webhooks_router)
+# §4). Distinct URL space from the QA routers above.
+app.include_router(cc_webhooks_router)
 
 
 @app.get("/api/health")

@@ -27,9 +27,10 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-# Make `command_center.*` (top-level repo package) importable — same
+# Make `database.*` (top-level repo package) importable — same
 # walk-up-to-repo-root pattern tests/integration/conftest.py uses for
-# `database.runner`.
+# `database.runner`. (`command_center.*` no longer needs this: it lives
+# inside the app root since 2026-07-29 and rides the _REPO_ROOT insert.)
 _p = _REPO_ROOT
 while _p.parent != _p and not (_p / "database" / "migrations").is_dir():
     _p = _p.parent

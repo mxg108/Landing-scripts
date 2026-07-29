@@ -268,6 +268,16 @@
       from { opacity: 0; transform: translateX(40px); }
       to   { opacity: 1; transform: translateX(0); }
     }
+    /* Compact variant: agent_status pulses (SSE). One line, muted accent,
+       shorter-lived than eval_approved toasts. */
+    .toast.toast-status {
+      border-left-color: var(--muted); padding: 7px 12px;
+    }
+    .toast.toast-status .toast-row { font-size: 0.72rem; }
+    .toast.toast-status .toast-status-label {
+      color: var(--muted); margin-left: auto; font-weight: 600;
+      text-transform: capitalize;
+    }
 
     /* Responsive */
     @media (max-width: 640px) {
@@ -1345,6 +1355,7 @@ let _eventSource = null;
 let _refetchTimer = null;
 const MAX_TOASTS = 3;
 const TOAST_TTL_MS = 6000;
+const STATUS_TOAST_TTL_MS = 4000;
 
 function openEventStream() {
   if (_eventSource) return;  // idempotent if init runs twice
@@ -1360,6 +1371,16 @@ function openEventStream() {
       scheduleStatsRefetch();
     } catch (err) {
       console.error('Failed to parse eval_approved payload:', err);
+    }
+  });
+  // Agent availability pulses from the Dialpad agent-status webhook
+  // subscription — a small one-line toast, no stats refetch (status
+  // changes don't move any chart).
+  _eventSource.addEventListener('agent_status', e => {
+    try {
+      showStatusToast(JSON.parse(e.data));
+    } catch (err) {
+      console.error('Failed to parse agent_status payload:', err);
     }
   });
   // EventSource auto-reconnects on its own; no manual cap (per design Q3).
@@ -1420,6 +1441,24 @@ function showToast(data) {
   container.appendChild(toast);
 
   setTimeout(() => dismissToast(toast), TOAST_TTL_MS);
+}
+
+function showStatusToast(data) {
+  const container = document.getElementById('toastContainer');
+  if (!container) return;
+  while (container.children.length >= MAX_TOASTS) {
+    container.firstElementChild.remove();
+  }
+  const toast = document.createElement('div');
+  toast.className = 'toast toast-status';
+  toast.innerHTML = `
+    <div class="toast-row">
+      <span class="toast-agent">${escapeHtml(data.agent || 'Agent')}</span>
+      <span class="toast-status-label">${escapeHtml(data.status || 'status changed')}</span>
+    </div>`;
+  toast.addEventListener('click', () => dismissToast(toast));
+  container.appendChild(toast);
+  setTimeout(() => dismissToast(toast), STATUS_TOAST_TTL_MS);
 }
 
 function dismissToast(toast) {
