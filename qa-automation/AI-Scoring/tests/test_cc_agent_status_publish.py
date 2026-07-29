@@ -126,6 +126,42 @@ def test_nameless_payload_still_publishes_with_placeholders(harness):
     assert data["status"] == "available"
 
 
+def test_ingest_failure_acks_200_and_still_publishes(harness, monkeypatch):
+    """A storage fault must not 500 (Dialpad auto-disables persistently
+    erroring subscriptions) and the live pulse is independent of
+    persistence."""
+    client, bus, _ = harness
+
+    async def _boom(team_id: str, payload: dict) -> str:
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(store, "ingest_event", _boom)
+    monkeypatch.setattr(webhooks_module.store, "ingest_event", _boom)
+
+    resp = client.post("/api/webhooks/dialpad", content=_signed(_agent_status_payload()))
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "error"}
+    assert len(bus.published) == 1
+    assert bus.published[0][1] == "agent_status"
+
+
+def test_live_shape_publishes_unknown_status(harness):
+    """The real 2026-07-29 payload: no state key, `date` clock — must
+    toast with the 'unknown' fallback, not 500."""
+    client, bus, _ = harness
+    payload = {
+        "date": T0_MS,
+        "target": {"id": 5853449125445632, "type": "user", "name": "Ana López"},
+    }
+    resp = client.post("/api/webhooks/dialpad", content=_signed(payload))
+    assert resp.status_code == 200
+    assert len(bus.published) == 1
+    _, _, data = bus.published[0]
+    assert data["agent"] == "Ana López"
+    assert data["status"] == "unknown"
+    assert data["at"] == T0.isoformat()
+
+
 def test_bad_signature_publishes_nothing(harness):
     client, bus, _ = harness
     body = pyjwt.encode(_agent_status_payload(), "wrong-secret", algorithm="HS256")
