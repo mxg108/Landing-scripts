@@ -1,9 +1,13 @@
-"""Sales management export — high-CSAT/MOS call transcripts → Google Sheet.
+"""Sales management export — high-survey-CSAT long calls → Google Sheet.
 
 Pulls the Sales contact center's calls via the Dialpad Stats API, keeps
-calls where **survey CSAT ≥ threshold OR mos_score ≥ threshold** (newest
-first, capped), fetches each qualifying call's transcript, and writes
-the table to a dedicated tab of the destination spreadsheet.
+calls where **survey CSAT ≥ threshold AND call duration ≥ 10 minutes**
+(Sales' criteria, v2 — the v1 OR-with-MOS filter matched essentially
+every healthy call since MOS≥4 is a network-quality norm), newest
+first, capped. Fetches each qualifying call's transcript and writes the
+table to a dedicated tab of the destination spreadsheet. Duration is
+computed from date_connected → date_ended (the CSV duration columns
+have ambiguous units; the timestamps don't).
 
 Column notes (probed live 2026-07-31):
 - survey CSAT   → stats export stat_type="csat" (`response` per call_id)
@@ -35,6 +39,7 @@ import io
 import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -97,6 +102,26 @@ async def _stats_export(client: httpx.AsyncClient, stat_type: str,
         if asyncio.get_event_loop().time() > deadline:
             raise TimeoutError(f"stats export {stat_type} timed out")
         await asyncio.sleep(POLL_INTERVAL_S)
+
+
+def _parse_ts(raw: str) -> datetime | None:
+    """CSV timestamps look like '2026-07-20 01:35:37.123456' (export TZ,
+    same for every column — deltas are safe on naive datetimes)."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.strptime(raw.split(".")[0], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _duration_minutes(row: dict) -> float | None:
+    start = _parse_ts(row.get("date_connected", ""))
+    end = _parse_ts(row.get("date_ended", ""))
+    if start is None or end is None or end <= start:
+        return None
+    return (end - start).total_seconds() / 60
 
 
 def _survey_scores(csat_rows: list[dict]) -> dict[str, float]:
@@ -163,7 +188,10 @@ async def main() -> int:
     parser.add_argument("--days", type=int, default=30,
                         help="lookback window (days_ago_end)")
     parser.add_argument("--limit", type=int, default=100)
-    parser.add_argument("--min-score", type=float, default=4.0)
+    parser.add_argument("--min-score", type=float, default=4.0,
+                        help="survey CSAT threshold")
+    parser.add_argument("--min-minutes", type=float, default=10.0,
+                        help="minimum connected call duration")
     args = parser.parse_args()
 
     async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
@@ -176,27 +204,34 @@ async def main() -> int:
         print(f"  {len(calls_rows)} call rows, "
               f"{len(survey)} calls with survey responses")
 
-        # Newest first; only calls that actually connected can carry a
-        # transcript or a meaningful MOS.
-        candidates = sorted(
-            (r for r in calls_rows if (r.get("date_connected") or "").strip()),
-            key=lambda r: r.get("date_started") or "", reverse=True,
-        )
-
-        out_rows: list[list[str]] = []
-        checked = 0
-        for row in candidates:
-            if len(out_rows) >= args.limit:
-                break
+        # Both criteria come straight from the CSVs, so qualification is
+        # free — per-call GETs (mos + caller contact) happen only for
+        # calls already known to qualify. Newest first.
+        candidates = []
+        for row in calls_rows:
             call_id = (row.get("call_id") or "").strip()
             if not call_id:
                 continue
-            checked += 1
             survey_score = survey.get(call_id)
+            if survey_score is None or survey_score < args.min_score:
+                continue
+            minutes = _duration_minutes(row)
+            if minutes is None or minutes < args.min_minutes:
+                continue
+            candidates.append((row, survey_score, minutes))
+        candidates.sort(key=lambda c: c[0].get("date_started") or "",
+                        reverse=True)
+        print(f"  {len(candidates)} calls meet survey≥{args.min_score} "
+              f"AND duration≥{args.min_minutes:g}min")
 
-            # MOS + caller contact ride the call object; fetch it for
-            # every candidate we must evaluate (survey alone can qualify,
-            # but mos_score is an output column either way).
+        out_rows: list[list[str]] = []
+        checked = 0
+        for row, survey_score, minutes in candidates:
+            if len(out_rows) >= args.limit:
+                break
+            call_id = row["call_id"].strip()
+            checked += 1
+
             try:
                 call = await _get_call(client, call_id)
             except httpx.HTTPStatusError as exc:
@@ -208,14 +243,6 @@ async def main() -> int:
                           f"{exc.response.status_code} — skipped")
                     continue
             mos = call.get("mos_score")
-
-            qualifies = (
-                (survey_score is not None and survey_score >= args.min_score)
-                or (mos is not None and float(mos) >= args.min_score)
-            )
-            if not qualifies:
-                await asyncio.sleep(0.1)
-                continue
 
             transcript = await _get_transcript_json(client, call_id)
             contact = call.get("contact") or {}
