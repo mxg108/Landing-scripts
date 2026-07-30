@@ -62,6 +62,13 @@ async def _get_pool():
     return _pool
 
 
+async def get_pool():
+    """Public accessor for integrations riding the CC pool (e.g. the
+    roster lookup behind the agent_status SSE publish). None when
+    DATABASE_URL is unset."""
+    return await _get_pool()
+
+
 async def close_pool() -> None:
     """Lifespan teardown."""
     global _pool

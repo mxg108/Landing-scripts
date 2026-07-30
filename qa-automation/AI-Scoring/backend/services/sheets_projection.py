@@ -21,6 +21,7 @@ retryable — callers log and continue; the nightly reproject sweep
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import TYPE_CHECKING, Any, Optional
@@ -205,13 +206,22 @@ async def project_evaluation(
 
     if include_history:
         try:
-            history_sheet = _get_sheet(config, config.sheets.analyst_history.tab_name)
-            history_row_num = _write_row(history_sheet, row, link, config)
+            # gspread is sync HTTP — threaded so the Sheets round trips
+            # (find + write) never pin the event loop.
+            history_row_num = await asyncio.to_thread(
+                _project_history_sync, config, row, link
+            )
         except Exception:
             logger.exception("projection: Analyst_History write failed for eval %s — retryable",
                              evaluation_id)
 
     return history_row_num
+
+
+def _project_history_sync(config: "TeamConfig", row: list[str], link: str) -> int:
+    """The blocking sheet leg of project_evaluation (worker-thread body)."""
+    history_sheet = _get_sheet(config, config.sheets.analyst_history.tab_name)
+    return _write_row(history_sheet, row, link, config)
 
 
 async def tombstone_evaluation(dialpad_link: str, config: "TeamConfig") -> Optional[int]:
@@ -235,19 +245,24 @@ async def tombstone_evaluation(dialpad_link: str, config: "TeamConfig") -> Optio
                        config.team_id)
         return None
     try:
-        sheet = _get_sheet(config, config.sheets.analyst_history.tab_name)
-        existing = _find_row_by_dialpad_link(sheet, dialpad_link)
-        if existing is None:
-            return None
-        width = config.history_layout.total_width
-        end_letter = col_index_to_letter(width - 1)
-        sheet.update(f"A{existing}:{end_letter}{existing}", [[""] * width],
-                     value_input_option="USER_ENTERED")
-        return existing
+        return await asyncio.to_thread(_tombstone_sync, config, dialpad_link)
     except Exception:
         logger.exception("tombstone: Analyst_History blank failed for link %s — "
                          "sheet row is stale until manually cleared", dialpad_link)
         return None
+
+
+def _tombstone_sync(config: "TeamConfig", dialpad_link: str) -> Optional[int]:
+    """The blocking sheet leg of tombstone_evaluation (worker-thread body)."""
+    sheet = _get_sheet(config, config.sheets.analyst_history.tab_name)
+    existing = _find_row_by_dialpad_link(sheet, dialpad_link)
+    if existing is None:
+        return None
+    width = config.history_layout.total_width
+    end_letter = col_index_to_letter(width - 1)
+    sheet.update(f"A{existing}:{end_letter}{existing}", [[""] * width],
+                 value_input_option="USER_ENTERED")
+    return existing
 
 
 __all__ = ["project_evaluation", "build_projection_row", "tombstone_evaluation"]

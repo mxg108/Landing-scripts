@@ -152,8 +152,17 @@ async def _await_coro(coro) -> None:
     await coro
 
 
-def _dispatch_finalize_email(job, history_row, team_id, evaluation_id,
-                             default_disclaimer=None, suppress=False) -> None:
+async def _append_audit_row_threaded(**kwargs):
+    """Score_Audit is a sync gspread append — run it in a worker thread
+    so the Sheets round-trip never pins the event loop (2026-07-29
+    incident: sync I/O inside async paths froze webhooks, pages, and SSE
+    for the duration). Exceptions propagate unchanged — where the audit
+    append blocks an action, that's policy, not an accident."""
+    return await asyncio.to_thread(append_score_audit_row, **kwargs)
+
+
+async def _dispatch_finalize_email(job, history_row, team_id, evaluation_id,
+                                   default_disclaimer=None, suppress=False) -> None:
     """Apps Script email dispatch at the finalize seam — shared by the
     auto-flow and the approve path.
 
@@ -189,8 +198,10 @@ def _dispatch_finalize_email(job, history_row, team_id, evaluation_id,
         return
     disclaimer = f"rescore_{rescore['cause']}" if rescore else default_disclaimer
     try:
-        job["email_dispatch"] = trigger_apps_script(
-            history_row, team_id, disclaimer=disclaimer
+        # Sync httpx.post with a 60s timeout — threaded so the Apps
+        # Script round-trip never pins the event loop.
+        job["email_dispatch"] = await asyncio.to_thread(
+            trigger_apps_script, history_row, team_id, disclaimer=disclaimer
         )
     except Exception as e:
         # Visible, not swallowed-into-print-limbo: the job payload
@@ -312,7 +323,7 @@ async def _postgres_post_stage1(job, evaluation_id, scorecard, config, team_id,
         key_strengths=scorecard.key_strengths,
         opportunities=scorecard.opportunities,
     )
-    _dispatch_finalize_email(job, history_row, team_id, evaluation_id)
+    await _dispatch_finalize_email(job, history_row, team_id, evaluation_id)
     return None
 
 
@@ -358,7 +369,7 @@ async def _maybe_auto_rescore(job, evaluation_id, score, config, team_id,
     # Machine-initiated: NOT tampering (§0.2) — audit row with the
     # triggering key's role, no evaluator, no coaching receipt. Same
     # superseded_model stamp as the S4 manual path (P3+ traceability).
-    append_score_audit_row(
+    await _append_audit_row_threaded(
         api_key_role=api_key_role,
         evaluator_email="",
         agent_email=state["agent_email"] or "",
@@ -518,7 +529,7 @@ async def score_single_call(
             identity, team_id, agent_email, is_in_roster=is_in_roster,
         )
     except HTTPException as exc:
-        append_score_audit_row(
+        await _append_audit_row_threaded(
             api_key_role=identity.role,
             evaluator_email=manager_email,
             agent_email=agent_email or "",
@@ -549,7 +560,7 @@ async def score_single_call(
         try:
             audio_bytes = await download_recording(call_id)
         except NoRecordingAvailable:
-            append_score_audit_row(
+            await _append_audit_row_threaded(
                 api_key_role=identity.role,
                 evaluator_email=manager_email,
                 agent_email=agent_email or "",
@@ -565,7 +576,7 @@ async def score_single_call(
                 detail="Call has no recording in Dialpad",
             )
         except DialpadRateLimited:
-            append_score_audit_row(
+            await _append_audit_row_threaded(
                 api_key_role=identity.role,
                 evaluator_email=manager_email,
                 agent_email=agent_email or "",
@@ -603,7 +614,7 @@ async def score_single_call(
 
     # Audit row written before the background task is scheduled so the
     # operator action is logged even if the worker crashes.
-    append_score_audit_row(
+    await _append_audit_row_threaded(
         api_key_role=identity.role,
         evaluator_email=manager_email,
         agent_email=agent_email or "",
@@ -756,7 +767,7 @@ async def score_batch(
             "manager_email": manager_email,
         }
 
-        append_score_audit_row(
+        await _append_audit_row_threaded(
             api_key_role=identity.role,
             evaluator_email=manager_email,
             agent_email="",
@@ -994,7 +1005,7 @@ async def _approve_core(*, team_id, key, job, approval, identity,
             history_row = await project_evaluation(
                 pool, evaluation_id, config, include_history=True
             )
-            _dispatch_finalize_email(
+            await _dispatch_finalize_email(
                 job, history_row, team_id, evaluation_id,
                 default_disclaimer=(
                     "review_resolution" if resolving
@@ -1033,7 +1044,7 @@ async def _approve_core(*, team_id, key, job, approval, identity,
                 f" ack:{evaluator_email}"
                 f"; coaching={coaching_id if coaching_id is not None else 'none'}"
             )
-        append_score_audit_row(
+        await _append_audit_row_threaded(
             api_key_role=identity.role,
             evaluator_email=evaluator_email,
             agent_email=job.get("agent_email", ""),
@@ -1197,7 +1208,7 @@ async def rescore_evaluation(
             identity, team_id, ref.agent_email, is_in_roster=is_in_roster,
         )
     except HTTPException as exc:
-        append_score_audit_row(
+        await _append_audit_row_threaded(
             api_key_role=identity.role,
             evaluator_email=payload.evaluator_email,
             agent_email=ref.agent_email or "",
@@ -1215,7 +1226,7 @@ async def rescore_evaluation(
     try:
         audio_bytes = await download_recording(call_id)
     except NoRecordingAvailable:
-        append_score_audit_row(
+        await _append_audit_row_threaded(
             api_key_role=identity.role,
             evaluator_email=payload.evaluator_email,
             agent_email=ref.agent_email or "",
@@ -1231,7 +1242,7 @@ async def rescore_evaluation(
             detail="Call has no recording in Dialpad",
         )
     except DialpadRateLimited:
-        append_score_audit_row(
+        await _append_audit_row_threaded(
             api_key_role=identity.role,
             evaluator_email=payload.evaluator_email,
             agent_email=ref.agent_email or "",
@@ -1259,7 +1270,7 @@ async def rescore_evaluation(
     # Audit BEFORE scheduling (crash-safe receipt), with the superseded
     # score + model stamp — the cross-model traceability hook (P3+).
     old_score = "unscored" if ref.overall_score is None else ref.overall_score
-    append_score_audit_row(
+    await _append_audit_row_threaded(
         api_key_role=identity.role,
         evaluator_email=payload.evaluator_email,
         agent_email=ref.agent_email or "",
@@ -1377,7 +1388,7 @@ async def override_scorecard(
             identity, team_id, ref.agent_email, is_in_roster=is_in_roster,
         )
     except HTTPException as exc:
-        append_score_audit_row(
+        await _append_audit_row_threaded(
             api_key_role=identity.role,
             evaluator_email=payload.evaluator_email,
             agent_email=ref.agent_email or "",
@@ -1427,7 +1438,7 @@ async def override_scorecard(
         )
         notes += f" | SOP gap: {payload.sop_gap.note}{doc}"
     notes += f" | ack:{payload.evaluator_email}"
-    append_score_audit_row(
+    await _append_audit_row_threaded(
         api_key_role=identity.role,
         evaluator_email=payload.evaluator_email,
         agent_email=ref.agent_email or "",
@@ -1443,8 +1454,8 @@ async def override_scorecard(
     email_dispatch: dict = {"status": "suppressed", "message": "suppress_email requested"}
     if not payload.suppress_email:
         try:
-            email_dispatch = trigger_apps_script(
-                history_row, team_id, disclaimer="override"
+            email_dispatch = await asyncio.to_thread(
+                trigger_apps_script, history_row, team_id, disclaimer="override"
             ) if history_row and history_row > 0 else {
                 "status": "skipped", "message": "no Analyst_History row projected",
             }
@@ -1527,7 +1538,7 @@ async def edit_datapoint(
             identity, team_id, ref.agent_email, is_in_roster=is_in_roster,
         )
     except HTTPException as exc:
-        append_score_audit_row(
+        await _append_audit_row_threaded(
             api_key_role=identity.role,
             evaluator_email=approval.evaluator_email or "",
             agent_email=ref.agent_email or "",
@@ -1630,7 +1641,7 @@ async def delete_evaluation(
     """
     team_id = team_id_from_path(request)
     if identity.role != "privileged":
-        append_score_audit_row(
+        await _append_audit_row_threaded(
             api_key_role=identity.role,
             evaluator_email="",
             agent_email="",
@@ -1699,7 +1710,7 @@ async def delete_evaluation(
 
     # Post-commit, both retryable/visible rather than delete-blocking:
     tombstone_row = await tombstone_evaluation(ref.dialpad_link or "", config)
-    append_score_audit_row(
+    await _append_audit_row_threaded(
         api_key_role=identity.role,
         evaluator_email="",
         agent_email=ref.agent_email or "",

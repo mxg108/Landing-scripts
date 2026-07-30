@@ -187,14 +187,14 @@ def _fake_genai_client(*payload_texts, finish_reason=None):
         uri = "files/fake"
         name = "files/fake"
 
-    class _Files:
+    class _AioFiles:
         def __init__(self):
             self.deleted = []
 
-        def upload(self, *, file, config):
+        async def upload(self, *, file, config):
             return _Uploaded()
 
-        def delete(self, *, name):
+        async def delete(self, *, name):
             self.deleted.append(name)
 
     class _AioModels:
@@ -216,10 +216,10 @@ def _fake_genai_client(*payload_texts, finish_reason=None):
     class _Aio:
         def __init__(self):
             self.models = _AioModels()
+            self.files = _AioFiles()
 
     class _Client:
         def __init__(self):
-            self.files = _Files()
             self.aio = _Aio()
 
     return _Client()
@@ -244,7 +244,7 @@ def test_annotate_audio_parses_and_cleans_up(monkeypatch):
         b"bytes", "call.mp3", transcript_text="hi", moments_display=[],
     ))
     assert annotation.schema_version == "gemini_annotate_v1"
-    assert client.files.deleted == ["files/fake"]   # upload cleaned up
+    assert client.aio.files.deleted == ["files/fake"]   # upload cleaned up
     # Constrained decoding requested (the bilingual-call fix)
     (config,) = client.aio.models.attempts
     assert config.response_mime_type == "application/json"
@@ -266,7 +266,7 @@ def test_annotate_audio_retries_once_with_bumped_temperature(monkeypatch):
     first, second = client.aio.models.attempts
     assert first.temperature == 0.0
     assert second.temperature == 0.2
-    assert client.files.deleted == ["files/fake"]   # cleanup after retries too
+    assert client.aio.files.deleted == ["files/fake"]   # cleanup after retries too
 
 
 def test_annotate_audio_invalid_json_raises_after_both_attempts(monkeypatch):
@@ -379,21 +379,21 @@ def test_annotate_audio_fails_fast_on_deterministic_400(monkeypatch):
                 400, {"error": {"message": "Request contains an invalid argument."}}
             )
 
-    class _Aio:
-        models = _AioModels()
-
-    class _Files:
-        def upload(self, *, file, config):
+    class _AioFiles:
+        async def upload(self, *, file, config):
             class _Up:
                 uri = "files/fake"
                 name = "files/fake"
             return _Up()
 
-        def delete(self, *, name):
+        async def delete(self, *, name):
             pass
 
+    class _Aio:
+        models = _AioModels()
+        files = _AioFiles()
+
     class _Client:
-        files = _Files()
         aio = _Aio()
 
     monkeypatch.setattr(audio_service, "_get_client", lambda: _Client())

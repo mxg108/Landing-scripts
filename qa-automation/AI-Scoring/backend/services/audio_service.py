@@ -139,8 +139,13 @@ async def score_audio(
         tmp.write(audio_bytes)
         tmp_path = tmp.name
 
+    uploaded = None
     try:
-        uploaded = client.files.upload(
+        # client.aio ONLY in this module — the sync surface pins the sole
+        # uvicorn event loop for the whole upload/generation (2026-07-29
+        # incident: webhooks, pages, and SSE froze for minutes per scored
+        # call, then flushed in a burst when generation returned).
+        uploaded = await client.aio.files.upload(
             file=tmp_path,
             config=types.UploadFileConfig(mime_type=mime_type, display_name=filename),
         )
@@ -155,7 +160,7 @@ async def score_audio(
             call_context_text=call_context_text,
         )
 
-        response = client.models.generate_content(
+        response = await client.aio.models.generate_content(
             model=config.gemini.scoring_model,
             contents=[
                 types.Content(
@@ -180,12 +185,14 @@ async def score_audio(
         )
 
     finally:
-        # Clean up temp file and Gemini upload
+        # Clean up temp file and Gemini upload. `uploaded` guard: an
+        # upload failure used to NameError here and mask the real error.
         Path(tmp_path).unlink(missing_ok=True)
-        try:
-            client.files.delete(name=uploaded.name)
-        except Exception:
-            pass
+        if uploaded is not None:
+            try:
+                await client.aio.files.delete(name=uploaded.name)
+            except Exception:
+                pass
 
 
 DEFAULT_ANNOTATOR_MODEL = "gemini-2.5-flash"
@@ -409,7 +416,7 @@ async def annotate_audio(
 
     uploaded = None
     try:
-        uploaded = client.files.upload(
+        uploaded = await client.aio.files.upload(
             file=tmp_path,
             config=types.UploadFileConfig(mime_type=mime_type, display_name=filename),
         )
@@ -448,6 +455,6 @@ async def annotate_audio(
         Path(tmp_path).unlink(missing_ok=True)
         if uploaded is not None:
             try:
-                client.files.delete(name=uploaded.name)
+                await client.aio.files.delete(name=uploaded.name)
             except Exception:
                 pass
