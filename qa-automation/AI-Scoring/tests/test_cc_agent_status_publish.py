@@ -162,6 +162,63 @@ def test_live_shape_publishes_unknown_status(harness):
     assert data["at"] == T0.isoformat()
 
 
+def _roster(by_id=None, by_name=None):
+    async def _maps():
+        return (by_id or {}, by_name or {})
+    return _maps
+
+
+def test_roster_scopes_publish_to_agents_team(harness, monkeypatch):
+    """A Sales agent's status toasts on /dashboard/sales only — never on
+    the resolve_team fallback team (member_support)."""
+    client, bus, _ = harness
+    monkeypatch.setattr(
+        webhooks_module, "_roster_maps",
+        _roster(by_id={"9876543210": {"sales"}}),
+    )
+    resp = client.post("/api/webhooks/dialpad", content=_signed(_agent_status_payload()))
+    assert resp.status_code == 200
+    assert [(t, e) for t, e, _ in bus.published] == [("sales", "agent_status")]
+
+
+def test_roster_no_match_drops_toast(harness, monkeypatch):
+    """Off-roster agents (e.g. Verifications) are stored but never
+    toasted anywhere."""
+    client, bus, _ = harness
+    monkeypatch.setattr(webhooks_module, "_roster_maps", _roster())
+    resp = client.post("/api/webhooks/dialpad", content=_signed(_agent_status_payload()))
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "appended"}   # still stored
+    assert bus.published == []
+
+
+def test_roster_name_fallback_is_accent_folded(harness, monkeypatch):
+    """No dialpad_agent_id match → accent-folded name match ('Ana López'
+    ↔ 'ana lopez')."""
+    client, bus, _ = harness
+    monkeypatch.setattr(
+        webhooks_module, "_roster_maps",
+        _roster(by_name={"ana lopez": {"member_support"}}),
+    )
+    resp = client.post("/api/webhooks/dialpad", content=_signed(_agent_status_payload()))
+    assert resp.status_code == 200
+    assert [(t, e) for t, e, _ in bus.published] == [("member_support", "agent_status")]
+
+
+def test_roster_unavailable_falls_back_to_resolved_team(harness, monkeypatch):
+    """No DB (local dev) or roster read failure → legacy single-team
+    publish, so dev without DATABASE_URL still toasts."""
+    client, bus, _ = harness
+
+    async def _none():
+        return None
+
+    monkeypatch.setattr(webhooks_module, "_roster_maps", _none)
+    resp = client.post("/api/webhooks/dialpad", content=_signed(_agent_status_payload()))
+    assert resp.status_code == 200
+    assert [(t, e) for t, e, _ in bus.published] == [("member_support", "agent_status")]
+
+
 def test_bad_signature_publishes_nothing(harness):
     client, bus, _ = harness
     body = pyjwt.encode(_agent_status_payload(), "wrong-secret", algorithm="HS256")
