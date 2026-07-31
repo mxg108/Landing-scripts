@@ -38,3 +38,5 @@ appsscript.json
 .backfill-skipped.csv
 # Stage-A annotation smoke outputs — verbatim caller speech (PII), never commit
 scripts/annotations/
+# Pulpo compendium snapshots — full internal KB contents, never commit
+scripts/.compendium/
