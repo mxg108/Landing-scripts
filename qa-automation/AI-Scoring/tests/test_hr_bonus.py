@@ -218,6 +218,17 @@ def test_excluded_agents_filtered_case_insensitively(ms_config):
     assert [a["name"] for a in payload["agents"]] == ["Ana"]
 
 
+def test_qa_roster_spelling_of_operator_is_excluded(ms_config):
+    # Matching is exact-after-lowercase (no accent stripping): the qa.*
+    # roster spells the operator "Max Pérez", which the mockup-era entries
+    # missed — caught live in the July 2026 export. The shipped config must
+    # carry the roster spelling explicitly.
+    evals = [_eval_row(1, "Ana", _june(10)),
+             _eval_row(2, "Max Pérez", _june(11))]
+    payload = build_payload_from_rows(ms_config, "2026-06", evals, {})
+    assert [a["name"] for a in payload["agents"]] == ["Ana"]
+
+
 def test_agents_sorted_case_insensitively(ms_config):
     evals = [_eval_row(1, "zoe", _june(10)),
              _eval_row(2, "Ana", _june(11)),

@@ -19,7 +19,7 @@
       {"id": "efficiency",        "hr_label": "Efficiency & Call Handling"},
       {"id": "cri",               "hr_label": "CRI"}
     ],
-    "excluded_agents": ["maximiliano perez", "maximiliano.perez"]
+    "excluded_agents": ["maximiliano perez", "maximiliano.perez", "max pérez", "max perez"]
   },
 
   "stats": {

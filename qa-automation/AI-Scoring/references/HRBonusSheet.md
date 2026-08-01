@@ -108,7 +108,7 @@ The export list lives in the team config JSON — **not** in code — as a new `
     {"id": "efficiency",        "hr_label": "Efficiency & Call Handling"},
     {"id": "cri",               "hr_label": "CRI"}
   ],
-  "excluded_agents": ["maximiliano perez", "maximiliano.perez"]
+  "excluded_agents": ["maximiliano perez", "maximiliano.perez", "max pérez", "max perez"]
 }
 ```
 
@@ -251,5 +251,8 @@ made in this spec.
 
 None blocking. One conscious default, flagged for visibility:
 
-1. `excluded_agents` matches on raw name (mockup parity). If roster names ever collide with an
-   excluded name, switch the match to `qa.agents.email`.
+1. `excluded_agents` matches on raw name (mockup parity), exact-after-lowercase — no accent
+   stripping. The July 2026 run showed how this bites: the qa.* roster spelling "Max Pérez"
+   missed the mockup-era entries, so the list now carries every observed spelling. If roster
+   names ever collide with an excluded name (or spelling drift recurs), switch the match to
+   `qa.agents.email`.
