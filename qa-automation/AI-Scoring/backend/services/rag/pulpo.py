@@ -171,6 +171,13 @@ class PulpoProvider(RagProvider):
                     return text
         return result
 
+    async def raw_tool_call(self, tool: str, arguments: dict) -> Any:
+        """Raw MCP tool passthrough for OPERATOR tooling (compendium
+        snapshot, admin audits) that needs Pulpo fields the neutral
+        types deliberately drop (created_at, owner, review cadence…).
+        Policy code must keep using the RagProvider surface."""
+        return await self._tool_call(tool, arguments)
+
     # -- shape mapping (Pulpo → neutral) -------------------------------
 
     @staticmethod
