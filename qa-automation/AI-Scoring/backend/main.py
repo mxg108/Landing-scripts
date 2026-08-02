@@ -163,6 +163,11 @@ async def serve_agent_dashboard(team_id: str, name: str):
     return FileResponse(_frontend_dir / "dashboard.html", headers=_HTML_NO_CACHE)
 
 
+@app.get("/dashboard/{team_id}/onepager/{name:path}", include_in_schema=False)
+async def serve_onepager_page(team_id: str, name: str):
+    return FileResponse(_frontend_dir / "onepager.html", headers=_HTML_NO_CACHE)
+
+
 @app.get("/datapoint/{team_id}/{call_id}", include_in_schema=False)
 async def serve_datapoint_page(team_id: str, call_id: str):
     return FileResponse(_frontend_dir / "datapoint.html", headers=_HTML_NO_CACHE)

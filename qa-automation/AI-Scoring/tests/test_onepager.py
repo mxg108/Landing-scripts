@@ -8,19 +8,12 @@ no-generate flows (DB + Gemini faked).
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 from datetime import datetime, timezone
-from pathlib import Path
 
 import backend.services.assessment_store as astore
+import backend.services.onepager as onepager
 from backend.services.team_stats import load_and_clean
 from tests.conftest import make_history_sheet, make_mails_sheet, load_test_config
-
-_spec = importlib.util.spec_from_file_location(
-    "export_onepager",
-    Path(__file__).resolve().parent.parent / "scripts" / "export_onepager.py")
-onepager = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(onepager)
 
 
 # ---------------------------------------------------------------------------

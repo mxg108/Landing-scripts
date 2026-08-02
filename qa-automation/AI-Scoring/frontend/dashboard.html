@@ -230,6 +230,20 @@
       </div>
     </div>
 
+    <div id="onepagerCard" class="card hidden">
+      <h2>Monthly One-Pager</h2>
+      <p style="font-size:0.85rem;color:var(--muted);margin:0 0 10px;">
+        Print-ready QA summary for <strong id="onepagerMonth">the last closed month</strong> —
+        evaluation count and score stats, the score-progression sparkline, per-section
+        performance with trends, and the monthly AI assessment. Refreshes automatically on
+        the 1st of each month, in step with the monthly workbook export.
+      </p>
+      <a id="onepagerLink" href="#" target="_blank" rel="noopener"
+         style="font-family:'DM Mono',monospace;font-size:0.85rem;display:inline-block;padding:8px 18px;background:var(--accent);color:#fff;border-radius:6px;text-decoration:none;">
+        Open one-pager →
+      </a>
+    </div>
+
     <div id="assessmentCard" class="card">
       <h2>AI Progression Assessment</h2>
       <div id="assessmentPlaceholder" style="text-align:center;padding:20px;">
@@ -347,12 +361,37 @@
 
     const currentAgent = getAgentFromURL();
 
+    // --- Monthly one-pager card ---
+    // "Last closed month" in the project bucket TZ (America/Los_Angeles),
+    // mirroring the backend's last_closed_month(): the label and link roll
+    // forward automatically on the 1st, in step with the workbook export.
+    const MONTH_NAMES = ['January','February','March','April','May','June',
+                         'July','August','September','October','November','December'];
+    function lastClosedMonthLA() {
+      const parts = new Intl.DateTimeFormat('en-US',
+        { timeZone: 'America/Los_Angeles', year: 'numeric', month: 'numeric' }
+      ).formatToParts(new Date());
+      let y = +parts.find(p => p.type === 'year').value;
+      let m = +parts.find(p => p.type === 'month').value - 1;
+      if (m === 0) { m = 12; y -= 1; }
+      return { label: `${MONTH_NAMES[m - 1]} ${y}`, y, m };
+    }
+
+    function renderOnepagerCard(agentName) {
+      const { label } = lastClosedMonthLA();
+      document.getElementById('onepagerMonth').textContent = label;
+      const link = document.getElementById('onepagerLink');
+      link.textContent = `Open the ${label} one-pager →`;
+      link.href = `/dashboard/${TEAM_ID}/onepager/${encodeURIComponent(agentName)}`;
+      document.getElementById('onepagerCard').classList.remove('hidden');
+    }
+
     async function loadDashboard(agentName) {
       if (!agentName) return;
 
       document.getElementById('placeholder').textContent = 'Loading...';
       document.getElementById('placeholder').classList.remove('hidden');
-      ['statsCard', 'trendCard', 'sectionCard'].forEach(id =>
+      ['statsCard', 'trendCard', 'sectionCard', 'onepagerCard'].forEach(id =>
         document.getElementById(id).classList.add('hidden')
       );
       // Reset AI assessment
@@ -389,6 +428,7 @@
       renderStats(history);
       renderTrendChart(history);
       renderSectionChart(history);
+      renderOnepagerCard(agentName);
 
       const windowLabel = customActive ? `${dateFrom} – ${dateTo}` : `Last ${selectedDays} days`;
       document.getElementById('footer').textContent =
