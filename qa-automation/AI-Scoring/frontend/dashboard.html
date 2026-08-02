@@ -383,6 +383,18 @@
       const link = document.getElementById('onepagerLink');
       link.textContent = `Open the ${label} one-pager →`;
       link.href = `/dashboard/${TEAM_ID}/onepager/${encodeURIComponent(agentName)}`;
+      // sessionStorage is per-tab, so the viewer shell in the new tab
+      // can't see this tab's key and would re-prompt. Hand it over in the
+      // URL fragment: never sent to the server, stripped by the shell on
+      // arrival, and the copyable href above stays key-free (a shared
+      // link should still prompt). Assignment (not addEventListener) so
+      // re-renders never stack handlers.
+      link.onclick = function (e) {
+        const key = sessionStorage.getItem('qa_api_key');
+        if (!key) return; // plain navigation; the shell will prompt
+        e.preventDefault();
+        window.open(this.href + '#k=' + encodeURIComponent(key), '_blank', 'noopener');
+      };
       document.getElementById('onepagerCard').classList.remove('hidden');
     }
 
