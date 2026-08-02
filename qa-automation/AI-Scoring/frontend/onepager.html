@@ -31,6 +31,16 @@
     }
 
     (async function () {
+      // Key handoff from the dashboard card: the key rides the URL
+      // fragment (never sent to the server), is stored for this tab, and
+      // is stripped from the address bar/history immediately — so the
+      // operator is only ever prompted on a direct/shared visit.
+      const hk = location.hash.match(/^#k=(.+)$/);
+      if (hk) {
+        sessionStorage.setItem('qa_api_key', decodeURIComponent(hk[1]));
+        history.replaceState(null, '', location.pathname + location.search);
+      }
+
       const status = document.getElementById('status');
       const m = location.pathname.match(/^\/dashboard\/([^\/]+)\/onepager\/(.+)$/);
       if (!m) { status.textContent = 'Bad URL — expected /dashboard/{team}/onepager/{agent}.'; return; }
