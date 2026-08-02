@@ -45,7 +45,7 @@ own product goes; out of scope here.
 | `scorecard.html` | `/scorecard/{team_id}/{job_id}` | `src/pages/Scorecard.tsx` |
 | `dashboard.html` (agent history) | `/dashboard`, `/dashboard/{team_id}`, `/dashboard/{team_id}/agent/{name}` | `src/pages/AgentDashboard.tsx` |
 | `onepager.html` | `/dashboard/{team_id}/onepager/{name}` | `src/pages/OnePager.tsx` |
-| `team_dashboard.html` | `/dashboard/{team_id}` (team view) | `src/pages/TeamDashboard.tsx` — **SSE toast → 30 s meta-refresh/poll (accepted delta)** |
+| `team_dashboard.html` | `/dashboard/{team_id}` (team view) | `src/pages/TeamDashboard.tsx` — **SSE KEPT** (§6.1; owner rescinded the 30 s-polling delta 2026-08-02 — floor TV requires live push) |
 | `team_evals.html` | `/dashboard/{team_id}/evals` | `src/pages/TeamEvals.tsx` |
 | `datapoint.html` | `/datapoint/{team_id}/{call_id}`, `/datapoint/{call_id}` | `src/pages/Datapoint.tsx` |
 | `lookup.html` | `/lookup/{team_id}` | `src/pages/Lookup.tsx` — stays cross-team by design (no nav link; team scoping is audit-only) |
@@ -68,7 +68,7 @@ auth retires.
 | **datapoints.py** `GET /datapoints`, `GET /datapoints/{call_id}` | Worker routes. |
 | **lookup.py** `GET ""`, `GET /calls`, `POST /recording-link`, `GET /scoring-permission` | Worker routes; Dialpad calls go direct (outbound rule required if "Allow Everywhere" is ever removed). |
 | **hr_bonus.py** `GET /{month}` | Worker route, service-token gated (GAS HR workbook caller). |
-| **events.py** `GET /events/stream` (SSE) | **DROPPED** — one event (`eval_approved`), one consumer; replaced by dashboard poll (accepted delta). |
+| **events.py** `GET /events/stream` (SSE) | **KEPT** — worker streaming route, D1-tailed (§6.1). Same EventSource client contract (`eval_approved` + `agent_status` events, `id:` fields, comment heartbeats); Python's in-process bus is replaced, not the SSE surface. |
 
 ## 5. Service module map (`backend/services/`)
 
@@ -84,7 +84,7 @@ auth retires.
 | `disposition_pull.py` | **Cron #1 (hourly, accepted delta)** → triggers stats-pull Workflow |
 | `history_service.py`, `progression_service.py`, `onepager.py`, `annotation_render.py` | TS ports (page data assembly) |
 | `sheets_service.py`, `sheets_projection.py` | Port ONLY the live write-projections (analyst history, HR workbook feeds); legacy read paths are already deleted |
-| `event_bus.py` | **DROPPED** (with SSE) |
+| `event_bus.py` | **Replaced by D1** — `qa_events` table is the bus (§6.1); publishers INSERT an event row in the same transaction as the action itself (more durable than today's in-process bus, which drops events on restart) |
 | `read_path_shadow.py` | **DROPPED** — Sheets-cutover artifact, its job is done |
 | `version_ship.py` | Moves out of process start → `sandy_push.sh` deploy step (Phase 3) |
 | `rule_engine.py`, `data_normalization.py` | TS ports; B1 note: normalization must stay manager-UI-reconfigurable (Sales v2 sign-off) |
@@ -101,7 +101,36 @@ auth retires.
 | `qa-stats-pull` | Hourly disposition/stats ingestion (from `disposition_pull.py`), writes D1 directly, no callback. |
 
 Crons (max 2, fixed minute): hourly stats-pull trigger; daily maintenance (prune
-`workflow_runs`, mail digests if kept).
+`workflow_runs` + `qa_events`, mail digests if kept).
+
+### 6.1 Live events — SSE kept, D1 is the bus
+
+Owner decision 2026-08-02 (rescinds the 30 s-polling accepted delta in SandyMigration §3):
+the floor TV runs the team dashboard permanently; live push is part of the product.
+
+What actually cannot port is the **in-process event bus** — Workers are stateless, an
+approve handled by one isolate cannot reach a stream held by another. SSE itself is just a
+long-lived streaming HTTP response, which Workers support. Design:
+
+- **`qa_events` table** (id AUTOINCREMENT, type, team_id, payload TEXT, created_at):
+  publishers (approve action → `eval_approved`; agent-status ingestion → `agent_status`)
+  INSERT in the same transaction as the action. Durable, ordered, and — during shadow —
+  fed by the Railway double-write, so dashboards on Sandy stay live even while actions
+  originate on Railway. No shared bus needed; the DB is the bus.
+- **`GET /events/stream?team=…`**: streaming worker route tails `qa_events` WHERE
+  `id > cursor` (initial cursor from `Last-Event-ID` on reconnect), emitting SSE frames
+  with `id:` fields and comment heartbeats — the existing client contract, unchanged.
+  Internal tail poll ~3 s (one indexed SELECT; negligible CPU against the 20 s cap).
+- **Bounded stream lifetime**: each stream self-closes after ~50 s; `EventSource`
+  auto-reconnects with `Last-Event-ID`, so no event is lost and no proxy/duration limit
+  is ever tested. Floor TV never notices.
+- **Latency**: event visible ≤ ~3 s after commit (vs instant today) — indistinguishable
+  on a wall display; still push-rendered, no page reloads.
+- **Empirical gate**: `/sse-test` on the live scaffold (v0.4) verifies the Sandy edge
+  stack passes `text/event-stream` through unbuffered — green STREAMING verdict = this
+  design is confirmed; red BUFFERED verdict = transport falls back to a 3–5 s
+  `fetch` short-poll of the same `qa_events` cursor API (client-code-only change,
+  same freshness, the table design stands either way).
 
 ## 7. D1 schema translation (migrations 004–018)
 
@@ -131,7 +160,7 @@ row-count + checksum reconciliation used in the July backfill (B0–B4 playbook)
 
 ## 9. Dropped / replaced — summary
 
-SSE + event bus → 30 s poll · in-memory `_jobs` → Workflow runs + D1 · `version_ship`
+in-process event bus → `qa_events` D1 table (SSE surface KEPT, §6.1) · in-memory `_jobs` → Workflow runs + D1 · `version_ship`
 startup hook → push-layer step · API-key auth → SSO + service tokens · `rag/` → Pulpo MCP ·
 `read_path_shadow` → deleted · Python tests (20k LOC) → golden-fixture parity harness vs
 Railway · `embeddings` schema → out of scope · webhooks → deferred to Engineering ingress

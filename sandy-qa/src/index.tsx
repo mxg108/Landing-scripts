@@ -35,6 +35,75 @@ export default {
       if (fontResponse) return fontResponse;
     }
 
+    // ── SSE transport spike (PortManifest §"SSE on Sandy") ───────────────
+    // Answers one question empirically: does the Sandy edge stack
+    // (dispatch worker + CF Access) pass a text/event-stream through
+    // UNBUFFERED? Emits one tick every 2s for 40s. Open /sse-test in a
+    // browser — the page renders a green STREAMING / red BUFFERED verdict.
+    // Remove both routes once the port's real /events/stream lands.
+    if (url.pathname === "/events/stream" && request.method === "GET") {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        async start(controller) {
+          controller.enqueue(encoder.encode(": connected\n\n"));
+          for (let i = 1; i <= 20; i++) {
+            await new Promise((r) => setTimeout(r, 2000));
+            controller.enqueue(
+              encoder.encode(
+                `id: ${i}\nevent: tick\ndata: {"n":${i},"server_t":"${new Date().toISOString()}"}\n\n`
+              )
+            );
+          }
+          controller.enqueue(encoder.encode(`event: done\ndata: {}\n\n`));
+          controller.close();
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "X-Accel-Buffering": "no",
+        },
+      });
+    }
+
+    if (url.pathname === "/sse-test" && request.method === "GET") {
+      return new Response(
+        `<!DOCTYPE html><html><head><title>SSE spike — qa-scoring</title>
+<style>body{font-family:monospace;margin:2rem;background:#111;color:#ddd}
+#verdict{font-size:1.4rem;padding:.5rem 1rem;border-radius:6px;display:inline-block;margin-bottom:1rem}
+.wait{background:#444}.go{background:#0a5c2e}.no{background:#7a1f1f}
+li{margin:.15rem 0}</style></head><body>
+<h2>SSE transport spike</h2><div id="verdict" class="wait">connecting…</div>
+<p>20 ticks, one every 2s. Live arrival = streaming works. All at once at the end = buffered.</p>
+<ul id="log"></ul>
+<script>
+const t0 = Date.now(), gaps = []; let last = null;
+const v = document.getElementById('verdict'), log = document.getElementById('log');
+const es = new EventSource('/events/stream');
+es.addEventListener('tick', e => {
+  const now = Date.now();
+  if (last !== null) gaps.push(now - last);
+  last = now;
+  const d = JSON.parse(e.data);
+  log.insertAdjacentHTML('beforeend',
+    '<li>tick ' + d.n + ' — arrived +' + ((now - t0)/1000).toFixed(1) + 's</li>');
+  if (d.n >= 3) {
+    const median = gaps.slice().sort((a,b)=>a-b)[Math.floor(gaps.length/2)];
+    if (median > 1000) { v.textContent = 'STREAMING CONFIRMED — SSE works on Sandy (median gap ' + (median/1000).toFixed(1) + 's)'; v.className = 'go'; }
+  }
+});
+es.addEventListener('done', e => {
+  es.close();
+  const median = gaps.slice().sort((a,b)=>a-b)[Math.floor(gaps.length/2)] || 0;
+  if (median <= 1000) { v.textContent = 'BUFFERED — all ticks arrived together; SSE falls back to short-poll'; v.className = 'no'; }
+});
+es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION ERROR — see console'; v.className = 'no'; } };
+</script></body></html>`,
+        { headers: { "Content-Type": "text/html; charset=utf-8" } }
+      );
+    }
+
     // Handle form POST — insert a new item, then redirect back to the page
     if (url.pathname === "/api/items" && request.method === "POST") {
       const formData = await request.formData();
