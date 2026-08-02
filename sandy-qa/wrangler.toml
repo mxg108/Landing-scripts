@@ -1,0 +1,58 @@
+# IMPORTANT: update 'name' to match your Sandy application slug
+name = "qa-scoring"
+main = "dist/worker.js"
+compatibility_date = "2024-06-20"
+compatibility_flags = ["nodejs_compat"]
+
+# Wrangler will run this command before build/dev/deploy.
+# Vite bundles the worker and inlines Tailwind CSS into dist/worker.js.
+[build]
+command = "npm run build:vite"
+
+# Routes are managed by Sandy's deployment container.
+# Leave this section commented out for local dev; it will be injected on deploy.
+# [[routes]]
+# pattern = "my-sandy-app.sandy.hellolanding.tech/*"
+# zone_name = "sandy.hellolanding.tech"
+
+# Sandy injects the correct database_id automatically on every deploy — you do not need to change it.
+#
+# For local development (npx wrangler dev --local):
+#   - Set database_name to match your app slug (same as 'name' above)
+#   - database_id is ignored for local runs — leave it as-is or use any placeholder
+#   - Run migrations locally with:
+#       npx wrangler d1 execute <database_name> --local --command "CREATE TABLE ..."
+#       npx wrangler d1 execute <database_name> --local --file ./migrations/001_init.sql
+[[d1_databases]]
+binding = "DB"
+database_name = "qa-scoring"
+database_id = "local-placeholder"
+
+# Optional: set WORKFLOW_ID to trigger a Sandy Workflow from this app.
+# Find the ID with: sandy.py workflows list
+# [vars]
+# WORKFLOW_ID = "your-workflow-id-here"
+
+# Optional: define up to 2 cron schedules.
+# Sandy validates these at deploy time — invalid schedules will fail the deploy.
+#
+# Allowed types:
+#   Hourly  — fires once per hour at a fixed minute:  "30 * * * *"
+#   Daily   — fires once per day at a fixed time:     "0 9 * * *"
+#             optionally filtered by day of week:     "0 9 * * MON-FRI"
+#
+# Rules:
+#   - Maximum 2 schedules total.
+#   - Minute field must be a single integer (0–59). No wildcards, intervals (*/5),
+#     ranges (0-30), or comma lists (0,15,30) are allowed in the minute field.
+#   - Hour field must be a single integer (0–23).
+#   - Day-of-month and month fields must always be *.
+#   - Day-of-week accepts: * | single value (MON or 1) | range (MON-FRI) | comma list (MON,WED,FRI)
+#   - Cloudflare day names: SUN MON TUE WED THU FRI SAT
+#
+# Uncomment and edit to enable:
+# [triggers]
+# crons = ["0 * * * *"]              # hourly at :00
+# crons = ["30 * * * *"]             # hourly at :30
+# crons = ["0 9 * * MON-FRI"]        # 9:00 AM weekdays
+# crons = ["0 9 * * *", "0 21 * * *"] # 9 AM and 9 PM daily (2 schedules)
