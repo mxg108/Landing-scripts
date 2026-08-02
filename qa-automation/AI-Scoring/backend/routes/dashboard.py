@@ -5,16 +5,21 @@ legacy (/api/...).  team_id is extracted from the path via
 ``team_id_from_path``; legacy routes default to ``member_support``.
 """
 
+import re
 from datetime import date, datetime, time, timezone
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 from backend.config.team_config import get_team_config
 from backend.middleware.auth import team_id_from_path
 from backend.models.dashboard import EvaluationRecord, ProgressionAssessment
 from backend.services.data_provider import get_provider
+from backend.services.onepager import last_closed_month, render_month_onepager
 from backend.services.progression_service import get_progression
 
 router = APIRouter(tags=["dashboard"])
+
+_MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 # Mirrors the team-route cap (see backend/routes/team.py:_MAX_RANGE_DAYS).
 _MAX_RANGE_DAYS = 730
@@ -94,6 +99,32 @@ async def agent_history(
     if not records:
         raise HTTPException(404, f"No evaluations found for '{name}' in the last {days} days")
     return records
+
+
+@router.get("/agents/{name}/onepager", response_class=HTMLResponse)
+async def agent_onepager(
+    request: Request,
+    name: str,
+    month: str | None = Query(default=None),
+):
+    """Serve the agent's monthly one-pager as standalone HTML.
+
+    Defaults to the last closed bucket-TZ month, so the artifact rolls
+    forward automatically on the 1st — in step with the monthly workbook
+    export. Renders with the *persisted* month assessment only (never
+    generates): page views must stay cost-free; the operator's monthly
+    ``export_onepager.py`` run is what fills the assessment slot.
+    """
+    team_id = team_id_from_path(request)
+    config = get_team_config(team_id)
+    if month is None:
+        month = last_closed_month()
+    elif not _MONTH_RE.match(month):
+        raise HTTPException(422, "month must be YYYY-MM")
+    page = await render_month_onepager(config, name, month)
+    if page is None:
+        raise HTTPException(404, f"No evaluations for '{name}' in {month}")
+    return HTMLResponse(page)
 
 
 @router.get("/agents/{name}/progression", response_model=ProgressionAssessment)

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<!-- Monthly one-pager viewer shell (/dashboard/{team_id}/onepager/{agent}).
+
+     The one-pager itself is rendered by the backend
+     (GET /api/{team_id}/agents/{name}/onepager — auth required), so this
+     shell only holds the api-key handshake shared by every dashboard
+     page, fetches the HTML, and swaps it in via document.write so the
+     result stays a standalone, print-ready document. -->
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Monthly One-Pager</title>
+  <style>
+    body { font: 14px/1.5 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+           color: #4A4A4A; text-align: center; padding: 60px 20px; }
+    .err { color: #D9534F; }
+    a { color: #1A61D9; }
+  </style>
+</head>
+<body>
+  <p id="status">Loading one-pager…</p>
+  <script>
+    function getApiKey() {
+      let key = sessionStorage.getItem('qa_api_key');
+      if (!key) {
+        key = prompt('Enter your QA API key:');
+        if (key) sessionStorage.setItem('qa_api_key', key);
+      }
+      return key;
+    }
+
+    (async function () {
+      const status = document.getElementById('status');
+      const m = location.pathname.match(/^\/dashboard\/([^\/]+)\/onepager\/(.+)$/);
+      if (!m) { status.textContent = 'Bad URL — expected /dashboard/{team}/onepager/{agent}.'; return; }
+      const [, teamId, rawAgent] = m;
+      const agent = decodeURIComponent(rawAgent);
+      const month = new URLSearchParams(location.search).get('month');
+
+      const key = getApiKey();
+      if (!key) { status.textContent = 'An API key is required to view this page.'; return; }
+
+      const url = `${location.origin}/api/${teamId}/agents/${encodeURIComponent(agent)}/onepager`
+        + (month ? `?month=${encodeURIComponent(month)}` : '');
+      let res;
+      try {
+        res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + key } });
+      } catch (e) {
+        status.innerHTML = '<span class="err">Network error loading the one-pager.</span>';
+        return;
+      }
+      if (res.status === 401) {
+        sessionStorage.removeItem('qa_api_key');
+        status.innerHTML = '<span class="err">Invalid API key.</span> ' +
+          '<a href="javascript:location.reload()">Reload to retry</a>.';
+        return;
+      }
+      if (res.status === 404) {
+        status.textContent = `No evaluations for "${agent}"` +
+          (month ? ` in ${month}.` : ' in the last closed month yet.');
+        return;
+      }
+      if (!res.ok) {
+        status.innerHTML = `<span class="err">Backend returned HTTP ${res.status}.</span>`;
+        return;
+      }
+      const html = await res.text();
+      document.open();
+      document.write(html);
+      document.close();
+    })();
+  </script>
+</body>
+</html>
