@@ -135,6 +135,8 @@ long-lived streaming HTTP response, which Workers support. Design:
 ## 7. D1 schema translation (migrations 004–018)
 
 One migration set under `sandy-qa/migrations/`, applied via `sandy.py db migrate`.
+**Status: `0001_init.sql` applied to `sandyapp-qa-scoring` 2026-08-02** (27 tables + view +
+35 indexes; validated in local SQLite first; includes `qa_events` §6.1 + template tables).
 Rules: `TIMESTAMPTZ` → TEXT ISO-8601 UTC; `JSONB` → TEXT (serialize in TS);
 `SERIAL` → `INTEGER PRIMARY KEY AUTOINCREMENT`; schema prefixes become table prefixes
 (`qa_evaluations`, `cc_webhook_events`, …); views (015) → D1 views; partial indexes kept.
