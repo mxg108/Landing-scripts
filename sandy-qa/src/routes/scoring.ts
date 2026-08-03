@@ -508,8 +508,15 @@ export async function scorecardPayload(
   }
   const rows = await evalSections(db, ev.id);
   const byId = new Map(rows.map((r: any) => [r.section_id, r]));
+  // AI-scored sections ONLY — Railway's Scorecard shape. The editor
+  // renders manual sections from /team/sections separately; including
+  // them here duplicated their ids in the approval payload (the first,
+  // null-valued copy shadowed the real manual input — the observed
+  // "needs a score or yn_value" 422 on human_review_required).
   const sections = config.prompt_config.sections
-    .filter((s: any) => !s.auto_value)
+    .filter(
+      (s: any) => !s.auto_value && !["manual", "manual_yn"].includes(s.score_type)
+    )
     .map((s: any) => {
       const row: any = byId.get(s.id) ?? {};
       const isYn = String(s.score_type).endsWith("yn");
@@ -636,7 +643,10 @@ export async function approveEvaluation(
       });
       continue;
     }
-    const sent = (body.sections ?? []).find((s: any) => s.id === sec.id);
+    // Last entry wins: the editor appends manual-input values after the
+    // scorecard-panel pass, so duplicates resolve to the real value.
+    const matches = (body.sections ?? []).filter((s: any) => s.id === sec.id);
+    const sent = matches[matches.length - 1];
     if (!sent) return json({ detail: `sections payload missing '${sec.id}'` }, 422);
     const isYn = String(sec.score_type).endsWith("yn") || sent.score_type === "yn";
     const numeric =
