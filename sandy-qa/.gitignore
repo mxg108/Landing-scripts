@@ -3,3 +3,5 @@ dist/
 app.zip
 _release/
 .wrangler/
+parity/fixture.json
+parity/lib.mjs

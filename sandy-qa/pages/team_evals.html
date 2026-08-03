@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Month Evaluations — Team Analytics</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --navy: #15192D; --accent: #1A61D9; --bg: #E7EFFB; --surface: #ffffff;
+      --border: #c9d5e8; --text: #15192D; --muted: #5a6478;
+      --green: #28A745; --amber: #E8A317; --red: #D9534F;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'DM Mono', monospace; background: var(--bg); color: var(--text); min-height: 100vh; }
+    h1, h2, h3 { font-family: 'Fraunces', serif; }
+
+    .header {
+      background: var(--navy); color: #fff; padding: 16px 24px;
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+    }
+    .header-left { display: flex; align-items: center; gap: 16px; }
+    .header h1 { font-size: 1.2rem; font-weight: 600; }
+    .header a.back {
+      font-family: 'DM Mono', monospace; font-size: 0.82rem; padding: 6px 14px;
+      border: 1px solid rgba(255,255,255,0.3); border-radius: 6px; color: #fff;
+      text-decoration: none; transition: background 0.2s;
+    }
+    .header a.back:hover { background: rgba(255,255,255,0.1); }
+    .meta { font-size: 0.8rem; color: rgba(255,255,255,0.7); }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+    .summary { display: flex; gap: 24px; align-items: baseline; margin-bottom: 16px; flex-wrap: wrap; }
+    .summary .count {
+      font-family: 'Fraunces', serif; font-size: 1.8rem; font-weight: 700;
+    }
+    .summary .meanstd { font-size: 0.9rem; color: var(--muted); }
+    .summary .filters { margin-left: auto; font-size: 0.75rem; color: var(--muted); }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+    th {
+      font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted);
+      cursor: pointer; user-select: none; position: sticky; top: 0; background: var(--surface);
+    }
+    th:hover { color: var(--text); }
+    tr:hover { background: var(--bg); }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .score { font-weight: 700; }
+    .loading, .empty { text-align: center; padding: 60px; color: var(--muted); font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <a class="back" id="backLink" href="#">&larr; Dashboard</a>
+    <h1 id="pageTitle">Month Evaluations</h1>
+  </div>
+  <div class="meta" id="metaLine"></div>
+</div>
+
+<div class="container">
+  <div class="card">
+    <div class="summary" id="summary"></div>
+    <div style="overflow-x:auto">
+      <table id="evalsTable">
+        <thead>
+          <tr>
+            <th data-col="timestamp">Call Date</th>
+            <th data-col="agent">Agent</th>
+            <th data-col="supervisor">Supervisor</th>
+            <th data-col="overall_score">Score</th>
+            <th>Dialpad</th>
+          </tr>
+        </thead>
+        <tbody id="evalsBody"></tbody>
+      </table>
+    </div>
+    <div id="emptyState" class="empty" style="display:none;">No evaluations for this month under the current filters.</div>
+    <div id="loadingState" class="loading">Loading…</div>
+  </div>
+</div>
+
+<script>
+// --- Auth (Sandy port): the Google SSO wall authenticates every request;
+// the legacy API-key plumbing is vestigial. Keep the function shapes so the
+// rest of the file stays byte-identical to the Railway original.
+function getApiKey() { return 'sso'; }
+function authHeaders() { return {}; }
+
+const TEAM_ID = (location.pathname.match(/^\/dashboard\/([^\/]+)/) || [, 'member_support'])[1];
+const API_BASE = `${window.location.origin}/api/${TEAM_ID}`;
+
+const url = new URL(location.href);
+const month = url.searchParams.get('month') || '';
+const activeOnly = url.searchParams.get('active_only') !== 'false';
+const supervisor = url.searchParams.get('supervisor') || '';
+
+document.getElementById('backLink').href = `/dashboard/${TEAM_ID}`;
+document.getElementById('pageTitle').textContent = `Evaluations — ${month || '—'}`;
+
+const metaBits = [];
+metaBits.push(activeOnly ? 'Active analysts' : 'All analysts');
+if (supervisor) metaBits.push(`Supervisor: ${supervisor}`);
+document.getElementById('metaLine').textContent = metaBits.join(' · ');
+
+let _rows = [];
+let _sortKey = 'timestamp';
+let _sortAsc = false;
+
+function fmt(v, d = 1) { return v != null ? Number(v).toFixed(d) : '—'; }
+function scoreColor(v) { return v >= 85 ? '#28A745' : v >= 70 ? '#E8A317' : '#D9534F'; }
+function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+function fmtDate(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return iso || '—';
+  return d.toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+}
+
+function renderTable() {
+  const tbody = document.getElementById('evalsBody');
+  if (!_rows.length) {
+    tbody.innerHTML = '';
+    document.getElementById('emptyState').style.display = 'block';
+    return;
+  }
+  document.getElementById('emptyState').style.display = 'none';
+
+  const sorted = [..._rows].sort((a, b) => {
+    let va = a[_sortKey], vb = b[_sortKey];
+    if (va == null) return 1; if (vb == null) return -1;
+    if (typeof va === 'string') return _sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+    if (_sortKey === 'timestamp') { va = new Date(va).getTime(); vb = new Date(vb).getTime(); }
+    return _sortAsc ? va - vb : vb - va;
+  });
+
+  tbody.innerHTML = sorted.map(r => {
+    // Score links to this call's /datapoint page — closes the loop so a
+    // viewer can drill from "month list → individual eval breakdown"
+    // without leaving the app. eval_id is the call_id parsed out of the
+    // Dialpad link upstream (services/team_stats.py:_parse_row).
+    const scoreCell = r.eval_id
+      ? `<a href="/datapoint/${TEAM_ID}/${encodeURIComponent(r.eval_id)}"
+            class="score" style="color:${scoreColor(r.overall_score)};">${fmt(r.overall_score)}</a>`
+      : `<span class="score" style="color:${scoreColor(r.overall_score)};">${fmt(r.overall_score)}</span>`;
+    return `
+    <tr>
+      <td>${fmtDate(r.timestamp)}</td>
+      <td>${escapeHtml(r.agent)}</td>
+      <td>${escapeHtml(r.supervisor || '')}</td>
+      <td>${scoreCell}</td>
+      <td>${r.dialpad_link ? `<a href="${escapeHtml(r.dialpad_link)}" target="_blank" rel="noopener">Open &rsaquo;</a>` : ''}</td>
+    </tr>
+  `;}).join('');
+}
+
+document.querySelectorAll('th[data-col]').forEach(th => {
+  th.onclick = () => {
+    const col = th.dataset.col;
+    if (_sortKey === col) _sortAsc = !_sortAsc;
+    else { _sortKey = col; _sortAsc = false; }
+    renderTable();
+  };
+});
+
+async function fetchEvals() {
+  if (!month) {
+    document.getElementById('loadingState').textContent = 'No month specified.';
+    return;
+  }
+  try {
+    const params = new URLSearchParams({ year_month: month, active_only: activeOnly });
+    if (supervisor) params.set('supervisor', supervisor);
+    const r = await fetch(`${API_BASE}/team/evals?${params}`, { headers: authHeaders() });
+    if (r.status === 401) {
+      sessionStorage.removeItem('qa_api_key');
+      alert('Invalid API key. Please reload and try again.');
+      return;
+    }
+    if (!r.ok) throw new Error(r.statusText);
+    const data = await r.json();
+    _rows = data.rows || [];
+
+    // Summary line
+    const meanList = _rows.map(r => r.overall_score).filter(v => v != null);
+    const n = _rows.length;
+    const mean = n ? meanList.reduce((a, b) => a + b, 0) / n : null;
+    const variance = n > 1 ? meanList.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1) : null;
+    const std = variance != null ? Math.sqrt(variance) : null;
+    document.getElementById('summary').innerHTML = `
+      <div class="count">${n} eval${n === 1 ? '' : 's'}</div>
+      <div class="meanstd">${mean != null ? `mean ${fmt(mean)} ± ${fmt(std)}` : ''}</div>
+      <div class="filters">${month}</div>
+    `;
+
+    document.getElementById('loadingState').style.display = 'none';
+    renderTable();
+  } catch (e) {
+    console.error('Failed to fetch evals:', e);
+    document.getElementById('loadingState').textContent = 'Failed to load evaluations.';
+  }
+}
+
+fetchEvals();
+</script>
+</body>
+</html>

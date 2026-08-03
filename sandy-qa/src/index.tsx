@@ -11,6 +11,7 @@ import { createDb, items, workflowRuns } from "./db.js";
 import { desc, eq } from "drizzle-orm";
 import { listTriggerableWorkflows, triggerWorkflow, triggerWorkflowWithCallback, type WorkflowInfo } from "./workflow.js";
 import { serveFont } from "./design-system/fonts.js";
+import { handleTeamRoutes } from "./routes/teamApi.js";
 
 export interface Env {
   DB: D1Database;
@@ -34,6 +35,10 @@ export default {
       const fontResponse = serveFont(url.pathname);
       if (fontResponse) return fontResponse;
     }
+
+    // ── Ported QA pages + team analytics APIs (PortManifest §3/§4/§6.1) ──
+    const teamRes = await handleTeamRoutes(request, env.DB, url);
+    if (teamRes) return teamRes;
 
     // ── SSE transport spike (PortManifest §"SSE on Sandy") ───────────────
     // Answers one question empirically: does the Sandy edge stack

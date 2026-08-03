@@ -1,0 +1,1485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Team Analytics Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/header.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    :root {
+      --navy: #15192D; --accent: #1A61D9; --bg: #E7EFFB; --surface: #ffffff;
+      --border: #c9d5e8; --text: #15192D; --muted: #5a6478;
+      --green: #28A745; --amber: #E8A317; --red: #D9534F;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'DM Mono', monospace; background: var(--bg); color: var(--text); min-height: 100vh; }
+    h1, h2, h3 { font-family: 'Fraunces', serif; }
+
+    /* Header CSS lives in /static/header.css (shared with dashboard.html). */
+
+    /* Tabs */
+    .tab-bar {
+      background: var(--navy); display: flex; gap: 0; padding: 0 24px; overflow-x: auto;
+    }
+    .tab-btn {
+      font-family: 'DM Mono', monospace; padding: 10px 20px; border: none; background: transparent;
+      color: rgba(255,255,255,0.6); cursor: pointer; font-size: 0.85rem; border-bottom: 3px solid transparent;
+      white-space: nowrap; transition: color 0.2s, border-color 0.2s;
+    }
+    .tab-btn:hover { color: #fff; }
+    .tab-btn.active { color: #fff; border-bottom-color: var(--accent); }
+
+    /* Layout */
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: flex; flex-direction: column; gap: 20px; }
+
+    /* Cards */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+    .card h3 { font-size: 1rem; margin-bottom: 12px; color: var(--text); }
+
+    /* KPI row */
+    .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+    .kpi-box {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; text-align: center;
+    }
+    .kpi-box .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .kpi-box .value { font-family: 'Fraunces', serif; font-size: 2rem; font-weight: 700; margin: 4px 0; }
+    .kpi-box .sub { font-size: 0.75rem; color: var(--muted); }
+
+    /* Call-time initiative (PR-3) — single annotation under the chiclet
+       row + inline note in the SPC card title so management and analysts
+       can spot that monthly buckets are now anchored on call-connected
+       time, not eval-approval time. See references/CallTimeOnAnalystHistory.md. */
+    .bucket-hint {
+      margin: -4px 0 4px 4px; padding: 4px 0;
+      font-size: 0.72rem; color: var(--muted);
+      cursor: help;
+    }
+    .bucket-hint strong { color: var(--text); font-weight: 600; }
+    .bucket-hint-inline {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.65rem; font-weight: 500; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.05em;
+      margin-left: 8px; cursor: help;
+    }
+
+    /* Three top-of-overview chiclets — last month, current month, and
+       Recent Evals. Shared three-row layout:
+         header line:  LABEL: count   (with click-arrow tucked top-right)
+         hero number:  big primary metric + thin secondary
+         footer line:  context (month, time-ago)
+       Last/Current navigate to /dashboard/<team>/evals?month=…
+       Recent Evals toggles an expandable panel below the row. */
+    .chiclet-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+    .chiclet {
+      position: relative;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+      padding: 16px 20px; cursor: pointer; text-decoration: none; color: inherit;
+      display: flex; flex-direction: column; gap: 10px;
+      transition: border-color 0.15s, transform 0.15s;
+      font-family: inherit; font-size: inherit;
+      text-align: left;  /* button default-centers text on some browsers */
+    }
+    .chiclet:hover { border-color: var(--accent); transform: translateY(-1px); }
+    .chiclet.chiclet-active { border-color: var(--accent); }
+
+    /* Header line: "LAST MONTH: 121 evals" + arrow */
+    .chiclet-header {
+      display: flex; justify-content: space-between; align-items: baseline;
+      font-size: 0.7rem; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .chiclet-header .chiclet-count-inline {
+      color: var(--text); font-weight: 600;
+      /* slightly less muted than the label so the count reads */
+    }
+    .chiclet-arrow { color: var(--accent); font-size: 1rem; line-height: 1; }
+
+    /* Hero row: big mean / score, thin secondary inline */
+    .chiclet-hero {
+      display: flex; align-items: baseline; gap: 8px;
+      font-family: 'Fraunces', serif;
+    }
+    .chiclet-hero .chiclet-primary {
+      font-size: 2.4rem; font-weight: 700; line-height: 1.05;
+    }
+    .chiclet-hero .chiclet-secondary {
+      font-size: 1rem; font-weight: 400; color: var(--muted);
+      letter-spacing: 0.01em;
+    }
+    .chiclet-hero .chiclet-agent {
+      font-size: 0.95rem; font-weight: 500; color: var(--text);
+      font-family: 'DM Mono', monospace;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      min-width: 0; flex: 1;
+    }
+
+    /* Footer line: month or time-ago, plus an optional uppercase mini-label */
+    .chiclet-footer {
+      display: flex; justify-content: space-between; align-items: baseline;
+      font-size: 0.72rem; color: var(--muted);
+    }
+    .chiclet-footer .chiclet-mini-label {
+      text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.65rem;
+    }
+    .chiclet-footer .chiclet-when {
+      font-size: 0.78rem; color: var(--text);
+    }
+    /* Empty-state placeholder (Recent Evals before first eval) */
+    .chiclet-hero .chiclet-empty {
+      font-family: 'DM Mono', monospace; font-size: 1.1rem;
+      color: var(--muted); font-weight: 400;
+    }
+
+    /* Expanded panel beneath the chiclet row (Recent Evals drill-down) */
+    .recent-evals-panel {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+      padding: 14px 16px; margin-top: -4px;  /* visually attach to the row above */
+    }
+    .recent-evals-panel-header {
+      display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px;
+    }
+    .recent-evals-panel-header .label {
+      font-family: 'Fraunces', serif; font-size: 0.95rem; font-weight: 700;
+    }
+    .recent-evals-panel-header .sub { font-size: 0.72rem; color: var(--muted); }
+    .recent-evals-list { max-height: 320px; overflow-y: auto; }
+    .recent-evals-item {
+      display: grid; grid-template-columns: 70px 1fr 130px; align-items: center;
+      gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border);
+      font-size: 0.8rem;
+    }
+    .recent-evals-item:last-child { border-bottom: none; }
+    .recent-evals-item .re-score { font-family: 'Fraunces', serif; font-weight: 700; text-align: left; }
+    .recent-evals-item .re-agent { font-weight: 600; }
+    .recent-evals-item .re-evaluator {
+      font-size: 0.7rem; color: var(--muted); margin-top: 2px;
+    }
+    .recent-evals-item .re-time { color: var(--muted); font-size: 0.72rem; text-align: right; }
+    .recent-evals-empty { padding: 12px 0; color: var(--muted); font-size: 0.8rem; text-align: center; }
+
+    @media (max-width: 900px) {
+      .chiclet-row { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 640px) {
+      .chiclet-row { grid-template-columns: 1fr; }
+      .recent-evals-item { grid-template-columns: 60px 1fr 90px; }
+    }
+
+    /* Charts grid */
+    .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+
+    /* Tables */
+    table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+    th {
+      font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted);
+      cursor: pointer; user-select: none; position: sticky; top: 0; background: var(--surface);
+    }
+    th:hover { color: var(--text); }
+    tr:hover { background: var(--bg); }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* Badges */
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 0.7rem; font-weight: 500;
+    }
+    .badge-excellent { background: #dcfce7; color: #166534; }
+    .badge-good { background: #dbeafe; color: #1e40af; }
+    .badge-watch { background: #fef3c7; color: #92400e; }
+    .badge-at_risk, .badge-at-risk { background: #fee2e2; color: #991b1b; }
+    .badge-exceptional { background: #dcfce7; color: #166534; }
+    .badge-concerning { background: #fee2e2; color: #991b1b; }
+    .badge-high { background: #fee2e2; color: #991b1b; }
+    .badge-medium { background: #fef3c7; color: #92400e; }
+    .badge-low { background: #dbeafe; color: #1e40af; }
+
+    /* Trend arrows */
+    .trend-up { color: var(--green); }
+    .trend-down { color: var(--red); }
+    .trend-flat { color: var(--muted); }
+
+    /* Loading */
+    .loading { text-align: center; padding: 60px; color: var(--muted); font-size: 0.9rem; }
+
+    /* EWMA drill-down (clickable bar → expand evals list below the chart) */
+    .ewma-drill-header {
+      display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+      padding: 10px 12px; background: var(--bg); border-radius: 8px 8px 0 0;
+      border: 1px solid var(--border); border-bottom: none;
+    }
+    .ewma-drill-agent { font-family: 'Fraunces', serif; font-size: 1.05rem; font-weight: 700; }
+    .ewma-drill-sub { font-size: 0.75rem; color: var(--muted); }
+    .ewma-drill-close {
+      margin-left: auto; background: transparent; border: 1px solid var(--border);
+      color: var(--muted); border-radius: 6px; padding: 4px 10px; font-size: 0.75rem;
+      cursor: pointer; font-family: 'DM Mono', monospace;
+    }
+    .ewma-drill-close:hover { color: var(--text); border-color: var(--muted); }
+    .ewma-drill-table {
+      width: 100%; border-collapse: collapse; font-size: 0.78rem;
+      border: 1px solid var(--border); border-radius: 0 0 8px 8px; overflow: hidden;
+    }
+    .ewma-drill-table th, .ewma-drill-table td {
+      padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border);
+    }
+    .ewma-drill-table th {
+      font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--muted); background: var(--surface); position: static;
+    }
+    .ewma-drill-table tr:last-child td { border-bottom: none; }
+    .ewma-drill-table .score-link { font-weight: 700; }
+    .ewma-drill-empty {
+      padding: 20px; text-align: center; color: var(--muted); font-size: 0.8rem;
+      border: 1px solid var(--border); border-radius: 0 0 8px 8px;
+    }
+
+    /* Toast (SSE eval_approved notifications) */
+    .toast-container {
+      position: fixed; bottom: 24px; right: 24px; z-index: 1000;
+      display: flex; flex-direction: column; gap: 10px; max-width: 360px;
+    }
+    .toast {
+      background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent);
+      border-radius: 10px; padding: 12px 14px; box-shadow: 0 6px 20px rgba(21,25,45,0.18);
+      cursor: pointer; transition: transform 0.18s, opacity 0.18s;
+      animation: toast-slide-in 0.22s ease-out;
+    }
+    .toast:hover { transform: translateX(-3px); }
+    .toast.dismissing { opacity: 0; transform: translateX(20px); }
+    .toast .toast-row {
+      display: flex; align-items: baseline; gap: 8px; font-size: 0.8rem;
+    }
+    .toast .toast-agent { font-weight: 600; color: var(--text); }
+    .toast .toast-score {
+      font-family: 'Fraunces', serif; font-weight: 700; font-size: 0.95rem; margin-left: auto;
+    }
+    .toast .toast-summary {
+      font-size: 0.75rem; color: var(--muted); margin-top: 6px; line-height: 1.4;
+      overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    }
+    @keyframes toast-slide-in {
+      from { opacity: 0; transform: translateX(40px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+    /* Compact variant: agent_status pulses (SSE). One line, muted accent,
+       shorter-lived than eval_approved toasts. */
+    .toast.toast-status {
+      border-left-color: var(--muted); padding: 7px 12px;
+    }
+    .toast.toast-status .toast-row { font-size: 0.72rem; }
+    .toast.toast-status .toast-status-label {
+      color: var(--muted); margin-left: auto; font-weight: 600;
+      text-transform: capitalize;
+    }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+      .kpi-row { grid-template-columns: repeat(2, 1fr); }
+      .charts-grid { grid-template-columns: 1fr; }
+      .container { padding: 16px; }
+      .tab-btn { padding: 8px 12px; font-size: 0.75rem; }
+    }
+  </style>
+</head>
+<body>
+
+<div id="appHeader"></div>
+
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="switchTab('overview')">Overview</button>
+  <button class="tab-btn" onclick="switchTab('roster')">Agent Roster</button>
+  <button class="tab-btn" onclick="switchTab('outliers')">Outliers</button>
+  <button class="tab-btn" onclick="switchTab('sections')">Section Analysis</button>
+  <button class="tab-btn" onclick="switchTab('supervisors')">Supervisors</button>
+</div>
+
+<div class="container">
+  <!-- Overview Tab -->
+  <div class="tab-panel active" id="panel-overview">
+    <div class="chiclet-row" id="chicletRow"></div>
+    <div class="bucket-hint" title="Months reflect when calls actually connected (Dialpad date_connected). Score_Audit retains the eval-approval times.">
+      &#9432; Months bucketed by <strong>call date</strong>, not eval-approval date
+    </div>
+    <div class="recent-evals-panel" id="recentEvalsPanel" style="display:none;"></div>
+    <div class="kpi-row" id="kpiRow"></div>
+    <div class="charts-grid">
+      <div class="card">
+        <h3>SPC Control Chart <span class="bucket-hint-inline" title="Each month's mean is computed over calls that connected in that month.">&#9432; by call date</span></h3>
+        <canvas id="spcCanvas"></canvas>
+      </div>
+      <div class="card"><h3>Score Distribution</h3><canvas id="distCanvas" style="cursor:pointer;"></canvas><div id="distDrillDown" style="display:none;"></div></div>
+    </div>
+    <div class="card">
+      <h3>EWMA by Agent</h3>
+      <canvas id="ewmaCanvas" style="cursor:pointer;"></canvas>
+      <div id="ewmaDrillDown" style="display:none; margin-top:16px;"></div>
+    </div>
+  </div>
+
+  <!-- Agent Roster Tab -->
+  <div class="tab-panel" id="panel-roster">
+    <div class="card">
+      <h3>Agent Roster</h3>
+      <div style="overflow-x:auto"><table id="rosterTable"><thead><tr id="rosterHeaderRow">
+        <th data-col="agent">Agent</th><th data-col="n">Evals</th>
+        <th data-col="mean">Mean</th><th data-col="std">Std</th>
+        <th data-col="ewma">EWMA</th><th data-col="trend">Trend</th>
+        <!-- One <th> per Y/N section is injected here at render time, between Trend and Status. -->
+        <th data-col="status">Status</th><th>Weak Sections</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+
+  <!-- Outliers Tab -->
+  <div class="tab-panel" id="panel-outliers">
+    <div class="card">
+      <h3>Outliers</h3>
+      <div style="overflow-x:auto"><table id="outliersTable"><thead><tr>
+        <th data-col="agent">Agent</th><th data-col="date">Date</th>
+        <th data-col="score">Score</th><th data-col="agent_median">Agent Median</th>
+        <th data-col="modified_z">Modified Z</th><th data-col="classification">Type</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+
+  <!-- Section Analysis Tab -->
+  <div class="tab-panel" id="panel-sections">
+    <div class="charts-grid">
+      <div class="card"><h3>Section Averages</h3><canvas id="sectionAvgCanvas"></canvas></div>
+      <div class="card"><h3>Section Variability</h3><canvas id="sectionVarCanvas"></canvas></div>
+    </div>
+    <div class="kpi-row" style="grid-template-columns: repeat(2, 1fr);" id="binaryStats"></div>
+    <div class="card">
+      <h3>Training Opportunities</h3>
+      <div style="overflow-x:auto"><table id="trainingTable"><thead><tr>
+        <th data-col="agent">Agent</th><th data-col="section">Section</th>
+        <th data-col="agent_avg">Agent Avg</th><th data-col="team_avg">Team Avg</th>
+        <th data-col="gap">Gap</th><th data-col="priority">Priority</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+
+  <!-- Toast container for SSE eval_approved notifications -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Supervisors Tab -->
+  <div class="tab-panel" id="panel-supervisors">
+    <div class="card"><h3>Supervisor Comparison</h3><canvas id="supervisorCanvas"></canvas></div>
+    <div class="card">
+      <h3>Supervisor Summary</h3>
+      <div style="overflow-x:auto"><table id="supervisorTable"><thead><tr>
+        <th data-col="supervisor">Supervisor</th><th data-col="avg_score">Avg Score</th>
+        <th data-col="std_score">Std</th><th data-col="eval_count">Eval Count</th>
+        <th data-col="agent_count">Agent Count</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/header.js"></script>
+<script>
+// --- Auth (Sandy port): the Google SSO wall authenticates every request;
+// the legacy API-key plumbing is vestigial. Keep the function shapes so the
+// rest of the file stays byte-identical to the Railway original.
+function getApiKey() { return 'sso'; }
+function authHeaders() { return {}; }
+
+const TEAM_ID = (location.pathname.match(/^\/dashboard\/([^\/]+)/) || [, 'member_support'])[1];
+const API_BASE = `${window.location.origin}/api/${TEAM_ID}`;
+
+// Filter state owned by QAHeader (header.js). Hydrated from the URL on
+// init and emitted via the onChange callback we wire in below. Defaults
+// match QAHeader's DEFAULT_DAYS so the first paint and the first /team/stats
+// fetch agree on which chiclet is active.
+let selectedDays = 30;
+let dateFrom = null;
+let dateTo = null;
+let activeOnly = true;
+let selectedSupervisor = '';
+let qaHeader = null;
+let teamData = null;
+let currentTab = 'overview';
+let sortState = {};
+
+let spcChart = null, distChart = null, ewmaChart = null;
+let sectionAvgChart = null, sectionVarChart = null, supervisorChart = null;
+
+// --- Fetch ---
+async function fetchTeamStats() {
+  collapseDistDrill();  // collapse drill-down on timeframe/filter change
+  const params = new URLSearchParams({ active_only: activeOnly });
+  // Custom-range chiclet (dateFrom + dateTo) takes precedence over `days`.
+  if (dateFrom && dateTo) {
+    params.set('date_from', dateFrom);
+    params.set('date_to', dateTo);
+  } else {
+    params.set('days', selectedDays);
+  }
+  if (selectedSupervisor) params.set('supervisor', selectedSupervisor);
+  try {
+    const r = await fetch(`${API_BASE}/team/stats?${params}`, { headers: authHeaders() });
+    if (r.status === 401) {
+      sessionStorage.removeItem('qa_api_key');
+      alert('Invalid API key. Please reload and try again.');
+      return;
+    }
+    if (!r.ok) throw new Error(r.statusText);
+    teamData = await r.json();
+    renderTab(currentTab);
+    // Initial-populate the Recent Evals ring buffer on first successful
+    // /team/stats response — the response carries monthly.current.year_month
+    // which we need to call /team/evals. Subsequent stats refetches skip
+    // this (the SSE feed is now the source of truth).
+    initRecentEvalsBuffer();
+  } catch (e) {
+    console.error('Failed to fetch team stats:', e);
+  }
+}
+
+async function fetchMails() {
+  try {
+    const r = await fetch(`${API_BASE}/team/mails`, { headers: authHeaders() });
+    if (r.status === 401) {
+      sessionStorage.removeItem('qa_api_key');
+      alert('Invalid API key. Please reload and try again.');
+      return;
+    }
+    if (!r.ok) return;
+    const mails = await r.json();
+    const supervisors = [...new Set(mails.map(m => m.supervisor).filter(Boolean))].sort();
+    if (qaHeader) qaHeader.setSupervisors(supervisors);
+  } catch (e) { console.error('Failed to fetch mails:', e); }
+}
+
+// QAHeader (header.js) owns the chiclets / Active Only / Supervisor /
+// custom-range popover. It emits a single onChange with the resolved
+// filter state; we mirror it into the page-level locals + refetch.
+
+// --- Tabs ---
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + tab).classList.add('active');
+  if (teamData) renderTab(tab);
+}
+
+function renderTab(tab) {
+  if (!teamData) return;
+  const renderers = {
+    overview: renderOverview, roster: renderRoster, outliers: renderOutliers,
+    sections: renderSections, supervisors: renderSupervisors
+  };
+  renderers[tab]?.();
+}
+
+// --- Helpers ---
+function scoreColor(v) { return v >= 85 ? '#28A745' : v >= 70 ? '#E8A317' : '#D9534F'; }
+function sectionScoreColor(v) { return v >= 4.25 ? '#28A745' : v >= 3.5 ? '#E8A317' : '#D9534F'; }
+function varColor(v) { return v > 1.1 ? '#D9534F' : v > 0.9 ? '#E8A317' : '#28A745'; }
+function destroyChart(c) { if (c) c.destroy(); return null; }
+function fmt(v, d = 1) { return v != null ? Number(v).toFixed(d) : '--'; }
+function pctFmt(v) { return v != null ? Number(v).toFixed(1) + '%' : '--'; }
+function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+function trendHtml(t) {
+  if (t === 'improving') return '<span class="trend-up">&#9650;</span>';
+  if (t === 'declining') return '<span class="trend-down">&#9660;</span>';
+  return '<span class="trend-flat">&#9679;</span>';
+}
+
+function statusBadge(s) {
+  if (!s) return '';
+  return `<span class="badge badge-${s}">${s.replace('_', ' ')}</span>`;
+}
+
+function priorityBadge(p) {
+  if (!p) return '';
+  return `<span class="badge badge-${p}">${p}</span>`;
+}
+
+// --- Sort ---
+// data-col supports dot-paths (e.g. "binary_pcts.contact_verification")
+// so dynamically-injected nested columns (Y/N percentages per section)
+// sort the same way as flat fields.
+function _readPath(obj, path) {
+  return path.split('.').reduce((o, k) => (o == null ? null : o[k]), obj);
+}
+function attachSort(tableId, data, renderFn) {
+  const table = document.getElementById(tableId);
+  if (!table) return;
+  table.querySelectorAll('th[data-col]').forEach(th => {
+    th.onclick = () => {
+      const col = th.dataset.col;
+      const key = tableId + '.' + col;
+      const asc = sortState[key] === 'asc' ? 'desc' : 'asc';
+      sortState[key] = asc;
+      data.sort((a, b) => {
+        let va = _readPath(a, col), vb = _readPath(b, col);
+        if (va == null) return 1; if (vb == null) return -1;
+        if (typeof va === 'string') return asc === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+        return asc === 'asc' ? va - vb : vb - va;
+      });
+      renderFn(data);
+    };
+  });
+}
+
+// --- Overview ---
+function renderOverview() {
+  renderChiclets();
+
+  const k = teamData.kpis || {};
+  document.getElementById('kpiRow').innerHTML = [
+    { label: 'Total Evals', value: k.total_evals ?? '--' },
+    { label: 'Avg Score', value: fmt(k.avg_score), color: scoreColor(k.avg_score) },
+    { label: 'Std Dev', value: fmt(k.std_score) },
+    { label: 'Active Analysts', value: k.analyst_count ?? '--' }
+  ].map(kpi => `<div class="kpi-box">
+    <div class="label">${kpi.label}</div>
+    <div class="value" ${kpi.color ? `style="color:${kpi.color}"` : ''}>${kpi.value}</div>
+  </div>`).join('');
+
+  renderSpcChart();
+  renderDistChart();
+  renderEwmaChart();
+}
+
+function renderChiclets() {
+  const monthly = teamData.monthly || {};
+  const target = document.getElementById('chicletRow');
+  if (!target) return;
+
+  function _chiclet(label, m) {
+    if (!m) return '';
+    // Drill-down preserves the page's active/supervisor filters; the month
+    // string is the time window so the days filter is not propagated.
+    const params = new URLSearchParams({
+      month: m.year_month,
+      active_only: activeOnly,
+    });
+    if (selectedSupervisor) params.set('supervisor', selectedSupervisor);
+    const href = `/dashboard/${TEAM_ID}/evals?${params.toString()}`;
+
+    const meanLabel = m.mean != null ? fmt(m.mean) : '—';
+    const stdLabel = m.std != null ? `± ${fmt(m.std)}` : '';
+    const meanColor = m.mean != null ? scoreColor(m.mean) : 'var(--muted)';
+
+    return `<a class="chiclet" href="${href}">
+      <div class="chiclet-header">
+        <span>${label}: <span class="chiclet-count-inline">${m.count} eval${m.count === 1 ? '' : 's'}</span></span>
+        <span class="chiclet-arrow">&rsaquo;</span>
+      </div>
+      <div class="chiclet-hero">
+        <span class="chiclet-primary" style="color:${meanColor}">${meanLabel}</span>
+        ${stdLabel ? `<span class="chiclet-secondary">${stdLabel}</span>` : ''}
+      </div>
+      <div class="chiclet-footer">
+        <span class="chiclet-when">${_monthDisplay(m.year_month)}</span>
+        <span class="chiclet-mini-label">mean ± std</span>
+      </div>
+    </a>`;
+  }
+
+  target.innerHTML =
+    _chiclet('Last Month', monthly.last) +
+    _chiclet('Current Month', monthly.current) +
+    _recentEvalsChiclet();
+}
+
+// ---------------------------------------------------------------------------
+// Recent Evals chiclet (Phase F of LiveDashboard.md)
+//
+// Third chiclet on the row. Collapsed: count + most-recent agent/score.
+// Expanded: scrollable list of up to RECENT_EVALS_VISIBLE rows beneath the
+// chiclet row (same visual register as the EWMA drill-down).
+//
+// Source of truth is a client-side ring buffer (max 50 entries). On dashboard
+// load the buffer is initial-populated via /team/evals?year_month=<current>
+// (already shipped in Phase A). After that, every SSE eval_approved event
+// prepends. The buffer survives /team/stats refetches; only a hard page
+// reload empties it (acceptable — the Sheet is one fetch away).
+// ---------------------------------------------------------------------------
+const RECENT_EVALS_MAX = 50;
+const RECENT_EVALS_VISIBLE = 10;
+let _recentEvalsBuffer = [];           // newest first; all-time log (caps at 50)
+let _recentEvalsInitialized = false;
+let _recentEvalsExpanded = false;
+let _midnightTimer = null;             // re-renders the chiclet at next local midnight
+
+function _recentEvalsChiclet() {
+  // The displayed "count" reflects TODAY only (user's local midnight boundary).
+  // The full buffer still drives the expanded panel — so "5 today" in the
+  // header but clicking through shows the last 10 across all time.
+  const todayCount = _recentEvalsBuffer.filter(r => _isToday(r.timestamp)).length;
+  const countLabel = `${todayCount} today`;
+
+  const latest = _recentEvalsBuffer[0];
+  let heroHtml;
+  let footerWhen;
+  if (latest && latest.overall_score != null) {
+    const color = scoreColor(latest.overall_score);
+    heroHtml = `
+      <span class="chiclet-primary" style="color:${color}">${fmt(latest.overall_score)}</span>
+      <span class="chiclet-agent">${escapeHtml(latest.agent || '—')}</span>
+    `;
+    footerWhen = _timeAgo(latest.timestamp);
+  } else {
+    heroHtml = '<span class="chiclet-empty">awaiting first eval…</span>';
+    footerWhen = '—';
+  }
+
+  return `<button type="button"
+                  class="chiclet ${_recentEvalsExpanded ? 'chiclet-active' : ''}"
+                  onclick="toggleRecentEvals()">
+    <div class="chiclet-header">
+      <span>RECENT EVALS: <span class="chiclet-count-inline">${countLabel}</span></span>
+      <span class="chiclet-arrow">${_recentEvalsExpanded ? '&#9662;' : '&rsaquo;'}</span>
+    </div>
+    <div class="chiclet-hero">${heroHtml}</div>
+    <div class="chiclet-footer">
+      <span class="chiclet-when">${footerWhen}</span>
+      <span class="chiclet-mini-label">latest</span>
+    </div>
+  </button>`;
+}
+
+function toggleRecentEvals() {
+  _recentEvalsExpanded = !_recentEvalsExpanded;
+  renderChiclets();
+  renderRecentEvalsPanel();
+}
+
+function renderRecentEvalsPanel() {
+  const panel = document.getElementById('recentEvalsPanel');
+  if (!panel) return;
+  if (!_recentEvalsExpanded) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+  panel.style.display = 'block';
+
+  const visible = _recentEvalsBuffer.slice(0, RECENT_EVALS_VISIBLE);
+  const subText = _recentEvalsBuffer.length === 0
+    ? 'Waiting for new evaluations…'
+    : `showing ${visible.length} of ${_recentEvalsBuffer.length}`;
+
+  const itemsHtml = visible.length === 0
+    ? '<div class="recent-evals-empty">No recent evaluations yet.</div>'
+    : visible.map(r => {
+        const color = scoreColor(r.overall_score);
+        const scoreCell = r.eval_id
+          ? `<a class="re-score" href="/datapoint/${TEAM_ID}/${encodeURIComponent(r.eval_id)}" style="color:${color};">${fmt(r.overall_score)}</a>`
+          : `<span class="re-score" style="color:${color};">${fmt(r.overall_score)}</span>`;
+        const evaluatorLine = r.evaluator_email
+          ? `<div class="re-evaluator">by ${escapeHtml(_displayNameFromEmail(r.evaluator_email))}</div>`
+          : '';
+        return `<div class="recent-evals-item">
+          <div>${scoreCell}</div>
+          <div>
+            <div class="re-agent">${escapeHtml(r.agent || '—')}</div>
+            ${evaluatorLine}
+          </div>
+          <div class="re-time">${_timeAgo(r.timestamp)}</div>
+        </div>`;
+      }).join('');
+
+  panel.innerHTML = `
+    <div class="recent-evals-panel-header">
+      <span class="label">Recent Evaluations</span>
+      <span class="sub">${subText}</span>
+    </div>
+    <div class="recent-evals-list">${itemsHtml}</div>
+  `;
+}
+
+async function initRecentEvalsBuffer() {
+  // Idempotent: only runs once per page load. The SSE handler is the
+  // ongoing feed afterwards.
+  if (_recentEvalsInitialized) return;
+  _recentEvalsInitialized = true;
+
+  const ym = teamData?.monthly?.current?.year_month;
+  if (!ym) return;
+
+  try {
+    // active_only=false: the chiclet is the "log of toasts" — toasts ignore
+    // dashboard filters, so this should too. Otherwise initial-population
+    // and SSE feed would disagree (toast shows an agent who's filtered out
+    // of the chart, then chiclet wouldn't pre-fill them).
+    const r = await fetch(
+      `${API_BASE}/team/evals?year_month=${encodeURIComponent(ym)}&active_only=false`,
+      { headers: authHeaders() },
+    );
+    if (!r.ok) return;
+    const data = await r.json();
+    // For the Recent Evals chiclet specifically, "time-ago" means time
+    // since approval, not time since the call connected — this is the
+    // one place where the eval clock takes the front seat. /team/evals
+    // post-PR-3 returns `timestamp` (call date, for the drill-down
+    // page's "Call Date" column) and `eval_approved_at` (eval-approval
+    // clock). We prefer eval_approved_at so initial-populate matches
+    // SSE-fed entries (the SSE `timestamp` field is already set to
+    // `datetime.now(UTC)` at publish time). Fall back to call time only
+    // when an old client/sheet didn't carry eval_approved_at.
+    const _evalClock = (row) => row.eval_approved_at || row.timestamp;
+    const rows = (data.rows || [])
+      .slice()
+      .sort((a, b) => new Date(_evalClock(b)) - new Date(_evalClock(a)))
+      .slice(0, RECENT_EVALS_MAX)
+      .map(r => ({
+        agent: r.agent,
+        overall_score: r.overall_score,
+        timestamp: _evalClock(r),
+        eval_id: r.eval_id,
+        evaluator_email: r.evaluator_email,
+      }));
+    _recentEvalsBuffer = rows;
+    renderChiclets();
+    if (_recentEvalsExpanded) renderRecentEvalsPanel();
+  } catch (e) {
+    console.error('Failed to init recent-evals buffer:', e);
+  }
+}
+
+function prependRecentEval(data) {
+  // De-dupe: an approval handler that publishes twice would otherwise duplicate
+  // the entry. Keyed on eval_id when present (call_id fallback for older shape).
+  const key = data.eval_id || data.call_id;
+  if (key) {
+    _recentEvalsBuffer = _recentEvalsBuffer.filter(r => (r.eval_id || r.call_id) !== key);
+  }
+  _recentEvalsBuffer.unshift({
+    agent: data.agent,
+    overall_score: data.overall_score,
+    timestamp: data.timestamp,
+    eval_id: data.eval_id || data.call_id,
+    call_id: data.call_id,
+    evaluator_email: data.evaluator_email,
+  });
+  if (_recentEvalsBuffer.length > RECENT_EVALS_MAX) {
+    _recentEvalsBuffer.length = RECENT_EVALS_MAX;
+  }
+  renderChiclets();
+  if (_recentEvalsExpanded) renderRecentEvalsPanel();
+}
+
+function _monthDisplay(yyyy_mm) {
+  // "2026-04" → "Apr, 2026". Falls back to the raw string for unparseable
+  // inputs (defensive — should never happen for a /team/stats response).
+  if (!yyyy_mm || !/^\d{4}-\d{2}$/.test(yyyy_mm)) return yyyy_mm || '';
+  const [yStr, mStr] = yyyy_mm.split('-');
+  const monthIdx = parseInt(mStr, 10) - 1;
+  if (monthIdx < 0 || monthIdx > 11) return yyyy_mm;
+  // Construct a UTC date so the month name doesn't drift on a tz boundary.
+  const d = new Date(Date.UTC(parseInt(yStr, 10), monthIdx, 1));
+  const name = d.toLocaleDateString(undefined, { month: 'short', timeZone: 'UTC' });
+  return `${name}, ${yStr}`;
+}
+
+function _isToday(iso) {
+  // Local-time "today" boundary so the chiclet matches the viewer's
+  // experience of the day. Midnight rollover is handled by
+  // _scheduleMidnightRerender (no polling).
+  if (!iso) return false;
+  const t = new Date(iso);
+  if (isNaN(t)) return false;
+  const now = new Date();
+  return t.getFullYear() === now.getFullYear()
+      && t.getMonth() === now.getMonth()
+      && t.getDate() === now.getDate();
+}
+
+function _scheduleMidnightRerender() {
+  // setTimeout exactly to the next local midnight; on fire, re-render the
+  // chiclets (so "today" counts reset) and re-schedule. Avoids polling.
+  // Cap the delay at 24h to defend against system-clock drift edge cases
+  // where the next-midnight calculation lands further out than expected.
+  if (_midnightTimer) clearTimeout(_midnightTimer);
+  const now = new Date();
+  const tomorrowMidnight = new Date(
+    now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 50
+  );
+  const delay = Math.min(24 * 3600 * 1000, tomorrowMidnight.getTime() - now.getTime());
+  _midnightTimer = setTimeout(() => {
+    _midnightTimer = null;
+    if (teamData) renderChiclets();
+    _scheduleMidnightRerender();
+  }, Math.max(1000, delay));  // floor at 1s for clock-skew edge cases
+}
+
+function _displayNameFromEmail(email) {
+  // Mirrors backend/src/QAEntry.managerNameFromEmail: "max.perez@landing.com"
+  // → "Max Perez". The full email is verbose for a row in the chiclet panel.
+  if (!email) return '';
+  const local = email.split('@')[0] || '';
+  if (!local) return email;
+  return local.split(/[._-]/)
+    .filter(Boolean)
+    .map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function _timeAgo(iso) {
+  if (!iso) return '—';
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return '—';
+  const secs = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (secs < 60) return 'just now';
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  const days = Math.round(hours / 24);
+  if (days < 7) return `${days} day${days === 1 ? '' : 's'} ago`;
+  // For older entries, fall back to a short date instead of "12 weeks ago".
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: '2-digit' });
+}
+
+function renderSpcChart() {
+  spcChart = destroyChart(spcChart);
+  const spc = teamData.spc;
+  if (!spc || !spc.months || !spc.months.length) return;
+  const labels = spc.months.map(m => m.month);
+  const means = spc.months.map(m => m.mean);
+  const pointColors = means.map(m => (m > spc.ucl || m < spc.lcl) ? '#D9534F' : '#1A61D9');
+  spcChart = new Chart(document.getElementById('spcCanvas'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Monthly Mean', data: means, borderColor: '#1A61D9', fill: false, tension: 0.2, pointBackgroundColor: pointColors, pointRadius: 5 },
+        { label: 'UCL', data: labels.map(() => spc.ucl), borderColor: '#D9534F', borderDash: [6, 4], pointRadius: 0, borderWidth: 1.5 },
+        { label: 'LCL', data: labels.map(() => spc.lcl), borderColor: '#D9534F', borderDash: [6, 4], pointRadius: 0, borderWidth: 1.5 },
+        { label: 'Center', data: labels.map(() => spc.center), borderColor: '#5a6478', borderDash: [4, 4], pointRadius: 0, borderWidth: 1.5 }
+      ]
+    },
+    options: {
+      responsive: true,
+      scales: { y: { min: 60, max: 100, ticks: { stepSize: 5 } } },
+      plugins: { legend: { position: 'bottom' } },
+      // Phase E (LiveDashboard.md): clicking a monthly-mean point opens
+      // the same /evals?month=YYYY-MM page the chiclets use, preserving
+      // the dashboard's active_only + supervisor filters. Closes the
+      // loop: viewer can drill from any trend point to its underlying
+      // evals without leaving the app.
+      onHover: (e, items) => {
+        e.native && (e.native.target.style.cursor = items.length ? 'pointer' : 'default');
+      },
+      onClick: (event, activeElements) => {
+        if (!activeElements.length) return;
+        // Only react to the Monthly Mean dataset (index 0). Clicking on
+        // UCL/LCL/Center lines (datasets 1–3) is meaningless.
+        const hit = activeElements.find(a => a.datasetIndex === 0);
+        if (!hit) return;
+        const m = spc.months[hit.index];
+        if (!m || !m.month) return;
+        const params = new URLSearchParams({
+          month: m.month,
+          active_only: activeOnly,
+        });
+        if (selectedSupervisor) params.set('supervisor', selectedSupervisor);
+        location.href = `/dashboard/${TEAM_ID}/evals?${params.toString()}`;
+      },
+    },
+  });
+}
+
+function renderDistChart() {
+  distChart = destroyChart(distChart);
+  const bins = teamData.distribution;
+  if (!bins?.length) return;
+  const colors = bins.map(b => {
+    const lo = parseInt(b.bin);
+    if (lo >= 91) return '#28A745';
+    if (lo >= 81) return '#1A61D9';
+    if (lo >= 71) return '#E8A317';
+    return '#D9534F';
+  });
+  distChart = new Chart(document.getElementById('distCanvas'), {
+    type: 'bar',
+    data: { labels: bins.map(b => b.bin), datasets: [{ label: 'Count', data: bins.map(b => b.count), backgroundColor: colors, borderColor: colors, borderWidth: 1 }] },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+      onClick: (event, activeElements) => {
+        if (!activeElements.length) return;
+        const idx = activeElements[0].index;
+        const bin = bins[idx].bin;
+        loadDistDrillDown(bin);
+      }
+    }
+  });
+}
+
+// --- Distribution drill-down ---
+let _distDrillData = null;
+let _distDrillBin = null;
+let _distSortKey = 'score';
+let _distSortAsc = false;
+
+function collapseDistDrill() {
+  const el = document.getElementById('distDrillDown');
+  el.style.display = 'none';
+  el.innerHTML = '';
+  _distDrillData = null;
+  _distDrillBin = null;
+}
+
+function sortDistDrill(key) {
+  if (_distSortKey === key) {
+    _distSortAsc = !_distSortAsc;
+  } else {
+    _distSortKey = key;
+    _distSortAsc = key === 'agent';  // default asc for agent, desc for score/date
+  }
+  renderDistDrillTable();
+}
+
+function renderDistDrillTable() {
+  if (!_distDrillData) return;
+  const drillEl = document.getElementById('distDrillDown');
+
+  const sorted = [..._distDrillData].sort((a, b) => {
+    let va, vb;
+    if (_distSortKey === 'agent') { va = a.agent_name.toLowerCase(); vb = b.agent_name.toLowerCase(); }
+    else if (_distSortKey === 'date') { va = a.timestamp; vb = b.timestamp; }
+    else { va = a.overall_score; vb = b.overall_score; }
+    if (va < vb) return _distSortAsc ? -1 : 1;
+    if (va > vb) return _distSortAsc ? 1 : -1;
+    return 0;
+  });
+
+  const arrow = (key) => _distSortKey === key ? (_distSortAsc ? ' &#9650;' : ' &#9660;') : '';
+  const thStyle = 'padding:6px;cursor:pointer;user-select:none;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);';
+
+  drillEl.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 6px 4px;">
+      <span style="font-size:0.78rem;font-weight:500;color:var(--navy);">${_distDrillBin} — ${sorted.length} evaluations</span>
+      <span onclick="collapseDistDrill()" style="cursor:pointer;font-size:0.8rem;color:var(--muted);padding:2px 8px;" title="Collapse">&#9660;</span>
+    </div>
+    <table style="width:100%;font-size:0.78rem;border-collapse:collapse;">
+      <tr style="border-bottom:2px solid var(--border);">
+        <th style="${thStyle}text-align:left;" onclick="sortDistDrill('agent')">Agent${arrow('agent')}</th>
+        <th style="${thStyle}" onclick="sortDistDrill('date')">Date${arrow('date')}</th>
+        <th style="${thStyle}" onclick="sortDistDrill('score')">Score${arrow('score')}</th>
+        <th style="${thStyle}">Call</th>
+      </tr>
+      ${sorted.map(e => `<tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;"><a href="/dashboard/${TEAM_ID}/agent/${encodeURIComponent(e.agent_name)}">${e.agent_name}</a></td>
+        <td style="padding:6px;text-align:center;">${new Date(e.timestamp).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</td>
+        <td style="padding:6px;text-align:center;color:${e.overall_score>=85?'var(--green)':e.overall_score>=70?'var(--amber)':'var(--red)'};font-weight:500;">${e.overall_score.toFixed(1)}</td>
+        <td style="padding:6px;text-align:center;">${e.eval_id ? `<a href="/datapoint/${TEAM_ID}/${e.eval_id}">View</a>` : ''}</td>
+      </tr>`).join('')}
+    </table>`;
+}
+
+async function loadDistDrillDown(bin) {
+  const drillEl = document.getElementById('distDrillDown');
+
+  // If same bin clicked, toggle collapse
+  if (_distDrillBin === bin && drillEl.style.display !== 'none') {
+    collapseDistDrill();
+    return;
+  }
+
+  _distDrillBin = bin;
+  _distSortKey = 'score';
+  _distSortAsc = false;
+  drillEl.style.display = '';
+  drillEl.innerHTML = `<p style="color:var(--muted);font-size:0.8rem;padding:10px 6px;">Loading evaluations in ${bin}...</p>`;
+
+  try {
+    const r = await fetch(`${API_BASE}/datapoints?bin=${bin}&days=${selectedDays}&active_only=${activeOnly}`, { headers: authHeaders() });
+    if (!r.ok) { drillEl.innerHTML = `<p style="color:var(--red);font-size:0.8rem;padding:8px;">Failed to load.</p>`; return; }
+    _distDrillData = await r.json();
+    if (!_distDrillData.length) { drillEl.innerHTML = `<p style="color:var(--muted);font-size:0.8rem;padding:10px 6px;">No evaluations in ${bin}.</p>`; return; }
+    renderDistDrillTable();
+  } catch (err) {
+    drillEl.innerHTML = `<p style="color:var(--red);font-size:0.8rem;padding:8px;">Error: ${err.message}</p>`;
+  }
+}
+
+// Tracks which agent's EWMA drill-down is currently expanded so a second
+// click on the same bar collapses (and a click on a different bar swaps).
+let _ewmaExpandedAgent = null;
+
+function renderEwmaChart() {
+  ewmaChart = destroyChart(ewmaChart);
+  const data = teamData.ewma;
+  if (!data?.length) {
+    // Collapse drill-down when the underlying chart goes empty (e.g. after
+    // a filter change that produces no agents).
+    collapseEwmaDrill();
+    return;
+  }
+  const colors = data.map(d => d.current_ewma >= 90 ? '#28A745' : d.current_ewma >= 80 ? '#1A61D9' : d.current_ewma >= 70 ? '#E8A317' : '#D9534F');
+  ewmaChart = new Chart(document.getElementById('ewmaCanvas'), {
+    type: 'bar',
+    data: { labels: data.map(d => d.agent), datasets: [{ label: 'EWMA', data: data.map(d => d.current_ewma), backgroundColor: colors, borderColor: colors, borderWidth: 1 }] },
+    options: {
+      indexAxis: 'y', responsive: true,
+      plugins: { legend: { display: false } },
+      scales: { x: { min: 0, max: 100 } },
+      onClick: (event, activeElements) => {
+        if (!activeElements.length) return;
+        const idx = activeElements[0].index;
+        const entry = data[idx];
+        if (!entry) return;
+        // Same bar again → collapse. Different bar → swap.
+        if (_ewmaExpandedAgent === entry.agent) {
+          collapseEwmaDrill();
+        } else {
+          openEwmaDrill(entry);
+        }
+      },
+    },
+  });
+
+  // Restore a previously-open drill-down if the user just refetched
+  // /team/stats while it was visible (e.g. via the SSE debounce).
+  if (_ewmaExpandedAgent && data.some(d => d.agent === _ewmaExpandedAgent)) {
+    const entry = data.find(d => d.agent === _ewmaExpandedAgent);
+    openEwmaDrill(entry);
+  } else if (_ewmaExpandedAgent) {
+    // Agent dropped out of the result set under the new filters.
+    collapseEwmaDrill();
+  }
+}
+
+function collapseEwmaDrill() {
+  _ewmaExpandedAgent = null;
+  const el = document.getElementById('ewmaDrillDown');
+  if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+}
+
+async function openEwmaDrill(ewmaEntry) {
+  _ewmaExpandedAgent = ewmaEntry.agent;
+  const el = document.getElementById('ewmaDrillDown');
+  if (!el) return;
+  el.style.display = 'block';
+
+  // The "evals comprising this EWMA" are every evaluation for this agent
+  // in the dashboard's current time window. EWMA is recency-weighted but
+  // mathematically includes the entire window, so listing all of them is
+  // accurate. /agents/{name}/history already returns EvaluationRecord
+  // with timestamp + caller_name + eval_id + overall_score.
+  const trendArrow = ewmaEntry.trend === 'improving' ? '▲'
+                    : ewmaEntry.trend === 'declining' ? '▼' : '●';
+  // Agent name links to the per-agent dashboard so the EWMA drill-down
+  // becomes a launchpad: bar → expand evals → click name to see the
+  // full progression view for that agent.
+  const agentHref = `/dashboard/${TEAM_ID}/agent/${encodeURIComponent(ewmaEntry.agent)}`;
+  el.innerHTML = `
+    <div class="ewma-drill-header">
+      <a class="ewma-drill-agent" href="${agentHref}" style="color:var(--text);">${escapeHtml(ewmaEntry.agent)}</a>
+      <div class="ewma-drill-sub">
+        EWMA ${fmt(ewmaEntry.current_ewma)} ·
+        <span class="trend-${ewmaEntry.trend === 'improving' ? 'up' : ewmaEntry.trend === 'declining' ? 'down' : 'flat'}">${trendArrow} ${ewmaEntry.trend}</span> ·
+        ${ewmaEntry.eval_count} eval${ewmaEntry.eval_count === 1 ? '' : 's'}
+      </div>
+      <button class="ewma-drill-close" onclick="collapseEwmaDrill()">Close ×</button>
+    </div>
+    <div class="ewma-drill-empty" id="ewmaDrillBody">Loading…</div>
+  `;
+
+  // Time window respects the dashboard's current filter: a preset chiclet
+  // (days), the custom range (date_from/date_to), or "All" (days=0 → 730 cap).
+  const params = new URLSearchParams();
+  if (dateFrom && dateTo) {
+    params.set('date_from', dateFrom);
+    params.set('date_to', dateTo);
+  } else {
+    params.set('days', selectedDays && selectedDays > 0 ? selectedDays : 730);
+  }
+  try {
+    const r = await fetch(
+      `${API_BASE}/agents/${encodeURIComponent(ewmaEntry.agent)}/history?${params}`,
+      { headers: authHeaders() }
+    );
+    if (r.status === 404) {
+      // No history for this agent in the window — render the empty state.
+      // (Shouldn't happen often since the agent appears in EWMA only if
+      // there were evals in the window, but filters could narrow.)
+      document.getElementById('ewmaDrillBody').textContent =
+        'No evaluations found for this agent in the current time window.';
+      return;
+    }
+    if (!r.ok) throw new Error(r.statusText);
+    const records = await r.json();
+    // Newest first so the list opens on the most recent eval.
+    records.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    renderEwmaDrillBody(records);
+  } catch (err) {
+    console.error('Failed to fetch agent history:', err);
+    document.getElementById('ewmaDrillBody').textContent =
+      'Failed to load evaluations. Check console.';
+  }
+}
+
+function renderEwmaDrillBody(records) {
+  const body = document.getElementById('ewmaDrillBody');
+  if (!body) return;
+  if (!records.length) {
+    body.className = 'ewma-drill-empty';
+    body.textContent = 'No evaluations found for this agent in the current time window.';
+    return;
+  }
+  body.outerHTML = `
+    <table class="ewma-drill-table" id="ewmaDrillBody">
+      <thead>
+        <tr>
+          <th style="width:90px;">Score</th>
+          <th>Call Date</th>
+          <th>Caller</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${records.map(r => {
+          const dt = new Date(r.timestamp);
+          const dateStr = isNaN(dt) ? (r.timestamp || '—')
+            : dt.toLocaleString(undefined, { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+          const color = scoreColor(r.overall_score);
+          const scoreCell = r.eval_id
+            ? `<a class="score-link" href="/datapoint/${TEAM_ID}/${encodeURIComponent(r.eval_id)}" style="color:${color};">${fmt(r.overall_score)}</a>`
+            : `<span class="score-link" style="color:${color};">${fmt(r.overall_score)}</span>`;
+          return `<tr>
+            <td>${scoreCell}</td>
+            <td>${escapeHtml(dateStr)}</td>
+            <td>${escapeHtml(r.caller_name || '—')}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+// --- Roster ---
+// Roster columns are partially dynamic: every Y/N section configured for
+// the team gets its own column between Trend and Status. The (section_id,
+// label) pairs come from teamData.binary_stats so the table adapts to
+// whichever rubric is loaded.
+function rosterBinaryColumns() {
+  return (teamData?.binary_stats || []).map(b => ({
+    sectionId: b.section_id,
+    label: b.label,
+  }));
+}
+
+function rebuildRosterHeader() {
+  const headerRow = document.getElementById('rosterHeaderRow');
+  if (!headerRow) return;
+  // Strip any previously-injected binary headers (data-binary marker)
+  Array.from(headerRow.querySelectorAll('th[data-binary]')).forEach(th => th.remove());
+  const statusTh = headerRow.querySelector('th[data-col="status"]');
+  if (!statusTh) return;
+  for (const col of rosterBinaryColumns()) {
+    const th = document.createElement('th');
+    th.dataset.col = `binary_pcts.${col.sectionId}`;
+    th.dataset.binary = '1';
+    th.textContent = `${col.label} %`;
+    headerRow.insertBefore(th, statusTh);
+  }
+}
+
+function renderRoster() {
+  const roster = teamData.roster || [];
+  rebuildRosterHeader();
+  attachSort('rosterTable', roster, fillRoster);
+  fillRoster(roster);
+}
+
+function fillRoster(data) {
+  const binCols = rosterBinaryColumns();
+  document.querySelector('#rosterTable tbody').innerHTML = data.map(r => {
+    const binCells = binCols
+      .map(c => `<td>${pctFmt((r.binary_pcts || {})[c.sectionId])}</td>`)
+      .join('');
+    return `<tr>
+      <td><a href="/dashboard/${TEAM_ID}/agent/${encodeURIComponent(r.agent)}">${escapeHtml(r.agent)}</a></td>
+      <td>${r.n ?? ''}</td><td style="color:${scoreColor(r.mean)}">${fmt(r.mean)}</td><td>${fmt(r.std)}</td>
+      <td style="color:${scoreColor(r.ewma)}">${fmt(r.ewma)}</td><td>${trendHtml(r.trend)}</td>
+      ${binCells}
+      <td>${statusBadge(r.status)}</td><td>${(r.weak_sections || []).join(', ')}</td>
+    </tr>`;
+  }).join('');
+}
+
+// --- Outliers ---
+function renderOutliers() {
+  const outliers = teamData.outliers || [];
+  attachSort('outliersTable', outliers, fillOutliers);
+  fillOutliers(outliers);
+}
+
+function fillOutliers(data) {
+  document.querySelector('#outliersTable tbody').innerHTML = data.map(o => `<tr>
+    <td><a href="/dashboard/${TEAM_ID}/agent/${encodeURIComponent(o.agent)}">${escapeHtml(o.agent)}</a></td>
+    <td>${o.date || ''}</td><td>${o.eval_id ? `<a href="/datapoint/${TEAM_ID}/${o.eval_id}" style="color:${scoreColor(o.score)};font-weight:500;">${fmt(o.score, 0)}</a>` : `<span style="color:${scoreColor(o.score)}">${fmt(o.score, 0)}</span>`}</td>
+    <td>${fmt(o.agent_median)}</td><td>${fmt(o.modified_z, 2)}</td>
+    <td><span class="badge badge-${o.classification}">${o.classification}</span></td>
+  </tr>`).join('');
+}
+
+// --- Section Analysis ---
+function renderSections() {
+  renderSectionAvgChart();
+  renderSectionVarChart();
+  renderBinaryStats();
+  renderTraining();
+}
+
+function renderSectionAvgChart() {
+  sectionAvgChart = destroyChart(sectionAvgChart);
+  const sa = teamData.section_analysis;
+  if (!sa || !sa.team_means) return;
+  const sections = Object.keys(sa.team_means);
+  const data = sections.map(s => sa.team_means[s]);
+  const colors = data.map(v => sectionScoreColor(v));
+  sectionAvgChart = new Chart(document.getElementById('sectionAvgCanvas'), {
+    type: 'bar',
+    data: { labels: sections, datasets: [{ label: 'Avg', data: data, backgroundColor: colors, borderColor: colors, borderWidth: 1 }] },
+    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { min: 3, max: 5, ticks: { stepSize: 0.25 } } } }
+  });
+}
+
+function renderSectionVarChart() {
+  sectionVarChart = destroyChart(sectionVarChart);
+  const sa = teamData.section_analysis;
+  if (!sa || !sa.team_stds) return;
+  const sections = Object.keys(sa.team_stds);
+  const data = sections.map(s => sa.team_stds[s]);
+  const colors = data.map(v => varColor(v));
+  sectionVarChart = new Chart(document.getElementById('sectionVarCanvas'), {
+    type: 'bar',
+    data: { labels: sections, datasets: [{ label: 'Std Dev', data: data, backgroundColor: colors, borderColor: colors, borderWidth: 1 }] },
+    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+  });
+}
+
+function renderBinaryStats() {
+  const bs = teamData.binary_stats || [];
+  const container = document.getElementById('binaryStats');
+  if (!bs.length) {
+    container.innerHTML = '';
+    return;
+  }
+  // auto-fit + minmax wraps to multiple rows when the team has many
+  // binary sections (Sales has 13, MS has 2). 160px min keeps the
+  // label readable.
+  container.style.gridTemplateColumns = 'repeat(auto-fit, minmax(160px, 1fr))';
+  container.innerHTML = bs.map(section => {
+    const pct = section.team_pct;
+    return `<div class="kpi-box">
+      <div class="label">${escapeHtml(section.label)} %</div>
+      <div class="value" style="color:${scoreColor(pct || 0)}">${pctFmt(pct)}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderTraining() {
+  const sa = teamData.section_analysis || {};
+  const t = sa.training_opportunities || [];
+  attachSort('trainingTable', t, fillTraining);
+  fillTraining(t);
+}
+
+function fillTraining(data) {
+  document.querySelector('#trainingTable tbody').innerHTML = data.map(r => `<tr>
+    <td>${escapeHtml(r.agent)}</td><td>${escapeHtml(r.section)}</td><td>${fmt(r.agent_avg)}</td>
+    <td>${fmt(r.team_avg)}</td><td>${fmt(r.gap)}</td><td>${priorityBadge(r.priority)}</td>
+  </tr>`).join('');
+}
+
+// --- Supervisors ---
+function renderSupervisors() {
+  renderSupervisorChart();
+  renderSupervisorTable();
+}
+
+function renderSupervisorChart() {
+  supervisorChart = destroyChart(supervisorChart);
+  const data = teamData.supervisor_stats || [];
+  if (!data.length) return;
+  const colors = data.map(d => scoreColor(d.avg_score));
+  supervisorChart = new Chart(document.getElementById('supervisorCanvas'), {
+    type: 'bar',
+    data: { labels: data.map(d => d.supervisor), datasets: [{ label: 'Avg Score', data: data.map(d => d.avg_score), backgroundColor: colors, borderColor: colors, borderWidth: 1 }] },
+    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { min: 60, max: 100 } } }
+  });
+}
+
+function renderSupervisorTable() {
+  const data = teamData.supervisor_stats || [];
+  attachSort('supervisorTable', data, fillSupervisorTable);
+  fillSupervisorTable(data);
+}
+
+function fillSupervisorTable(data) {
+  document.querySelector('#supervisorTable tbody').innerHTML = data.map(s => `<tr>
+    <td>${escapeHtml(s.supervisor)}</td><td style="color:${scoreColor(s.avg_score)}">${fmt(s.avg_score)}</td><td>${fmt(s.std_score)}</td>
+    <td>${s.eval_count ?? ''}</td><td>${s.agent_count ?? ''}</td>
+  </tr>`).join('');
+}
+
+// --- Live updates via SSE (Phases B–C + E from LiveDashboard.md) ---
+//
+// On dashboard load, open a long-lived EventSource. The server publishes
+// `eval_approved` events on `/api/<team>/events/stream` whenever an
+// approval completes Stage 4 (Analyst_History row finalized).
+//
+// On each event:
+//   - render a toast (max 3 concurrent, 6s auto-dismiss, FIFO drop);
+//   - schedule a 3s-debounced re-fetch of /team/stats so every chart
+//     (top-3 KPIs, SPC, EWMA, Distribution, etc.) reflects the new data
+//     without manual refresh.
+//
+// Auth: EventSource cannot set Authorization headers, so the API key
+// rides along as ?api_key=... (Phase 0 added the fallback in
+// backend/middleware/auth.py).
+let _eventSource = null;
+let _refetchTimer = null;
+const MAX_TOASTS = 3;
+const TOAST_TTL_MS = 6000;
+const STATUS_TOAST_TTL_MS = 4000;
+
+function openEventStream() {
+  if (_eventSource) return;  // idempotent if init runs twice
+  const key = getApiKey();
+  if (!key) return;
+  const url = `${API_BASE}/events/stream?api_key=${encodeURIComponent(key)}`;
+  _eventSource = new EventSource(url);
+  _eventSource.addEventListener('eval_approved', e => {
+    try {
+      const data = JSON.parse(e.data);
+      showToast(data);
+      prependRecentEval(data);
+      scheduleStatsRefetch();
+    } catch (err) {
+      console.error('Failed to parse eval_approved payload:', err);
+    }
+  });
+  // Agent availability pulses from the Dialpad agent-status webhook
+  // subscription — a small one-line toast, no stats refetch (status
+  // changes don't move any chart).
+  _eventSource.addEventListener('agent_status', e => {
+    try {
+      showStatusToast(JSON.parse(e.data));
+    } catch (err) {
+      console.error('Failed to parse agent_status payload:', err);
+    }
+  });
+  // EventSource auto-reconnects on its own; no manual cap (per design Q3).
+  _eventSource.addEventListener('error', () => {
+    // Browser will retry. Log so devtools shows a breadcrumb.
+    console.warn('SSE connection error; browser will retry.');
+  });
+}
+
+function scheduleStatsRefetch() {
+  if (_refetchTimer) clearTimeout(_refetchTimer);
+  _refetchTimer = setTimeout(() => {
+    _refetchTimer = null;
+    fetchTeamStats();
+  }, 3000);
+}
+
+function showToast(data) {
+  const container = document.getElementById('toastContainer');
+  if (!container) return;
+
+  // FIFO drop: when 3 toasts already showing, evict the oldest before
+  // adding the new one. Predictable footprint, no infinite stack.
+  while (container.children.length >= MAX_TOASTS) {
+    container.firstElementChild.remove();
+  }
+
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  // Prefer eval_id (entry_point_call_id parsed from dialpad_link) — that's
+  // how every other path on the dashboard keys /datapoint URLs (see
+  // services/team_stats.py:_parse_row + the /team/evals drill-down). Falls
+  // back to master call_id when an older event lacks eval_id.
+  const datapointKey = data.eval_id || data.call_id;
+  const linkHref = datapointKey
+    ? `/datapoint/${TEAM_ID}/${encodeURIComponent(datapointKey)}`
+    : null;
+
+  const scoreColored = data.overall_score != null
+    ? `<span class="toast-score" style="color:${scoreColor(data.overall_score)}">${fmt(data.overall_score)}</span>`
+    : '';
+
+  toast.innerHTML = `
+    <div class="toast-row">
+      <span class="toast-agent">${escapeHtml(data.agent || '—')}</span>
+      ${scoreColored}
+    </div>
+    <div class="toast-summary">${escapeHtml(data.summary || '')}</div>
+  `;
+  // Whole toast is clickable when we have a call_id. Don't wrap in <a>
+  // because the score span has its own coloring; use a JS handler.
+  if (linkHref) {
+    toast.style.cursor = 'pointer';
+    toast.addEventListener('click', () => { location.href = linkHref; });
+  } else {
+    toast.addEventListener('click', () => dismissToast(toast));
+  }
+  container.appendChild(toast);
+
+  setTimeout(() => dismissToast(toast), TOAST_TTL_MS);
+}
+
+function showStatusToast(data) {
+  const container = document.getElementById('toastContainer');
+  if (!container) return;
+  while (container.children.length >= MAX_TOASTS) {
+    container.firstElementChild.remove();
+  }
+  const toast = document.createElement('div');
+  toast.className = 'toast toast-status';
+  toast.innerHTML = `
+    <div class="toast-row">
+      <span class="toast-agent">${escapeHtml(data.agent || 'Agent')}</span>
+      <span class="toast-status-label">${escapeHtml(data.status || 'status changed')}</span>
+    </div>`;
+  toast.addEventListener('click', () => dismissToast(toast));
+  container.appendChild(toast);
+  setTimeout(() => dismissToast(toast), STATUS_TOAST_TTL_MS);
+}
+
+function dismissToast(toast) {
+  if (!toast || !toast.parentElement) return;
+  toast.classList.add('dismissing');
+  setTimeout(() => toast.remove(), 200);
+}
+
+// --- Init ---
+qaHeader = window.QAHeader.init({
+  page: 'team',
+  team: TEAM_ID,
+  title: 'Team Analytics Dashboard',
+  onChange: ({ days, dateFrom: f, dateTo: t, activeOnly: a, supervisor: s }) => {
+    // Detect whether anything that changes the data window actually changed.
+    // The initial emit fires once with the URL-resolved defaults; skipping
+    // the no-op refetch would require tracking "first call", which is more
+    // moving parts than just letting it fetch once.
+    selectedDays = days;
+    dateFrom = f;
+    dateTo = t;
+    activeOnly = a;
+    selectedSupervisor = s;
+    fetchTeamStats();
+  },
+});
+fetchMails();
+openEventStream();
+_scheduleMidnightRerender();
+</script>
+</body>
+</html>
