@@ -201,6 +201,18 @@ export async function handleTeamRoutes(
           headers: { "Content-Type": "text/html; charset=utf-8" },
         });
 
+  // ── scoring trigger + status (scoring.ts) ────────────────────────────────
+  m = path.match(/^\/api\/([^/]+)\/score$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const { scoreTrigger } = await import("./scoring.js");
+    return scoreTrigger(request, db, m[1], { DIALPAD_API_KEY: dialpadKey });
+  }
+  m = path.match(/^\/api\/([^/]+)\/score\/([^/]+)$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
+    const { scoreStatus } = await import("./scoring.js");
+    return scoreStatus(db, decodeURIComponent(m[2]));
+  }
+
   // ── drill-down + record APIs ─────────────────────────────────────────────
   m = path.match(/^\/api\/([^/]+)\/datapoints$/);
   if (m && KNOWN_TEAMS.has(m[1])) return datapointsList(db, m[1], url);

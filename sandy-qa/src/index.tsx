@@ -189,6 +189,28 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
         .set({ status: body.status ?? "error", result: JSON.stringify(body) })
         .where(eq(workflowRuns.run_id, body.run_id));
       console.log(`[callback] workflow=${workflowName} run_id=${body.run_id} status=${body.status}`);
+      // qa-scoring-pipeline: persist the evaluation (draft/finalize + toast)
+      if (workflowName === "qa-scoring-pipeline") {
+        const { scoringCallback } = await import("./routes/scoring.js");
+        try {
+          const outcome = await scoringCallback(body, env.DB);
+          const jobId = (body as any).persist
+            ? `score-${(body as any).team_id}-${(body as any).call_id}-${String((body as any).persist.agent_name ?? "")
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, "-")}`
+            : null;
+          if (jobId) {
+            await env.DB.prepare(
+              "UPDATE workflow_runs SET status = ?, result = ? WHERE run_id = ?"
+            )
+              .bind(outcome.ok ? "complete" : "error", JSON.stringify(outcome), jobId)
+              .run();
+          }
+          console.log(`[scoring] ${outcome.ok ? "OK" : "FAIL"}: ${outcome.note}`);
+        } catch (err) {
+          console.log(`[scoring] persist threw: ${String(err).slice(0, 300)}`);
+        }
+      }
       return Response.json({ ok: true });
     }
 

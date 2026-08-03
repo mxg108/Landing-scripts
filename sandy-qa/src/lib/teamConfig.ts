@@ -25,6 +25,15 @@ export interface StatsConfig {
 
 export interface TeamConfig {
   team_id: string;
+  company: string;
+  // PromptConfig for the scoring prompt builders — raw rubric sections
+  // (score_descriptions / na_applies_when / special_reasoning_instructions
+  // included) + the rubric's scoring_prompt block.
+  prompt_config: {
+    company: string;
+    scoring_prompt: any;
+    sections: any[];
+  };
   rubric_version: string;
   sections_by_number: SectionDef[];
   numeric_history_ids: string[];
@@ -48,9 +57,9 @@ function isNumeric(s: any): boolean {
 
 export async function loadTeamConfig(db: D1Database, teamId: string): Promise<TeamConfig> {
   const team = await db
-    .prepare("SELECT stats_config, excluded_test_agents FROM teams WHERE id = ?")
+    .prepare("SELECT stats_config, excluded_test_agents, company FROM teams WHERE id = ?")
     .bind(teamId)
-    .first<{ stats_config: string | null; excluded_test_agents: string }>();
+    .first<{ stats_config: string | null; excluded_test_agents: string; company: string | null }>();
   if (!team) throw new Error(`unknown team ${teamId}`);
 
   // Alias-map iteration order = insertion order (id ASC) — matches the
@@ -102,8 +111,17 @@ export async function loadTeamConfig(db: D1Database, teamId: string): Promise<Te
     ...(team.stats_config ? JSON.parse(team.stats_config) : {}),
   };
 
+  const rawSections = [...(current.sections as any[])].sort(
+    (a, b) => a.section_number - b.section_number
+  );
   return {
     team_id: teamId,
+    company: team.company ?? "Landing Living LLC",
+    prompt_config: {
+      company: team.company ?? "Landing Living LLC",
+      scoring_prompt: current.scoring_prompt ?? {},
+      sections: rawSections,
+    },
     rubric_version: current.rubric_version,
     sections_by_number: sections,
     numeric_history_ids: numeric.map((s) => s.history_id),

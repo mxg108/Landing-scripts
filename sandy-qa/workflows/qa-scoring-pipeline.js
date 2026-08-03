@@ -66,6 +66,45 @@ async function sendCallback(callbackUrl, payload, sandySecrets) {
   if (!res.ok) throw new Error(`Callback failed: HTTP ${res.status}`);
 }
 
+// AnnotatedTranscript → readable text — port of annotation_render.py.
+// Holds interleaved by start time (holds tie-break FIRST), always labeled
+// "observational — not system-verified"; call observations last.
+function mmssMs(ms) {
+  if (ms === null || ms === undefined) return "--:--";
+  const total = Math.trunc(Math.max(0, ms) / 1000);
+  return `${String(Math.trunc(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+function renderAnnotatedTranscript(a) {
+  const events = [];
+  for (const turn of a.turns ?? []) {
+    const traits = [turn.emotion, turn.pace_marker].filter(Boolean).join(", ");
+    const marks = turn.interruption ? " [interrupts]" : "";
+    const intent = turn.paraphrase_intent ? ` (${turn.paraphrase_intent})` : "";
+    let head = `[${mmssMs(turn.start_ms)} ${turn.speaker}`;
+    if (traits) head += ` | ${traits}`;
+    events.push([turn.start_ms ?? 0, 1, `${head}]${marks}${intent} "${turn.text}"`]);
+  }
+  for (const hold of a.holds ?? []) {
+    const seconds = Math.trunc(Math.max(0, hold.end_ms - hold.start_ms) / 1000);
+    const note = hold.note ? ` — ${hold.note}` : "";
+    events.push([
+      hold.start_ms, 0,
+      `[${mmssMs(hold.start_ms)}→${mmssMs(hold.end_ms)} HOLD ~${seconds}s (${hold.kind}, observational — not system-verified)]${note}`,
+    ]);
+  }
+  events.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  const lines = [
+    `Language detected: ${a.language_detected || "unknown"} (annotation schema ${a.schema_version})`,
+    "",
+    ...events.map((e) => e[2]),
+  ];
+  if ((a.call_observations ?? []).length) {
+    lines.push("", "CALL-LEVEL OBSERVATIONS:");
+    for (const obs of a.call_observations) lines.push(`- ${obs}`);
+  }
+  return lines.join("\n");
+}
+
 function stripFences(text) {
   return String(text)
     .replace(/^```(?:json)?\s*/i, "")
@@ -147,6 +186,8 @@ export class TenantWorkflow extends WorkflowEntrypoint {
       scorecard_raw: null,
       timings_ms: {},
       error: null,
+      // echoed through for the app's persist step
+      persist: p.persist ?? null,
     };
 
     let audioLeg = null;
@@ -260,7 +301,7 @@ export class TenantWorkflow extends WorkflowEntrypoint {
           const judged = await step.do("judge-leg", RETRY, async () => {
             const t = Date.now();
             const prompt = p.judge.prompt_template.replace(
-              "{{ANNOTATION_JSON}}", JSON.stringify(result.annotation));
+              "{{ANNOTATION_TEXT}}", renderAnnotatedTranscript(result.annotation));
             let text;
             if (p.judge.provider === "anthropic") {
               if (!aigKey) throw new Error("AI_GATEWAY_TOKEN missing");
