@@ -233,6 +233,7 @@
     .open-editor-link.flagged { border-color: var(--warning); color: var(--warning); }
     .open-editor-link.flagged:hover { background: var(--warning); color: #fff; }
     .job-error-detail { font-size: 0.72rem; color: var(--error); }
+    .job-poll-warn { font-size: 0.72rem; color: var(--warning); }
 
     /* Review queue (§0.3) — evals awaiting a human look */
     #queue-card h2 { display: flex; align-items: center; justify-content: space-between; }
@@ -490,8 +491,37 @@
     // Batch (or partial failure): stay here, render per-row status.
     statusArea.style.display = 'block';
     statusArea.scrollIntoView({ behavior: 'smooth' });
+    saveActiveJobs(jobs);
     pollJobs(jobs, failed);
   });
+
+  // --- In-flight persistence ---
+  // The progress list survives a refresh: in-flight jobs are saved per
+  // team and re-polled on load (the poll endpoint is D1-backed, so a
+  // restored row snaps straight to its true state). Without this, a
+  // refresh silently discarded the batch — and a stuck badge (throttled
+  // tab, dropped session) had no recovery path but resubmitting.
+  const JOBS_KEY = `qa_score_active_jobs_${TEAM_ID}`;
+  const JOBS_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+  function saveActiveJobs(jobs) {
+    try {
+      localStorage.setItem(JOBS_KEY, JSON.stringify({ ts: Date.now(), jobs }));
+    } catch {}
+  }
+  function clearActiveJobs() {
+    try { localStorage.removeItem(JOBS_KEY); } catch {}
+  }
+  function restoreActiveJobs() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(JOBS_KEY) || 'null');
+      if (!saved || !Array.isArray(saved.jobs) || !saved.jobs.length) return;
+      if (Date.now() - (saved.ts || 0) > JOBS_MAX_AGE_MS) { clearActiveJobs(); return; }
+      statusArea.style.display = 'block';
+      pollJobs(saved.jobs, []);
+    } catch {}
+  }
+  restoreActiveJobs();
 
   // --- Batch polling ---
   function pollJobs(jobs, failed) {
@@ -516,23 +546,60 @@
       `;
       jobListEl.appendChild(row);
     });
-    if (!jobs.length) return;
+    if (!jobs.length) { clearActiveJobs(); return; }
+
+    // Poll failures must be VISIBLE: a silent catch froze the badge on
+    // its last state indefinitely (observed: "pending" forever while the
+    // eval was long finalized). Repeated failures now annotate the row
+    // and polling continues — one recovered poll snaps it to truth.
+    const failCounts = {};
+    const terminal = {}; // 404 = job store row gone; stop counting on it
 
     const interval = setInterval(async () => {
       let allDone = true;
       for (const { jobId, callId } of jobs) {
+        if (terminal[jobId]) continue;
         try {
-          const res = await fetch(`${API_BASE}/score/${encodeURIComponent(jobId)}`);
+          const res = await fetch(`${API_BASE}/score/${encodeURIComponent(jobId)}`,
+            { cache: 'no-store' });
+          if (res.status === 404) {
+            terminal[jobId] = true;
+            updateJobRow(jobId, callId, { status: 'error', error: 'Job not found — it may have expired. Resubmit the call if it has no evaluation.' });
+            continue;
+          }
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${res.status}`);
+          }
           const data = await res.json();
+          failCounts[jobId] = 0;
           updateJobRow(jobId, callId, data);
-          if (!['complete', 'approved', 'error'].includes(data.status)) allDone = false;
-        } catch { allDone = false; /* transient — keep polling */ }
+          if (['complete', 'approved', 'error'].includes(data.status)) terminal[jobId] = true;
+          else allDone = false;
+        } catch (e) {
+          allDone = false;
+          failCounts[jobId] = (failCounts[jobId] || 0) + 1;
+          if (failCounts[jobId] >= 3) showPollWarning(jobId, e.message);
+        }
       }
       if (allDone) {
         clearInterval(interval);
+        clearActiveJobs();
         loadReviewQueue(); // flagged jobs land in the queue below
       }
     }, 3000);
+  }
+
+  function showPollWarning(jobId, detail) {
+    const row = document.getElementById(`job-${jobId}`);
+    if (!row) return;
+    let warn = row.querySelector('.job-poll-warn');
+    if (!warn) {
+      warn = document.createElement('span');
+      warn.className = 'job-poll-warn';
+      row.appendChild(warn);
+    }
+    warn.textContent = `status checks failing (${String(detail || '').slice(0, 80)}) — refresh the page`;
   }
 
   function updateJobRow(jobId, callId, data) {
