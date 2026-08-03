@@ -25,6 +25,8 @@ import lookupHtml from "../../pages/lookup.html?raw";
 // @ts-ignore vite ?raw
 import onepagerShellHtml from "../../pages/onepager.html?raw";
 // @ts-ignore vite ?raw
+import scorecardHtml from "../../pages/scorecard.html?raw";
+// @ts-ignore vite ?raw
 import headerCss from "../../pages/static/header.css?raw";
 // @ts-ignore vite ?raw
 import headerJs from "../../pages/static/header.js?raw";
@@ -198,45 +200,10 @@ export async function handleTeamRoutes(
   m = path.match(/^\/dashboard\/([^/]+)\/agent\/(.+)$/);
   if (m && KNOWN_TEAMS.has(m[1])) return html(agentDashboardHtml);
 
-  // Scorecard by job id: finalized → the datapoint page; flagged → the
-  // review-console interim; pending → self-refreshing status page.
+  // Scorecard editor (§4.1/§4.3 + flagged-review console) — the Railway
+  // page served verbatim; it renders any evaluation via GET /score/{id}.
   m = path.match(/^\/scorecard\/([^/]+)\/([^/]+)$/);
-  if (m && KNOWN_TEAMS.has(m[1])) {
-    const row = await db
-      .prepare("SELECT status, result FROM workflow_runs WHERE run_id = ?")
-      .bind(decodeURIComponent(m[2]))
-      .first<any>();
-    let r: any = {};
-    try {
-      r = row?.result ? JSON.parse(row.result) : {};
-    } catch {}
-    if (r.state === "finalized" && r.eval_id)
-      return new Response(null, {
-        status: 302,
-        headers: { Location: `/datapoint/${m[1]}/${encodeURIComponent(r.eval_id)}` },
-      });
-    if (r.scoring_status === "flagged_human_review")
-      return html(
-        `<!DOCTYPE html><html><head><title>Flagged for review</title></head>
-<body style="font-family:monospace;background:#E7EFFB;color:#15192D;display:grid;place-items:center;min-height:100vh;margin:0">
-<div style="background:#fff;border:1px solid #c9d5e8;border-radius:12px;padding:32px;max-width:560px">
-<h2 style="margin-top:0">This call is parked for human review</h2>
-<p>A section score tripped the §3.14 human-review gate, so the evaluation
-is a draft awaiting an analyst. The review console (approve / edit /
-override) is the next port slice — until it lands, flagged Sandy-scored
-calls wait here.</p>
-<p><a href="javascript:history.back()" style="color:#5a6478">&larr; Back</a></p>
-</div></body></html>`
-      );
-    return html(
-      `<!DOCTYPE html><html><head><title>Scoring…</title><meta http-equiv="refresh" content="5"></head>
-<body style="font-family:monospace;background:#E7EFFB;color:#15192D;display:grid;place-items:center;min-height:100vh;margin:0">
-<div style="background:#fff;border:1px solid #c9d5e8;border-radius:12px;padding:32px;max-width:520px">
-<h2 style="margin-top:0">Scoring in progress…</h2>
-<p>Job <code>${m[2]}</code> is ${row?.status ?? "unknown"}. This page refreshes every 5&nbsp;seconds.</p>
-</div></body></html>`
-    );
-  }
+  if (m && KNOWN_TEAMS.has(m[1])) return html(scorecardHtml);
   m = path.match(/^\/lookup\/([^/]+)$/);
   if (m && KNOWN_TEAMS.has(m[1]))
     return lookupAllowed(request, lookupAllow)
@@ -265,14 +232,33 @@ calls wait here.</p>
       PULPO_MCP_TOKEN: pulpo?.token,
     });
   }
+  m = path.match(/^\/api\/([^/]+)\/score\/([^/]+)\/approve$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const { approveEvaluation } = await import("./scoring.js");
+    return approveEvaluation(request, db, m[1], decodeURIComponent(m[2]), {
+      editOfFinalized: false,
+    });
+  }
+  m = path.match(/^\/api\/([^/]+)\/score\/([^/]+)\/override$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const { overrideEvaluation } = await import("./scoring.js");
+    return overrideEvaluation(request, db, m[1], decodeURIComponent(m[2]));
+  }
+  m = path.match(/^\/api\/([^/]+)\/datapoints\/([^/]+)\/edit$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const { approveEvaluation } = await import("./scoring.js");
+    return approveEvaluation(request, db, m[1], decodeURIComponent(m[2]), {
+      editOfFinalized: true,
+    });
+  }
   m = path.match(/^\/api\/([^/]+)\/score\/([^/]+)$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "DELETE") {
     const { deleteEvaluation } = await import("./scoring.js");
     return deleteEvaluation(request, db, m[1], decodeURIComponent(m[2]), url);
   }
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
-    const { scoreStatus } = await import("./scoring.js");
-    return scoreStatus(db, decodeURIComponent(m[2]));
+    const { scorecardPayload } = await import("./scoring.js");
+    return scorecardPayload(db, m[1], decodeURIComponent(m[2]));
   }
 
   // ── drill-down + record APIs ─────────────────────────────────────────────

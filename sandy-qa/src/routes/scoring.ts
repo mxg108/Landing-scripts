@@ -461,6 +461,334 @@ export async function deleteEvaluation(
   return json({ ok: true, deleted_evaluation_id: ev.id });
 }
 
+// ── scorecard payload + approve / override / edit (§4.1 / §4.3 / S7) ───────
+
+async function evalSections(db: D1Database, evalId: number) {
+  return (
+    await db
+      .prepare(
+        "SELECT section_id, section_number, score_type, numeric_score, binary_value, score_source, confidence, reasoning FROM qa_evaluation_sections WHERE evaluation_id = ? ORDER BY section_number"
+      )
+      .bind(evalId)
+      .all<any>()
+  ).results;
+}
+
+// Restored-job dict — scoring.py::_job_from_ref shape, rendered forever
+// for any evaluation (the S1 reconstruction seam).
+export async function scorecardPayload(
+  db: D1Database,
+  teamId: string,
+  ref: string
+): Promise<Response> {
+  const { loadTeamConfig: load } = await import("../lib/teamConfig.js");
+  const config = await load(db, teamId);
+  const ev = await db
+    .prepare(
+      `SELECT * FROM qa_evaluations
+       WHERE team_id = ? AND (dialpad_call_id = ? OR dialpad_entry_point_call_id = ?)
+       ORDER BY id DESC LIMIT 1`
+    )
+    .bind(teamId, ref, ref)
+    .first<any>();
+  if (!ev) {
+    // fall back to the live job store (in-flight scoring)
+    const job = await db
+      .prepare("SELECT run_id, status, result FROM workflow_runs WHERE run_id = ?")
+      .bind(ref)
+      .first<any>();
+    if (!job) return json({ detail: "Job not found" }, 404);
+    let r: any = {};
+    try { r = job.result ? JSON.parse(job.result) : {}; } catch {}
+    return json({
+      ...r,
+      status: job.status === "running" ? "pending" : job.status,
+      error: r.ok === false ? r.note : r.error ?? null,
+    });
+  }
+  const rows = await evalSections(db, ev.id);
+  const byId = new Map(rows.map((r: any) => [r.section_id, r]));
+  const sections = config.prompt_config.sections
+    .filter((s: any) => !s.auto_value)
+    .map((s: any) => {
+      const row: any = byId.get(s.id) ?? {};
+      const isYn = String(s.score_type).endsWith("yn");
+      return {
+        id: s.id,
+        name: s.name,
+        score: row.numeric_score ?? null,
+        score_type: isYn ? "yn" : "numeric",
+        yn_value: row.binary_value ?? null,
+        confidence: row.confidence ?? null,
+        reasoning: row.reasoning ?? null,
+        audio_dependent: !!s.audio_dependent,
+        flags: [],
+      };
+    });
+  let model: string | null = null;
+  try { model = JSON.parse(ev.models_used ?? "{}")?.text?.model ?? null; } catch {}
+  return json({
+    status: "complete",
+    state: ev.state,
+    scoring_status: ev.scoring_status,
+    evaluation_id: ev.id,
+    call_id: ev.dialpad_call_id ?? ev.dialpad_entry_point_call_id ?? ref,
+    agent_name: ev.agent_name_raw,
+    agent_email: ev.agent_email ?? "",
+    overall_score: ev.overall_score,
+    restored_from_db: true,
+    sandy_born: ev.id >= SANDY_BASE,
+    scorecard: {
+      sections,
+      manager_email: ev.evaluator_email ?? "",
+      dialpad_link: ev.dialpad_link,
+      call_summary: ev.call_summary ?? "",
+      key_strengths: ev.key_strengths ?? "",
+      opportunities: ev.opportunities ?? "",
+      agent_name: ev.agent_name_raw,
+      model,
+    },
+  });
+}
+
+async function coachingReceipt(
+  db: D1Database,
+  ev: any,
+  teamId: string,
+  evaluatorEmail: string,
+  role: string,
+  plan: string
+): Promise<number> {
+  const idRow = await db
+    .prepare("SELECT COALESCE(MAX(id) + 1, ?) AS v FROM qa_coachings WHERE id >= ?")
+    .bind(SANDY_BASE, SANDY_BASE)
+    .first<any>();
+  const cid = idRow?.v ?? SANDY_BASE;
+  await db
+    .prepare(
+      `INSERT INTO qa_coachings (id, agent_id, team_id, conducted_by_role,
+        conducted_by_email, status, action_plan) VALUES (?,?,?,?,?, 'pending', ?)`
+    )
+    .bind(cid, ev.agent_id, teamId, role, evaluatorEmail, plan)
+    .run();
+  await db
+    .prepare(
+      `INSERT INTO qa_coaching_evaluations (id, coaching_id, evaluation_id, opportunities_snapshot)
+       VALUES (?,?,?,?)`
+    )
+    .bind(cid, cid, ev.id, ev.opportunities ?? null)
+    .run();
+  return cid;
+}
+
+// Shared finalize-with-edits core: approve (§4.1), edit-of-finalized (S7).
+export async function approveEvaluation(
+  request: Request,
+  db: D1Database,
+  teamId: string,
+  ref: string,
+  opts: { editOfFinalized: boolean }
+): Promise<Response> {
+  let body: any = {};
+  try { body = await request.json(); } catch { return json({ detail: "JSON body required" }, 422); }
+  const evaluatorEmail = (body.evaluator_email ?? "").trim().toLowerCase();
+  if (!evaluatorEmail) return json({ detail: "evaluator_email required" }, 422);
+
+  const ev = await db
+    .prepare(
+      `SELECT * FROM qa_evaluations
+       WHERE team_id = ? AND (dialpad_call_id = ? OR dialpad_entry_point_call_id = ?)
+       ORDER BY id DESC LIMIT 1`
+    )
+    .bind(teamId, ref, ref)
+    .first<any>();
+  if (!ev) return json({ detail: "No evaluation matches this call id" }, 404);
+  if (ev.id < SANDY_BASE)
+    return json(
+      { detail: "This evaluation is Railway-owned during the shadow period — act on Railway." },
+      409
+    );
+  const wasFlagged = ev.scoring_status === "flagged_human_review";
+  if ((wasFlagged || opts.editOfFinalized) && body.acknowledged !== true)
+    return json(
+      { detail: "acknowledged=true required — you are modifying an agent's progression record" },
+      422
+    );
+
+  const { loadTeamConfig: load } = await import("../lib/teamConfig.js");
+  const config = await load(db, teamId);
+  const existing = await evalSections(db, ev.id);
+  const existingById = new Map(existing.map((r: any) => [r.section_id, r]));
+
+  // sections payload → rows; detect edits (source flip to ai_reviewed)
+  const rows: any[] = [];
+  let edited = false;
+  for (const sec of config.prompt_config.sections) {
+    if (sec.auto_value) {
+      const prev: any = existingById.get(sec.id);
+      rows.push({
+        section_id: sec.id, section_number: sec.section_number,
+        score_type: "auto_value",
+        numeric_score: null,
+        binary_value: prev?.binary_value ?? (sec.auto_value.toUpperCase().startsWith("Y") ? "Y" : "N"),
+        score_source: "auto_value", ai_provider: null,
+        confidence: null, reasoning: null,
+      });
+      continue;
+    }
+    const sent = (body.sections ?? []).find((s: any) => s.id === sec.id);
+    if (!sent) return json({ detail: `sections payload missing '${sec.id}'` }, 422);
+    const isYn = String(sec.score_type).endsWith("yn") || sent.score_type === "yn";
+    const numeric =
+      sent.score !== null && sent.score !== undefined ? Math.trunc(Number(sent.score)) : null;
+    const yn = sent.yn_value ?? null;
+    const prev: any = existingById.get(sec.id);
+    const changed =
+      !prev || (prev.numeric_score ?? null) !== numeric || (prev.binary_value ?? null) !== yn;
+    if (changed) edited = true;
+    const dbScoreType =
+      sec.score_type === "numeric" ? "numeric"
+      : sec.score_type === "yn" ? "binary"
+      : sec.score_type === "manual" ? "manual_numeric"
+      : "manual_binary";
+    rows.push({
+      section_id: sec.id, section_number: sec.section_number,
+      score_type: dbScoreType,
+      numeric_score: dbScoreType.includes("numeric") && yn !== "NA" ? numeric : null,
+      binary_value: dbScoreType.includes("numeric") && yn !== "NA" ? null : yn,
+      score_source: changed ? "manual" : prev?.score_source ?? "ai",
+      ai_provider: changed ? null : prev?.score_source === "ai" ? "gemini" : null,
+      confidence: sent.confidence ?? prev?.confidence ?? null,
+      reasoning: sent.reasoning ?? prev?.reasoning ?? null,
+    });
+  }
+
+  const answers: Record<string, number | string> = {};
+  for (const r of rows) {
+    if (r.binary_value !== null) answers[r.section_id] = r.binary_value;
+    else if (r.numeric_score !== null) answers[r.section_id] = r.numeric_score;
+  }
+  const fvRow = await db
+    .prepare(
+      "SELECT formula_version, formula_json FROM qa_formula_versions WHERE formula_version = ?"
+    )
+    .bind(ev.formula_version)
+    .first<any>();
+  if (!fvRow) return json({ detail: `formula ${ev.formula_version} not archived` }, 500);
+  const { evaluateFormula: evalF, quantizeScore: quant } = await import("../lib/ruleEngine.js");
+  const overall = quant(evalF(JSON.parse(fvRow.formula_json), answers).final_score);
+
+  const now = new Date().toISOString();
+  await db.prepare("DELETE FROM qa_evaluation_sections WHERE evaluation_id = ?").bind(ev.id).run();
+  for (const r of rows) {
+    await db
+      .prepare(
+        `INSERT INTO qa_evaluation_sections (id, evaluation_id, section_id, section_number,
+          score_type, numeric_score, binary_value, score_source, ai_provider,
+          confidence, reasoning) VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+      )
+      .bind(
+        ev.id * 100 + r.section_number, ev.id, r.section_id, r.section_number,
+        r.score_type, r.numeric_score, r.binary_value, r.score_source,
+        r.ai_provider, r.confidence, r.reasoning
+      )
+      .run();
+  }
+  await db
+    .prepare(
+      `UPDATE qa_evaluations SET state='finalized', scoring_status='complete',
+        source=?, evaluator_email=?, overall_score=?,
+        key_strengths=?, opportunities=?,
+        approved_at=COALESCE(approved_at, ?), finalized_at=?
+       WHERE id=?`
+    )
+    .bind(
+      edited ? "ai_reviewed" : ev.source, evaluatorEmail, overall,
+      body.key_strengths ?? ev.key_strengths, body.opportunities ?? ev.opportunities,
+      now, now, ev.id
+    )
+    .run();
+
+  // S7: an edit-of-finalized creates the coaching receipt binding the
+  // notification duty (email dispatch itself is a later GAS-integration slice).
+  let coachingId: number | null = null;
+  if (opts.editOfFinalized && edited) {
+    coachingId = await coachingReceipt(
+      db, ev, teamId, evaluatorEmail, "manager",
+      `Scorecard edited post-finalize (was ${ev.overall_score}, now ${overall}). Notify the agent.`
+    );
+  }
+  await auditRow(db, {
+    role: "privileged", evaluator: evaluatorEmail, agentEmail: ev.agent_email ?? "",
+    agentName: ev.agent_name_raw, callId: ev.dialpad_call_id ?? ref, team: teamId,
+    action: "approved",
+    notes: `${wasFlagged ? "resolved_flagged " : ""}${edited ? "edited " : ""}score=${overall}${coachingId ? ` coaching=${coachingId}` : ""}`,
+  });
+  await db
+    .prepare("INSERT INTO qa_events (team_id, type, payload) VALUES (?, 'eval_approved', ?)")
+    .bind(
+      teamId,
+      JSON.stringify({
+        call_id: ev.dialpad_call_id ?? "", eval_id: ev.dialpad_entry_point_call_id ?? ev.dialpad_call_id ?? "",
+        history_row: null, agent: ev.agent_name_raw, evaluator_email: evaluatorEmail,
+        overall_score: overall, summary: (ev.call_summary ?? "").slice(0, 280),
+        strengths: (body.key_strengths ?? ev.key_strengths ?? "").slice(0, 280),
+        opportunities: (body.opportunities ?? ev.opportunities ?? "").slice(0, 280),
+        dialpad_link: ev.dialpad_link ?? "", timestamp: now,
+      })
+    )
+    .run();
+  return json({
+    ok: true, evaluation_id: ev.id, overall_score: overall, state: "finalized",
+    edited, coaching_id: coachingId, email: "not_ported_yet",
+  });
+}
+
+export async function overrideEvaluation(
+  request: Request,
+  db: D1Database,
+  teamId: string,
+  ref: string
+): Promise<Response> {
+  let body: any = {};
+  try { body = await request.json(); } catch { return json({ detail: "JSON body required" }, 422); }
+  const evaluatorEmail = (body.evaluator_email ?? "").trim().toLowerCase();
+  if (!evaluatorEmail) return json({ detail: "evaluator_email required" }, 422);
+  if (body.acknowledged !== true)
+    return json({ detail: "acknowledged=true required for an override" }, 422);
+  const score = Number(body.overall_score);
+  if (!Number.isFinite(score)) return json({ detail: "overall_score required" }, 422);
+  const ev = await resolveEval(db, teamId, ref);
+  if (!ev) return json({ detail: "No evaluation matches this call id" }, 404);
+  if (ev.id < SANDY_BASE)
+    return json(
+      { detail: "This evaluation is Railway-owned during the shadow period — act on Railway." },
+      409
+    );
+  const now = new Date().toISOString();
+  await db
+    .prepare(
+      `UPDATE qa_evaluations SET overall_score=?, source='ai_reviewed',
+        evaluator_email=?, state='finalized', scoring_status='complete',
+        approved_at=COALESCE(approved_at, ?), finalized_at=? WHERE id=?`
+    )
+    .bind(score, evaluatorEmail, now, now, ev.id)
+    .run();
+  // §4.3: the override ALWAYS creates the coaching receipt + duty.
+  const coachingId = await coachingReceipt(
+    db, ev, teamId, evaluatorEmail, body.conducted_by_role ?? "manager",
+    `Score overridden to ${score} (was ${ev.overall_score}). ${body.reasoning ?? ""}` +
+      (body.sop_gap?.note ? ` SOP gap: ${body.sop_gap.note}` : "")
+  );
+  await auditRow(db, {
+    role: "privileged", evaluator: evaluatorEmail, agentEmail: ev.agent_email ?? "",
+    agentName: ev.agent_name_raw, callId: ev.dialpad_call_id ?? ref, team: teamId,
+    action: "overridden",
+    notes: `override=${score} was=${ev.overall_score ?? "null"} coaching=${coachingId}${body.sop_gap?.note ? " sop_gap" : ""}`,
+  });
+  return json({ ok: true, evaluation_id: ev.id, overall_score: score, coaching_id: coachingId });
+}
+
 // ── callback persist ───────────────────────────────────────────────────────
 
 function sectionRowsFromScorecard(config: TeamConfig, scorecard: any) {
