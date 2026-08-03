@@ -30,6 +30,68 @@ import headerJs from "../../pages/static/header.js?raw";
 const RAILWAY_BASE = "https://hellolanding-qa.up.railway.app";
 const KNOWN_TEAMS = new Set(["member_support", "sales"]);
 
+const GREETING_PAGE = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QA Scoring — Landing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet">
+<style>
+:root{--navy:#15192D;--accent:#1A61D9;--bg:#E7EFFB;--surface:#fff;--border:#c9d5e8;--text:#15192D;--muted:#5a6478;--green:#28A745}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Mono',monospace;background:var(--bg);color:var(--text);min-height:100vh}
+h1,h2,h3{font-family:'Fraunces',serif}
+.header{background:var(--navy);color:#fff;padding:20px 24px}
+.header h1{font-size:1.35rem;font-weight:700}
+.header .sub{font-size:.78rem;color:rgba(255,255,255,.65);margin-top:4px}
+.container{max-width:960px;margin:0 auto;padding:28px 24px;display:flex;flex-direction:column;gap:22px}
+.teams{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+.team-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;
+  text-decoration:none;color:inherit;display:flex;flex-direction:column;gap:8px;transition:border-color .15s,transform .15s}
+.team-card:hover{border-color:var(--accent);transform:translateY(-2px)}
+.team-card h2{font-size:1.15rem}
+.team-card .go{color:var(--accent);font-size:.8rem;margin-top:6px}
+.team-card.soon{opacity:.65;cursor:default}
+.team-card.soon:hover{border-color:var(--border);transform:none}
+.badge{display:inline-block;padding:2px 10px;border-radius:9999px;font-size:.65rem;font-weight:500;
+  text-transform:uppercase;letter-spacing:.05em;background:#dbeafe;color:#1e40af;width:fit-content}
+.badge.soon-b{background:#fef3c7;color:#92400e}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px}
+.card h3{font-size:1rem;margin-bottom:10px}
+.how li{margin:8px 0 8px 18px;font-size:.82rem;line-height:1.5}
+.how b{font-weight:600}
+.how .path{color:var(--accent)}
+.note{font-size:.72rem;color:var(--muted);line-height:1.5}
+</style></head><body>
+<div class="header"><h1>QA Scoring</h1>
+<div class="sub">Landing call-quality platform — two-stage AI scoring, analyst review, team analytics</div></div>
+<div class="container">
+  <div class="teams">
+    <a class="team-card" href="/dashboard/member_support">
+      <span class="badge">Live</span><h2>Member Support</h2>
+      <span class="note">Team dashboard, agent analytics, month drill-downs</span>
+      <span class="go">Open dashboard &rsaquo;</span></a>
+    <a class="team-card" href="/dashboard/sales">
+      <span class="badge">Live</span><h2>Sales</h2>
+      <span class="note">Team dashboard, agent analytics, month drill-downs</span>
+      <span class="go">Open dashboard &rsaquo;</span></a>
+    <div class="team-card soon">
+      <span class="badge soon-b">Coming soon</span><h2>Sofia AI</h2>
+      <span class="note">QA for our voice AI agent — calls on Retell.ai</span></div>
+  </div>
+  <div class="card"><h3>Finding your way around</h3><ul class="how">
+    <li><b>Team dashboard</b> — <span class="path">/dashboard/&lt;team&gt;</span>: live KPIs, SPC + score
+      distribution, EWMA by agent (click any bar to drill down). Updates push live — no refresh needed.</li>
+    <li><b>Month drill-down</b> — click the Last/Current Month chiclets for every evaluation in that month.</li>
+    <li><b>Agent view</b> — click any agent name for their history and section trends.</li>
+    <li><b>Datapoint</b> — every score links to the full scorecard: section scores, confidence, reasoning.</li>
+    <li><b>Call lookup</b> — <span class="path">/lookup/&lt;team&gt;</span>: Dialpad call history + recordings.
+      <b>Restricted</b> to authorized QA staff.</li>
+  </ul></div>
+  <div class="note">Scoring &amp; review actions run on the current production system during the
+  migration shadow period; this app mirrors all evaluation data live and takes over scoring next.</div>
+</div></body></html>`;
+
 const html = (body: string) =>
   new Response(body, { headers: { "Content-Type": "text/html; charset=utf-8" } });
 const json = (data: unknown, status = 200) =>
@@ -90,6 +152,9 @@ export async function handleTeamRoutes(
   lookupAllow?: string
 ): Promise<Response | null> {
   const path = url.pathname;
+
+  // ── greeting page (platform default URL) ─────────────────────────────────
+  if (path === "/") return html(GREETING_PAGE);
 
   // ── static assets shared by the ported pages ──────────────────────────────
   if (path === "/static/header.css")
