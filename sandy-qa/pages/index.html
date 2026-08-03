@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Landing QA Scoring</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,300;0,400;0,600;1,300&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #E7EFFB;
+      --surface: #ffffff;
+      --border: #c9d5e8;
+      --text: #15192D;
+      --muted: #5a6478;
+      --accent: #1A61D9;
+      --navy: #15192D;
+      --success: #2d6a4f;
+      --warning: #b45309;
+      --error: #991b1b;
+      --badge-high: #d1fae5;
+      --badge-medium: #fef3c7;
+      --badge-low: #fee2e2;
+    }
+
+    body {
+      font-family: 'DM Mono', monospace;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 0;
+    }
+
+    /* Navy banner header */
+    header {
+      background: var(--navy);
+      color: #ffffff;
+      padding: 1.5rem 2rem;
+      margin-bottom: 2rem;
+    }
+
+    header h1 {
+      font-family: 'Fraunces', serif;
+      font-weight: 300;
+      font-size: 2rem;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.25rem;
+      color: #ffffff;
+    }
+
+    header p {
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 0.8rem;
+    }
+
+    .card {
+      max-width: 720px;
+      margin: 0 auto 1.5rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .card h2 {
+      font-family: 'Fraunces', serif;
+      font-weight: 400;
+      font-size: 1.1rem;
+      padding: 0.75rem 1.25rem;
+      margin: 0;
+      background: var(--navy);
+      color: #ffffff;
+    }
+
+    .card-body {
+      padding: 1.75rem;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .form-group.full { grid-column: 1 / -1; }
+
+    label {
+      font-size: 0.72rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    input, select {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.85rem;
+      padding: 0.6rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--bg);
+      color: var(--text);
+      width: 100%;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input:focus, select:focus { border-color: var(--accent); }
+
+    /* Call-ID entry (Sandy: audio is fetched from Dialpad by call ID —
+       the Railway audio-file drop zone is replaced by an ID list). */
+    .call-entry { display: flex; gap: 0.5rem; }
+    .call-entry input { flex: 1; }
+    .call-entry .btn { white-space: nowrap; }
+    .entry-hint { font-size: 0.72rem; color: var(--muted); margin-top: 0.35rem; }
+
+    #call-list {
+      margin-top: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .call-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-size: 0.78rem;
+    }
+
+    .call-item .cid {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .call-item button {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 1rem;
+      padding: 0 0.25rem;
+    }
+
+    .btn {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.82rem;
+      padding: 0.7rem 1.5rem;
+      border: 1px solid var(--accent);
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+    }
+
+    .btn-primary:hover { background: #1550b5; }
+    .btn-primary:disabled { background: var(--border); border-color: var(--border); cursor: not-allowed; }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--accent);
+    }
+
+    .btn-secondary:hover { background: var(--bg); }
+
+    .actions {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 1.5rem;
+      align-items: center;
+    }
+
+    /* Status & results */
+    #status-area { display: none; }
+
+    .job-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      padding: 1rem 1.25rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    .status-badge {
+      padding: 0.2rem 0.6rem;
+      border-radius: 20px;
+      font-size: 0.7rem;
+      font-weight: 500;
+    }
+
+    .status-pending  { background: #e5e7eb; color: #374151; }
+    .status-scoring  { background: #dbeafe; color: #1e40af; }
+    .status-complete { background: var(--badge-high); color: var(--success); }
+    .status-approved { background: var(--badge-high); color: var(--success); }
+    .status-flagged  { background: var(--badge-medium); color: var(--warning); }
+    .status-error    { background: var(--badge-low); color: var(--error); }
+
+    /* Job-list "Open editor" link — navigates to the
+       /scorecard/{team}/{job_id} editor page (the single renderer). */
+    .open-editor-link {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.72rem;
+      padding: 3px 10px;
+      border: 1px solid var(--success);
+      color: var(--success);
+      border-radius: 4px;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .open-editor-link:hover { background: var(--success); color: #fff; }
+    .open-editor-link.flagged { border-color: var(--warning); color: var(--warning); }
+    .open-editor-link.flagged:hover { background: var(--warning); color: #fff; }
+    .job-error-detail { font-size: 0.72rem; color: var(--error); }
+
+    /* Review queue (§0.3) — evals awaiting a human look */
+    #queue-card h2 { display: flex; align-items: center; justify-content: space-between; }
+    .queue-count {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.7rem;
+      padding: 0.15rem 0.6rem;
+      border-radius: 20px;
+      background: rgba(255,255,255,0.15);
+      color: #fff;
+    }
+    .queue-empty { padding: 1.25rem; font-size: 0.8rem; color: var(--muted); text-align: center; }
+    .queue-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+    .queue-table th {
+      text-align: left; padding: 0.6rem 0.9rem; color: var(--muted);
+      font-weight: 400; text-transform: uppercase; letter-spacing: 0.05em;
+      font-size: 0.65rem; border-bottom: 1px solid var(--border);
+    }
+    .queue-table td { padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--border); }
+    .queue-table tr:last-child td { border-bottom: none; }
+    .born-pill {
+      font-size: 0.62rem; padding: 1px 7px; border-radius: 20px;
+      border: 1px solid var(--border); color: var(--muted); white-space: nowrap;
+    }
+    .born-pill.sandy { border-color: var(--accent); color: var(--accent); }
+
+    @media (max-width: 600px) {
+      .form-grid { grid-template-columns: 1fr; }
+      .form-group.full { grid-column: 1; }
+      .queue-table .hide-sm { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <div>
+      <h1>Landing QA Scoring</h1>
+      <p>AI-assisted call evaluation. Human review required before scores reach agents.</p>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <a id="lookup-link" href="/lookup/member_support" style="font-family:'DM Mono',monospace;font-size:0.82rem;padding:8px 16px;border:1px solid rgba(255,255,255,0.3);border-radius:6px;color:#fff;text-decoration:none;transition:background 0.2s;">Lookup</a>
+      <a id="team-dashboard-link" href="/dashboard/member_support" style="font-family:'DM Mono',monospace;font-size:0.82rem;padding:8px 16px;border:1px solid rgba(255,255,255,0.3);border-radius:6px;color:#fff;text-decoration:none;transition:background 0.2s;">Team Dashboard</a>
+    </div>
+  </div>
+</header>
+
+<div class="card">
+  <h2>Submission Details</h2>
+  <div class="card-body">
+    <form id="score-form">
+      <div class="form-grid">
+        <div class="form-group">
+          <label for="agent-name">Agent</label>
+          <select id="agent-name" required>
+            <option value="" disabled selected>Loading agents...</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="manager-email">Your Email (Manager)</label>
+          <input type="email" id="manager-email" placeholder="you@hellolanding.com" required />
+        </div>
+      </div>
+
+      <div style="margin-top: 1.25rem;">
+        <label for="call-id-input" style="display:block; margin-bottom: 0.5rem;">
+          Dialpad Call IDs
+        </label>
+        <div class="call-entry">
+          <input type="text" id="call-id-input" inputmode="numeric"
+            placeholder="Paste one or more call IDs (comma / space / newline separated)" />
+          <button type="button" class="btn btn-secondary" id="add-call-btn">Add</button>
+        </div>
+        <p class="entry-hint">Recordings and transcripts are fetched from Dialpad automatically —
+          find call IDs on the <a id="lookup-hint-link" href="/lookup/member_support" style="color:var(--accent)">Lookup page</a>.</p>
+        <div id="call-list"></div>
+      </div>
+
+      <div class="actions">
+        <button type="submit" class="btn btn-primary" id="submit-btn" disabled>Score Calls</button>
+        <span id="form-hint" style="font-size:0.75rem; color:var(--muted);">Add at least one call ID to continue</span>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="status-area" class="card">
+  <h2>Scoring Progress</h2>
+  <div id="job-list"></div>
+</div>
+
+<div id="queue-card" class="card">
+  <h2>Review Queue <span class="queue-count" id="queue-count">…</span></h2>
+  <div id="queue-body">
+    <div class="queue-empty">Loading…</div>
+  </div>
+</div>
+
+<script>
+  // --- Team + Auth ---
+  // Path: /score/{team_id}. Sandy: SSO owns auth — never send an
+  // Authorization header (the Access edge rejects foreign bearer tokens).
+  const TEAM_ID = (location.pathname.match(/^\/score\/([^\/]+)/) || [, 'member_support'])[1];
+  const API_BASE = `/api/${TEAM_ID}`;
+  document.addEventListener('DOMContentLoaded', () => {
+    for (const [id, href] of [
+      ['team-dashboard-link', `/dashboard/${TEAM_ID}`],
+      ['lookup-link', `/lookup/${TEAM_ID}`],
+      ['lookup-hint-link', `/lookup/${TEAM_ID}`],
+    ]) {
+      const el = document.getElementById(id);
+      if (el) el.href = href;
+    }
+  });
+
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  // --- Populate agent dropdown from the roster ---
+  // Option value = agent EMAIL (the Sandy trigger resolves the roster by
+  // email); label = agent name. Agents without an email can't be scored.
+  async function loadAgentDropdown() {
+    const select = document.getElementById('agent-name');
+    try {
+      const res = await fetch(`${API_BASE}/team/mails`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const mails = await res.json();
+      const agents = mails
+        .filter(m => (m.email || '').trim() !== '')
+        .sort((a, b) => a.agent_name.localeCompare(b.agent_name));
+      select.innerHTML = '<option value="" disabled selected>Select agent...</option>'
+        + agents.map(m => `<option value="${esc(m.email)}">${esc(m.agent_name)}</option>`).join('');
+    } catch (e) {
+      console.error('Failed to load agents:', e);
+      select.innerHTML = '<option value="" disabled selected>Failed to load agents</option>';
+    }
+  }
+  loadAgentDropdown();
+
+  // Manager email convenience: remember the last-used address locally.
+  const managerInput = document.getElementById('manager-email');
+  managerInput.value = localStorage.getItem('qa_manager_email') || '';
+  managerInput.addEventListener('change', () => {
+    localStorage.setItem('qa_manager_email', managerInput.value.trim());
+  });
+
+  const callInput = document.getElementById('call-id-input');
+  const addCallBtn = document.getElementById('add-call-btn');
+  const callList = document.getElementById('call-list');
+  const submitBtn = document.getElementById('submit-btn');
+  const formHint = document.getElementById('form-hint');
+  const statusArea = document.getElementById('status-area');
+  const jobListEl = document.getElementById('job-list');
+
+  let callIds = [];
+
+  // --- Call-ID selection ---
+  function addFromInput() {
+    const raw = callInput.value.trim();
+    if (!raw) return;
+    // Accept pasted lists: split on commas, whitespace, newlines.
+    const ids = raw.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+    for (const id of ids) {
+      if (!/^\d{5,}$/.test(id)) {
+        alert(`'${id}' doesn't look like a Dialpad call ID (digits only).`);
+        continue;
+      }
+      if (!callIds.includes(id)) callIds.push(id);
+    }
+    callInput.value = '';
+    renderCallList();
+  }
+  addCallBtn.addEventListener('click', addFromInput);
+  callInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); addFromInput(); }
+  });
+  callInput.addEventListener('paste', () => setTimeout(addFromInput, 0));
+
+  function removeCall(index) {
+    callIds.splice(index, 1);
+    renderCallList();
+  }
+
+  function renderCallList() {
+    callList.innerHTML = '';
+    callIds.forEach((id, i) => {
+      const div = document.createElement('div');
+      div.className = 'call-item';
+      div.innerHTML = `
+        <span class="cid">${esc(id)}</span>
+        <button type="button" onclick="removeCall(${i})">x</button>
+      `;
+      callList.appendChild(div);
+    });
+    updateSubmitState();
+  }
+
+  function updateSubmitState() {
+    submitBtn.disabled = callIds.length === 0;
+    formHint.textContent = callIds.length === 0
+      ? 'Add at least one call ID to continue'
+      : `${callIds.length} call${callIds.length > 1 ? 's' : ''} ready to score`;
+  }
+
+  // --- Submission ---
+  // Single call → navigate same-tab to /scorecard/{team}/{job_id}.
+  // Batch (>1) → render a status list with "Open editor" links per row,
+  //   polling each job until terminal. The scorecard editor at
+  //   /scorecard/{team}/{job_id} is the single renderer.
+  document.getElementById('score-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const agentEmail = document.getElementById('agent-name').value.trim();
+    const managerEmail = managerInput.value.trim();
+    if (!agentEmail) { alert('Select an agent first.'); return; }
+    if (!managerEmail) { alert('Manager email is required.'); return; }
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitting...';
+
+    const jobs = [];
+    const failed = [];
+
+    for (const callId of callIds) {
+      const formData = new FormData();
+      formData.append('call_id', callId);
+      formData.append('agent_email', agentEmail);
+      formData.append('manager_email', managerEmail);
+
+      try {
+        const res = await fetch(`${API_BASE}/score`, { method: 'POST', body: formData });
+        const data = await res.json().catch(() => ({ detail: res.statusText }));
+        if (!res.ok) {
+          failed.push({ callId, detail: data.detail || `HTTP ${res.status}` });
+        } else {
+          jobs.push({ jobId: data.job_id, callId });
+        }
+      } catch (err) {
+        failed.push({ callId, detail: err.message });
+      }
+    }
+
+    submitBtn.textContent = 'Score Calls';
+    callIds = [];
+    renderCallList();
+
+    // Single successful upload, nothing failed: straight to the editor —
+    // it polls /score/{job_id} on its own and shows a loading state.
+    if (jobs.length === 1 && failed.length === 0) {
+      window.location.href = `/scorecard/${TEAM_ID}/${encodeURIComponent(jobs[0].jobId)}`;
+      return;
+    }
+
+    // Batch (or partial failure): stay here, render per-row status.
+    statusArea.style.display = 'block';
+    statusArea.scrollIntoView({ behavior: 'smooth' });
+    pollJobs(jobs, failed);
+  });
+
+  // --- Batch polling ---
+  function pollJobs(jobs, failed) {
+    jobListEl.innerHTML = '';
+    for (const { callId, detail } of failed || []) {
+      const row = document.createElement('div');
+      row.className = 'job-row';
+      row.innerHTML = `
+        <span>${esc(callId)}</span>
+        <span class="status-badge status-error">rejected</span>
+        <span class="job-error-detail">${esc(detail)}</span>
+      `;
+      jobListEl.appendChild(row);
+    }
+    jobs.forEach(({ jobId, callId }) => {
+      const row = document.createElement('div');
+      row.id = `job-${jobId}`;
+      row.className = 'job-row';
+      row.innerHTML = `
+        <span>${esc(callId)}</span>
+        <span class="status-badge status-pending">pending</span>
+      `;
+      jobListEl.appendChild(row);
+    });
+    if (!jobs.length) return;
+
+    const interval = setInterval(async () => {
+      let allDone = true;
+      for (const { jobId, callId } of jobs) {
+        try {
+          const res = await fetch(`${API_BASE}/score/${encodeURIComponent(jobId)}`);
+          const data = await res.json();
+          updateJobRow(jobId, callId, data);
+          if (!['complete', 'approved', 'error'].includes(data.status)) allDone = false;
+        } catch { allDone = false; /* transient — keep polling */ }
+      }
+      if (allDone) {
+        clearInterval(interval);
+        loadReviewQueue(); // flagged jobs land in the queue below
+      }
+    }, 3000);
+  }
+
+  function updateJobRow(jobId, callId, data) {
+    const row = document.getElementById(`job-${jobId}`);
+    if (!row) return;
+
+    const status = data.status || 'pending';
+    const editorHref = `/scorecard/${TEAM_ID}/${encodeURIComponent(jobId)}`;
+    if (status === 'complete' || status === 'approved') {
+      // target=_blank so opening one editor doesn't tear down the
+      // batch-status list — the user typically scores every job in turn.
+      if (data.scoring_status === 'flagged_human_review') {
+        row.innerHTML = `
+          <span>${esc(callId)}</span>
+          <span class="status-badge status-flagged">flagged</span>
+          <a class="open-editor-link flagged" href="${editorHref}" target="_blank" rel="noopener">Review &amp; approve</a>
+        `;
+      } else {
+        const score = data.overall_score != null ? ` ${data.overall_score}` : '';
+        row.innerHTML = `
+          <span>${esc(callId)}</span>
+          <span class="status-badge status-${status}">${status}${score}</span>
+          <a class="open-editor-link" href="${editorHref}" target="_blank" rel="noopener">Open editor</a>
+        `;
+      }
+    } else if (status === 'error') {
+      row.innerHTML = `
+        <span>${esc(callId)}</span>
+        <span class="status-badge status-error">error</span>
+        <span class="job-error-detail">${esc(data.error || 'Unknown error')}</span>
+      `;
+    } else {
+      row.innerHTML = `
+        <span>${esc(callId)}</span>
+        <span class="status-badge status-${status}">${esc(status)}</span>
+      `;
+    }
+  }
+
+  // --- Review queue (§0.3) ---
+  // Every evaluation that WOULD require a human look and hasn't had one.
+  // Rows exit via approve (editor) or override. Railway-born rows render
+  // for visibility but must be resolved on Railway during the shadow
+  // period (the editor refuses with a 409).
+  const SANDY_ID_BASE = 10000000;
+
+  async function loadReviewQueue() {
+    const body = document.getElementById('queue-body');
+    const count = document.getElementById('queue-count');
+    try {
+      const res = await fetch(`${API_BASE}/review-queue`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      count.textContent = String(data.count);
+      if (!data.count) {
+        body.innerHTML = '<div class="queue-empty">Queue clear — nothing awaiting human review.</div>';
+        return;
+      }
+      const rows = data.evaluations.map(ev => {
+        const ref = ev.dialpad_entry_point_call_id || ev.dialpad_call_id || '';
+        const born = ev.id >= SANDY_ID_BASE
+          ? '<span class="born-pill sandy">sandy</span>'
+          : '<span class="born-pill" title="Resolve on Railway during the shadow period">railway</span>';
+        const required = (ev.human_review_required_at || '').slice(0, 10);
+        const score = ev.overall_score != null ? ev.overall_score : '—';
+        return `<tr>
+          <td>${esc(ev.dialpad_call_id || ref)}</td>
+          <td>${esc(ev.agent_name_raw || '')}</td>
+          <td class="hide-sm">${esc(score)}</td>
+          <td class="hide-sm">${esc(required)}</td>
+          <td>${born}</td>
+          <td><a class="open-editor-link" href="/scorecard/${TEAM_ID}/${encodeURIComponent(ref)}" target="_blank" rel="noopener">Open</a></td>
+        </tr>`;
+      }).join('');
+      body.innerHTML = `<div style="overflow-x:auto"><table class="queue-table">
+        <thead><tr>
+          <th>Call</th><th>Agent</th><th class="hide-sm">Score</th>
+          <th class="hide-sm">Queued</th><th>Origin</th><th></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+    } catch (e) {
+      count.textContent = '!';
+      body.innerHTML = `<div class="queue-empty">Could not load the review queue: ${esc(e.message)}</div>`;
+    }
+  }
+  loadReviewQueue();
+</script>
+
+</body>
+</html>

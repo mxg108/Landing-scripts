@@ -346,6 +346,35 @@ export async function scoreStatus(
   });
 }
 
+// ── review queue (§0.3) — port of eval_store.list_review_queue ─────────────
+// Every evaluation that WOULD require a human look and hasn't had one
+// (human_review_required_at set, completed_at not): flagged drafts parked by
+// the §3.14 gate, plus Railway-born queue rows carried in by the shadow sync.
+// Exits: approve (editor) or override stamps completed_at.
+
+export async function reviewQueue(
+  db: D1Database,
+  teamId: string
+): Promise<Response> {
+  const rows = await db
+    .prepare(
+      `SELECT id, dialpad_call_id, dialpad_entry_point_call_id, agent_name_raw,
+              agent_email, overall_score, state, scoring_status, source,
+              human_review_required_at, auto_rescored_at, finalized_at
+       FROM qa_evaluations
+       WHERE team_id = ? AND human_review_required_at IS NOT NULL
+         AND human_review_completed_at IS NULL
+       ORDER BY human_review_required_at`
+    )
+    .bind(teamId)
+    .all<any>();
+  return json({
+    team_id: teamId,
+    count: rows.results.length,
+    evaluations: rows.results,
+  });
+}
+
 // ── lifecycle actions (ScorecardActionsDesign §4.2 rescore / §4.4 delete) ──
 // Shadow-period doctrine: Sandy actions touch SANDY-BORN evaluations only
 // (id >= SANDY_ID_BASE). A Railway-born row edited here would be silently
@@ -483,14 +512,16 @@ export async function scorecardPayload(
 ): Promise<Response> {
   const { loadTeamConfig: load } = await import("../lib/teamConfig.js");
   const config = await load(db, teamId);
-  const ev = await db
-    .prepare(
-      `SELECT * FROM qa_evaluations
-       WHERE team_id = ? AND (dialpad_call_id = ? OR dialpad_entry_point_call_id = ?)
-       ORDER BY id DESC LIMIT 1`
-    )
-    .bind(teamId, ref, ref)
-    .first<any>();
+  const evalByCallRef = (r: string) =>
+    db
+      .prepare(
+        `SELECT * FROM qa_evaluations
+         WHERE team_id = ? AND (dialpad_call_id = ? OR dialpad_entry_point_call_id = ?)
+         ORDER BY id DESC LIMIT 1`
+      )
+      .bind(teamId, r, r)
+      .first<any>();
+  let ev = await evalByCallRef(ref);
   if (!ev) {
     // fall back to the live job store (in-flight scoring)
     const job = await db
@@ -500,11 +531,22 @@ export async function scorecardPayload(
     if (!job) return json({ detail: "Job not found" }, 404);
     let r: any = {};
     try { r = job.result ? JSON.parse(job.result) : {}; } catch {}
-    return json({
-      ...r,
-      status: job.status === "running" ? "pending" : job.status,
-      error: r.ok === false ? r.note : r.error ?? null,
-    });
+    // A completed job ref (score-{team}-{call}-{agent}) resolves to the
+    // evaluation it persisted — the outcome blob alone has no sections and
+    // would render an empty editor (the lookup/console "Open editor" links
+    // navigate by job id).
+    if (job.status !== "running") {
+      for (const evalRef of [r.eval_id, r.call_id]) {
+        if (evalRef) ev = await evalByCallRef(String(evalRef));
+        if (ev) break;
+      }
+    }
+    if (!ev)
+      return json({
+        ...r,
+        status: job.status === "running" ? "pending" : job.status,
+        error: r.ok === false ? r.note : r.error ?? null,
+      });
   }
   const rows = await evalSections(db, ev.id);
   const byId = new Map(rows.map((r: any) => [r.section_id, r]));
@@ -722,13 +764,15 @@ export async function approveEvaluation(
       `UPDATE qa_evaluations SET state='finalized', scoring_status='complete',
         source=?, evaluator_email=?, overall_score=?,
         key_strengths=?, opportunities=?,
-        approved_at=COALESCE(approved_at, ?), finalized_at=?
+        approved_at=COALESCE(approved_at, ?), finalized_at=?,
+        human_review_completed_at=CASE WHEN human_review_required_at IS NULL
+          THEN NULL ELSE COALESCE(human_review_completed_at, ?) END
        WHERE id=?`
     )
     .bind(
       edited ? "ai_reviewed" : ev.source, evaluatorEmail, overall,
       body.key_strengths ?? ev.key_strengths, body.opportunities ?? ev.opportunities,
-      now, now, ev.id
+      now, now, now, ev.id
     )
     .run();
 
@@ -793,9 +837,12 @@ export async function overrideEvaluation(
     .prepare(
       `UPDATE qa_evaluations SET overall_score=?, source='ai_reviewed',
         evaluator_email=?, state='finalized', scoring_status='complete',
-        approved_at=COALESCE(approved_at, ?), finalized_at=? WHERE id=?`
+        approved_at=COALESCE(approved_at, ?), finalized_at=?,
+        human_review_completed_at=CASE WHEN human_review_required_at IS NULL
+          THEN NULL ELSE COALESCE(human_review_completed_at, ?) END
+       WHERE id=?`
     )
-    .bind(score, evaluatorEmail, now, now, ev.id)
+    .bind(score, evaluatorEmail, now, now, now, ev.id)
     .run();
   // §4.3: the override ALWAYS creates the coaching receipt + duty.
   const coachingId = await coachingReceipt(
@@ -980,10 +1027,11 @@ export async function scoringCallback(
         call_summary, annotated_transcript, key_strengths, opportunities,
         overall_score, formula_version, rubric_version, models_used,
         ai_provider_primary, sampling_status, scoring_status,
+        human_review_required_at,
         created_at, approved_at, finalized_at,
         dialpad_disposition_category, dialpad_disposition, ai_csat,
         command_center_call_id, dialpad_call_metadata
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     )
     .bind(
       newEvalId,
@@ -1003,6 +1051,9 @@ export async function scoringCallback(
       JSON.stringify(modelsUsed), "gemini",
       "not_sampled",
       flagged ? "flagged_human_review" : "complete",
+      // §0.3 queue entry: flagged rows carry the marker until a human
+      // resolution (approve/override) stamps completed_at.
+      flagged ? now : null,
       now, flagged ? null : now, flagged ? null : now,
       persist.cc_stamps?.disposition_category ?? null,
       persist.cc_stamps?.disposition ?? null,
