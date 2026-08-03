@@ -25,6 +25,7 @@ import {
   buildSystemPrompt,
 } from "../lib/scoringPrompts.js";
 import { evaluateFormula, quantizeScore } from "../lib/ruleEngine.js";
+import { fetchSopContext } from "../lib/sopRetrieval.js";
 
 const WORKFLOW_NAME = "qa-scoring-pipeline";
 const DP = "https://dialpad.com/api/v2";
@@ -130,7 +131,11 @@ export async function scoreTrigger(
   request: Request,
   db: D1Database,
   teamId: string,
-  env: { DIALPAD_API_KEY?: string; WORKFLOW_ID?: string }
+  env: {
+    DIALPAD_API_KEY?: string;
+    PULPO_MCP_URL?: string;
+    PULPO_MCP_TOKEN?: string;
+  }
 ): Promise<Response> {
   if (!env.DIALPAD_API_KEY)
     return json({ detail: "DIALPAD_API_KEY app secret not configured" }, 503);
@@ -188,11 +193,22 @@ export async function scoreTrigger(
   });
   const callContextText = buildCallContextBlock(ccCtx);
 
+  // SOP retrieval (PulpoConnection §4.2, mode=on — v1-essential): the
+  // verified disposition is the query; empty/sub-τ retrieval falls through
+  // to the sop_context_missing conservative path automatically.
+  const sop = await fetchSopContext({
+    pulpoUrl: env.PULPO_MCP_URL,
+    pulpoToken: env.PULPO_MCP_TOKEN,
+    dispositionCategory: ccCtx?.disposition_category ?? null,
+    disposition: ccCtx?.disposition ?? null,
+    transcriptText: transcript.transcript_text,
+  });
+
   const durationMs = Number(details.total_duration ?? 0);
   const extraNotes = buildLongCallNote(config.prompt_config, durationMs);
   const promptExtras = {
-    sopTitle: "",
-    sopContent: "", // Pulpo SOP retrieval lands when PULPO_MCP secrets exist
+    sopTitle: sop.sop_title,
+    sopContent: sop.block_text,
     agentName: agentName,
     extraNotes,
     callContextText,
@@ -248,6 +264,10 @@ export async function scoreTrigger(
       transcript_display: transcript.transcript_display,
       moments_display: transcript.moments_display,
       flagged_long_call: durationMs > 25 * 60 * 1000,
+      // PulpoConnection §4.2 step 6 — provenance stamped in shadow AND on
+      sop_used: sop.sop_title || null,
+      pulpo_docs: sop.provenance,
+      sop_skipped_reason: sop.skipped_reason || null,
     },
   };
 
@@ -418,6 +438,9 @@ export async function scoringCallback(
   const meta = {
     moments: persist.moments_display ?? [],
     transcript_display: persist.transcript_display ?? [],
+    sop_used: persist.sop_used ?? null,
+    pulpo_docs: persist.pulpo_docs ?? [],
+    ...(persist.sop_skipped_reason ? { sop_skipped_reason: persist.sop_skipped_reason } : {}),
     sandy_pipeline: {
       run_id: body.run_id,
       timings_ms: p.timings_ms,
