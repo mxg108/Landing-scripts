@@ -72,6 +72,82 @@ def truncate(s, n=280):
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+CC_CALLS_COLS = [
+    "id", "team_id", "dialpad_call_id", "dialpad_master_call_id",
+    "dialpad_entry_point_call_id", "started_at", "rang_at", "connected_at",
+    "ended_at", "total_duration_ms", "direction", "external_number",
+    "internal_number", "group_id", "dialpad_agent_id", "agent_name",
+    "caller_name", "caller_phone_e164", "caller_email", "target_name",
+    "target_type", "target_phone", "mos_score", "was_recorded",
+    "is_transferred", "recording_urls", "last_state", "last_state_at",
+    "total_hold_seconds", "raw_call_details", "scored", "scored_at",
+    "evaluation_orphaned", "evaluation_orphaned_at", "seen_via",
+    "first_seen_at", "last_updated_at", "disposition_category",
+    "disposition", "ai_csat", "disposition_source",
+]
+
+
+def _d1_scalar(sql: str):
+    return pg_to_d1.d1_query(sql)[0]["v"]
+
+
+async def sync_cc_incremental(conn) -> str:
+    # cc_calls upsert by last_updated_at watermark
+    wm = _d1_scalar("SELECT COALESCE(max(last_updated_at), '1970-01-01') AS v FROM cc_calls")
+    rows = await conn.fetch(
+        f"SELECT {', '.join(CC_CALLS_COLS)} FROM command_center.calls "
+        "WHERE last_updated_at > $1 ORDER BY last_updated_at LIMIT 5000",
+        # D1 stores ISO text; PG compares timestamptz — parse the watermark
+        datetime.fromisoformat(wm.replace("Z", "+00:00")),
+    )
+    if rows:
+        col_list = ", ".join(CC_CALLS_COLS)
+        updates = ", ".join(f"{c}=excluded.{c}" for c in CC_CALLS_COLS if c != "id")
+        stmts = ["PRAGMA defer_foreign_keys = true;"]
+        for r in rows:
+            vals = ", ".join(pg_to_d1.lit(r[c]) for c in CC_CALLS_COLS)
+            stmts.append(
+                f"INSERT INTO cc_calls ({col_list}) VALUES ({vals}) "
+                f"ON CONFLICT(id) DO UPDATE SET {updates};"
+            )
+            if sum(len(s) for s in stmts) > 300_000:
+                pg_to_d1.apply_sql("\n".join(stmts))
+                stmts = ["PRAGMA defer_foreign_keys = true;"]
+        if len(stmts) > 1:
+            pg_to_d1.apply_sql("\n".join(stmts))
+
+    # append-only tails by id watermark
+    appended = {}
+    for pg_name, d1_name, cols in (
+        ("command_center.hold_intervals", "cc_hold_intervals",
+         ["id", "team_id", "dialpad_call_id", "call_id", "started_at",
+          "ended_at", "seconds", "ended_by"]),
+        ("command_center.webhook_events", "cc_webhook_events",
+         ["id", "received_at", "team_id", "event_kind", "dialpad_call_id",
+          "dialpad_master_call_id", "dialpad_agent_id", "state",
+          "event_timestamp", "raw_payload", "processed_at"]),
+    ):
+        max_id = _d1_scalar(f"SELECT COALESCE(max(id), 0) AS v FROM {d1_name}")
+        tail = await conn.fetch(
+            f"SELECT {', '.join(cols)} FROM {pg_name} WHERE id > $1 ORDER BY id LIMIT 5000",
+            max_id)
+        if tail:
+            col_list = ", ".join(cols)
+            stmts = ["PRAGMA defer_foreign_keys = true;"]
+            for r in tail:
+                stmts.append(
+                    f"INSERT OR IGNORE INTO {d1_name} ({col_list}) VALUES "
+                    f"({', '.join(pg_to_d1.lit(r[c]) for c in cols)});")
+                if sum(len(s) for s in stmts) > 300_000:
+                    pg_to_d1.apply_sql("\n".join(stmts))
+                    stmts = ["PRAGMA defer_foreign_keys = true;"]
+            if len(stmts) > 1:
+                pg_to_d1.apply_sql("\n".join(stmts))
+        appended[d1_name] = len(tail)
+    return (f"calls+{len(rows)} holds+{appended['cc_hold_intervals']} "
+            f"webhooks+{appended['cc_webhook_events']}")
+
+
 async def main():
     import asyncpg
     started = datetime.now(timezone.utc)
@@ -119,6 +195,14 @@ async def main():
             pg_to_d1.apply_sql("\n".join(stmts))
             published = len(stmts)
 
+        # 2.5 cc_* incremental — disposition grounding must be FRESH
+        # (the scoring workflow's cc_context match reads cc_calls).
+        # cc_calls: upsert rows whose last_updated_at moved past the D1
+        # watermark (ON CONFLICT DO UPDATE — never INSERT OR REPLACE,
+        # which would cascade-delete cc_hold_intervals). hold_intervals /
+        # webhook_events are append-only: insert by id watermark.
+        cc_synced = await sync_cc_incremental(conn)
+
         # 3. spot reconciliation on the two load-bearing tables
         ok = True
         for pg_name, d1_name in (("qa.evaluations", "qa_evaluations"),
@@ -130,7 +214,8 @@ async def main():
             ok &= (pg_row["c"], pg_row["s"]) == (d1_row["c"], d1_row["s"])
         secs = (datetime.now(timezone.utc) - started).total_seconds()
         print(f"SHADOW SYNC {'OK' if ok else 'RECONCILE MISMATCH'}: "
-              f"{len(after_ids)} finalized evals, +{published} events published, {secs:.0f}s")
+              f"{len(after_ids)} finalized evals, +{published} events published, "
+              f"cc {cc_synced}, {secs:.0f}s")
         sys.exit(0 if ok else 2)
     finally:
         await conn.close()
