@@ -50,7 +50,7 @@
         + (month ? `?month=${encodeURIComponent(month)}` : '');
       let res;
       try {
-        res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + key } });
+        res = await fetch(url); // Sandy: SSO cookie auth — no Authorization header
       } catch (e) {
         status.innerHTML = '<span class="err">Network error loading the one-pager.</span>';
         return;

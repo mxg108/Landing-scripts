@@ -292,10 +292,7 @@ document.getElementById('backLink').href = `/lookup/${TEAM_ID}`;
 // --- Auth — localStorage so the API key carries across tabs (new tab from
 // /lookup must inherit auth without re-prompting). ---
 function getApiKey() { return 'sso'; } // Sandy: SSO owns auth
-function authHeaders() {
-  const key = getApiKey();
-  return key ? { 'Authorization': 'Bearer ' + key } : {};
-}
+function authHeaders() { return {}; } // Sandy: never send Authorization — the SSO edge rejects foreign bearer tokens
 
 // --- Team-section cache (drives manual-section rows + approve-gate logic) ---
 let _teamSections = [];
