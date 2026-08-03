@@ -21,6 +21,10 @@ export interface Env {
   // Dashboard-set app secret: comma-separated emails allowed on /lookup
   // (interim deny-by-default compliance lock until per-team RBAC lands).
   LOOKUP_ALLOW?: string;
+  // Dashboard-set app secrets: Pulpo MCP (SOP retrieval at prompt-build —
+  // v1-essential; absent → prompts take the sop_context_missing path).
+  PULPO_MCP_URL?: string;
+  PULPO_MCP_TOKEN?: string;
   // Optional: pre-select a specific workflow. Leave unset to list all available.
   WORKFLOW_ID?: string;
   // Provisioned automatically by Sandy at publish time for apps with cron schedules.
@@ -44,7 +48,8 @@ export default {
 
     // ── Ported QA pages + team analytics APIs (PortManifest §3/§4/§6.1) ──
     const teamRes = await handleTeamRoutes(
-      request, env.DB, url, env.DIALPAD_API_KEY, env.LOOKUP_ALLOW
+      request, env.DB, url, env.DIALPAD_API_KEY, env.LOOKUP_ALLOW,
+      { url: env.PULPO_MCP_URL, token: env.PULPO_MCP_TOKEN }
     );
     if (teamRes) return teamRes;
 

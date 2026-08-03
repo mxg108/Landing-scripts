@@ -149,7 +149,8 @@ export async function handleTeamRoutes(
   db: D1Database,
   url: URL,
   dialpadKey?: string,
-  lookupAllow?: string
+  lookupAllow?: string,
+  pulpo?: { url?: string; token?: string }
 ): Promise<Response | null> {
   const path = url.pathname;
 
@@ -205,7 +206,11 @@ export async function handleTeamRoutes(
   m = path.match(/^\/api\/([^/]+)\/score$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
     const { scoreTrigger } = await import("./scoring.js");
-    return scoreTrigger(request, db, m[1], { DIALPAD_API_KEY: dialpadKey });
+    return scoreTrigger(request, db, m[1], {
+      DIALPAD_API_KEY: dialpadKey,
+      PULPO_MCP_URL: pulpo?.url,
+      PULPO_MCP_TOKEN: pulpo?.token,
+    });
   }
   m = path.match(/^\/api\/([^/]+)\/score\/([^/]+)$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
