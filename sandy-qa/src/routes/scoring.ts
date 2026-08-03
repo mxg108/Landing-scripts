@@ -184,7 +184,7 @@ async function scoreTriggerInternal(
     .prepare("SELECT run_id, status FROM workflow_runs WHERE run_id = ?")
     .bind(jobId)
     .first<any>();
-  if (existing && ["pending", "running"].includes(existing.status))
+  if (existing && ["queued", "pending", "running"].includes(existing.status))
     return json({ job_id: jobId, status: existing.status, deduped: true });
   if (!opts.rescoreOf) {
     const already = await db
@@ -297,19 +297,153 @@ async function scoreTriggerInternal(
     },
   };
 
-  // trigger via the Sandy platform (template src/workflow.ts wiring)
+  // Serialize through the D1 queue — the platform allows ONE active
+  // qa-scoring-pipeline run; concurrent triggers 409 ("Workflow already
+  // has an active run", observed on the console's first batch submit).
+  // Enqueue always succeeds; drainScoreQueue starts the head job when the
+  // pipeline is idle and is pumped again from the callback + status polls.
+  const nowIso = new Date().toISOString();
+  await db
+    .prepare(
+      `INSERT INTO qa_score_queue (job_id, team_id, call_id, payload, status, enqueued_at)
+       VALUES (?,?,?,?, 'queued', ?)
+       ON CONFLICT(job_id) DO UPDATE SET
+         payload=excluded.payload, status='queued', attempts=0, last_error=NULL,
+         sandy_run_id=NULL, enqueued_at=excluded.enqueued_at, triggered_at=NULL,
+         finished_at=NULL`
+    )
+    .bind(jobId, teamId, callId, JSON.stringify(payload), nowIso)
+    .run();
+  const stamp = JSON.stringify({ call_id: callId, job_id: jobId });
+  await db
+    .prepare(
+      "INSERT INTO workflow_runs (run_id, workflow_name, status, result, created_at) VALUES (?, ?, 'queued', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now')) " +
+        "ON CONFLICT(run_id) DO UPDATE SET status='queued', result=excluded.result"
+    )
+    .bind(jobId, WORKFLOW_NAME, stamp)
+    .run();
+  const started = await drainScoreQueue(db, request);
+  if (started === jobId) return json({ job_id: jobId, status: "pending" });
+  const ahead = await db
+    .prepare(
+      "SELECT COUNT(*) AS n FROM qa_score_queue WHERE status='queued' AND enqueued_at < ? AND job_id <> ?"
+    )
+    .bind(nowIso, jobId)
+    .first<any>();
+  return json({ job_id: jobId, status: "queued", queue_position: (ahead?.n ?? 0) + 1 });
+}
+
+// ── queue drain — one platform slot, CAS-claimed head job ──────────────────
+// Pumped from: enqueue (starts immediately when idle), the scoring callback
+// (a finished run frees the slot), and non-terminal status polls (recovers
+// lost callbacks / worker deaths via the stale thresholds).
+
+const TRIGGERING_STALE_MS = 3 * 60_000; // worker died between claim and trigger
+const RUNNING_STALE_MS = 25 * 60_000; // callback never arrived
+
+export async function drainScoreQueue(
+  db: D1Database,
+  request: Request
+): Promise<string | null> {
+  const nowMs = Date.now();
+  const iso = (ms: number) => new Date(ms).toISOString();
+  await db
+    .prepare(
+      "UPDATE qa_score_queue SET status='queued', triggered_at=NULL WHERE status='triggering' AND triggered_at < ?"
+    )
+    .bind(iso(nowMs - TRIGGERING_STALE_MS))
+    .run();
+  await db
+    .prepare(
+      "UPDATE qa_score_queue SET status='error', last_error='no callback within 25 min — marked stale', finished_at=? WHERE status='running' AND triggered_at < ?"
+    )
+    .bind(iso(nowMs), iso(nowMs - RUNNING_STALE_MS))
+    .run();
+
+  const active = await db
+    .prepare(
+      "SELECT job_id FROM qa_score_queue WHERE status IN ('triggering','running') LIMIT 1"
+    )
+    .first<any>();
+  if (active) return null;
+
+  const head = await db
+    .prepare(
+      "SELECT job_id, team_id, call_id, payload, attempts FROM qa_score_queue WHERE status='queued' ORDER BY enqueued_at LIMIT 1"
+    )
+    .first<any>();
+  if (!head) return null;
+
+  // CAS claim — concurrent pumps race; meta.changes decides the winner.
+  const claim = await db
+    .prepare(
+      "UPDATE qa_score_queue SET status='triggering', triggered_at=? WHERE job_id=? AND status='queued'"
+    )
+    .bind(iso(nowMs), head.job_id)
+    .run();
+  if (!claim.meta.changes) return null;
+
   const { listTriggerableWorkflows, triggerWorkflowWithCallback } = await import(
     "../workflow.js"
   );
-  const known = await listTriggerableWorkflows();
-  const wfId =
-    known.find((w: any) => w.name === WORKFLOW_NAME)?.id ??
-    "25dec973-c4ab-4122-b2ce-9d3a03c802d8";
-  const run = await triggerWorkflowWithCallback(wfId, WORKFLOW_NAME, request, payload);
+  let run: any = null;
+  try {
+    const known = await listTriggerableWorkflows();
+    const wfId =
+      known.find((w: any) => w.name === WORKFLOW_NAME)?.id ??
+      "25dec973-c4ab-4122-b2ce-9d3a03c802d8";
+    run = await triggerWorkflowWithCallback(
+      wfId, WORKFLOW_NAME, request, JSON.parse(head.payload)
+    );
+  } catch (err) {
+    const msg = String((err as any)?.message ?? err).slice(0, 300);
+    if (msg.includes("trigger failed 409")) {
+      // A run is active platform-side (e.g. started before the queue
+      // existed) — put the head back; the next pump retries.
+      await db
+        .prepare(
+          "UPDATE qa_score_queue SET status='queued', triggered_at=NULL WHERE job_id=? AND status='triggering'"
+        )
+        .bind(head.job_id)
+        .run();
+      return null;
+    }
+    const attempts = (head.attempts ?? 0) + 1;
+    const terminal = attempts >= 5;
+    await db
+      .prepare(
+        "UPDATE qa_score_queue SET status=?, attempts=?, last_error=?, triggered_at=NULL, finished_at=? WHERE job_id=?"
+      )
+      .bind(
+        terminal ? "error" : "queued", attempts, msg,
+        terminal ? iso(nowMs) : null, head.job_id
+      )
+      .run();
+    if (terminal)
+      await db
+        .prepare("UPDATE workflow_runs SET status='error', result=? WHERE run_id=?")
+        .bind(
+          JSON.stringify({
+            ok: false,
+            note: `workflow trigger failed after ${attempts} attempts: ${msg}`,
+            call_id: head.call_id, job_id: head.job_id,
+          }),
+          head.job_id
+        )
+        .run();
+    return null;
+  }
+
+  await db
+    .prepare("UPDATE qa_score_queue SET status='running', sandy_run_id=? WHERE job_id=?")
+    .bind(run?.id ?? null, head.job_id)
+    .run();
   // Two rows: the platform run id (the generic callback handler updates it)
   // and the job id (idempotency + the status poll the console uses).
-  const stamp = JSON.stringify({ sandy_run_id: run?.id ?? null, call_id: callId, job_id: jobId });
-  for (const key of [run?.id, jobId]) {
+  const stamp = JSON.stringify({
+    sandy_run_id: run?.id ?? null, call_id: head.call_id, job_id: head.job_id,
+  });
+  for (const key of [run?.id, head.job_id]) {
     if (!key) continue;
     await db
       .prepare(
@@ -319,7 +453,7 @@ async function scoreTriggerInternal(
       .bind(key, WORKFLOW_NAME, stamp)
       .run();
   }
-  return json({ job_id: jobId, status: "pending", sandy_run_id: run?.id ?? null });
+  return head.job_id;
 }
 
 export async function scoreStatus(
@@ -508,7 +642,8 @@ async function evalSections(db: D1Database, evalId: number) {
 export async function scorecardPayload(
   db: D1Database,
   teamId: string,
-  ref: string
+  ref: string,
+  request?: Request
 ): Promise<Response> {
   const { loadTeamConfig: load } = await import("../lib/teamConfig.js");
   const config = await load(db, teamId);
@@ -524,11 +659,23 @@ export async function scorecardPayload(
   let ev = await evalByCallRef(ref);
   if (!ev) {
     // fall back to the live job store (in-flight scoring)
-    const job = await db
+    let job = await db
       .prepare("SELECT run_id, status, result FROM workflow_runs WHERE run_id = ?")
       .bind(ref)
       .first<any>();
     if (!job) return json({ detail: "Job not found" }, 404);
+    if (request && ["queued", "running"].includes(job.status)) {
+      // Poll pump: each 3s status poll is a chance to start the next
+      // queued job (recovers lost callbacks via the stale thresholds).
+      try {
+        await drainScoreQueue(db, request);
+      } catch {}
+      job =
+        (await db
+          .prepare("SELECT run_id, status, result FROM workflow_runs WHERE run_id = ?")
+          .bind(ref)
+          .first<any>()) ?? job;
+    }
     let r: any = {};
     try { r = job.result ? JSON.parse(job.result) : {}; } catch {}
     // A completed job ref (score-{team}-{call}-{agent}) resolves to the
