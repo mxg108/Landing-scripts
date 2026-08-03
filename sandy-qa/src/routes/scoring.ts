@@ -642,6 +642,11 @@ export async function approveEvaluation(
     const numeric =
       sent.score !== null && sent.score !== undefined ? Math.trunc(Number(sent.score)) : null;
     const yn = sent.yn_value ?? null;
+    if (numeric === null && yn === null)
+      return json(
+        { detail: `section '${sec.id}': needs a score or yn_value before approval` },
+        422
+      );
     const prev: any = existingById.get(sec.id);
     const changed =
       !prev || (prev.numeric_score ?? null) !== numeric || (prev.binary_value ?? null) !== yn;
@@ -676,7 +681,15 @@ export async function approveEvaluation(
     .first<any>();
   if (!fvRow) return json({ detail: `formula ${ev.formula_version} not archived` }, 500);
   const { evaluateFormula: evalF, quantizeScore: quant } = await import("../lib/ruleEngine.js");
-  const overall = quant(evalF(JSON.parse(fvRow.formula_json), answers).final_score);
+  let overall: number;
+  try {
+    overall = quant(evalF(JSON.parse(fvRow.formula_json), answers).final_score);
+  } catch (err) {
+    return json(
+      { detail: `formula rejected the edited sections: ${String((err as any)?.message ?? err).slice(0, 300)}` },
+      422
+    );
+  }
 
   const now = new Date().toISOString();
   await db.prepare("DELETE FROM qa_evaluation_sections WHERE evaluation_id = ?").bind(ev.id).run();
