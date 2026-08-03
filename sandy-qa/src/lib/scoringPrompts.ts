@@ -341,6 +341,11 @@ interface PromptExtras {
   agentName?: string;
   extraNotes?: string;
   callContextText?: string;
+  // One-sentence team framing so the judge knows WHICH line the call came
+  // from (observed miss: an MS support-line call scored against a Sofia
+  // SOP's locksmith prohibition). Interim until Pulpo per-team tag
+  // scoping lands; rides both single-stage and judge prompts.
+  teamContext?: string;
 }
 
 function sopBlock(cfg: PromptConfig, x: PromptExtras): string {
@@ -361,7 +366,9 @@ export function buildScoringPrompt(
   transcriptText: string,
   x: PromptExtras = {}
 ): string {
-  const parts = [buildScoringRubric(cfg), sopBlock(cfg, x)];
+  const parts = [buildScoringRubric(cfg)];
+  if (x.teamContext) parts.push(`\n${x.teamContext}`);
+  parts.push(sopBlock(cfg, x));
   if (x.callContextText) parts.push(x.callContextText);
   if (transcriptText)
     parts.push(
@@ -385,7 +392,9 @@ export function buildScoringPrompt(
 // Judge user prompt TEMPLATE — the workflow substitutes {{ANNOTATION_TEXT}}
 // with the rendered annotated record at judge time.
 export function buildJudgePromptTemplate(cfg: PromptConfig, x: PromptExtras = {}): string {
-  const parts = [buildScoringRubric(cfg), sopBlock(cfg, x)];
+  const parts = [buildScoringRubric(cfg)];
+  if (x.teamContext) parts.push(`\n${x.teamContext}`);
+  parts.push(sopBlock(cfg, x));
   if (x.callContextText) parts.push(x.callContextText);
   parts.push(ANNOTATION_CONTEXT_BLOCK);
   if (x.agentName) parts.push(`\nAgent name: ${x.agentName}`);

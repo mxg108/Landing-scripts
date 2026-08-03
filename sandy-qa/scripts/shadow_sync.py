@@ -28,15 +28,32 @@ spec.loader.exec_module(pg_to_d1)
 APP_ID = pg_to_d1.APP_ID
 TABLES = pg_to_d1.TABLES
 
+# Sandy-born rows (evals scored ON Sandy) live at id >= SANDY_ID_BASE —
+# the sync only ever owns the Railway range below it. Wipes are
+# range-scoped so a sync can never delete Sandy's own evaluations again
+# (2026-08-03 incident: the first Sandy-scored calls were wiped by the
+# unscoped v1 of this script).
+SANDY_ID_BASE = 10_000_000
+
 # qa_* wipe order: children before parents (D1 enforces FKs), agents last.
-WIPE_ORDER = [
-    "qa_agent_stat_points", "qa_coaching_evaluations", "qa_coachings",
-    "qa_evaluation_tags", "qa_assessment_sections", "qa_assessments",
-    "qa_formula_compliance_sweeps", "qa_evaluation_sections",
-    "qa_evaluations", "qa_agents",
+# Value = extra WHERE guard ('' = full wipe, Railway-owned table).
+WIPE_ORDER = {
+    "qa_agent_stat_points": f"WHERE evaluation_id < {SANDY_ID_BASE}",
+    "qa_coaching_evaluations": f"WHERE evaluation_id < {SANDY_ID_BASE}",
+    "qa_coachings": "",
+    "qa_evaluation_tags": f"WHERE evaluation_id < {SANDY_ID_BASE}",
+    "qa_assessment_sections": "",
+    "qa_assessments": "",
+    "qa_formula_compliance_sweeps": f"WHERE evaluation_id < {SANDY_ID_BASE}",
+    "qa_evaluation_sections": f"WHERE evaluation_id < {SANDY_ID_BASE}",
+    "qa_evaluations": f"WHERE id < {SANDY_ID_BASE}",
+    "qa_agents": "",
     # FK-free tables re-imported by RESYNC — wipe or their PKs collide.
-    "qa_tags", "qa_score_audit", "qa_score_audit_archive", "qa_api_audit_log",
-]
+    "qa_tags": "",
+    "qa_score_audit": f"WHERE id < {SANDY_ID_BASE}",
+    "qa_score_audit_archive": "",
+    "qa_api_audit_log": "",
+}
 # Re-import: agents first, then everything from qa_evaluations onward in
 # pg_to_d1's FK-safe order (cc_* tables stay on their initial snapshot until
 # the CC slice; dispositions freshness is not shadow-gating).
@@ -155,10 +172,30 @@ async def main():
 
     conn = await asyncpg.connect(pg_to_d1.env_value("DATABASE_URL", pathlib.Path(".env")), timeout=30)
     try:
-        # 1. wipe + full re-import of the qa_* tree (row updates included)
+        # 0. Railway-wins dedupe: a call scored on BOTH stacks during the
+        # transition keeps Railway's row (the oracle until cutover) — drop
+        # the Sandy-born duplicate LOUDLY so the collision is visible.
+        pg_pairs = await conn.fetch(
+            "SELECT team_id, dialpad_call_id FROM qa.evaluations "
+            "WHERE dialpad_call_id IS NOT NULL")
+        sandy_rows = pg_to_d1.d1_query(
+            f"SELECT id, team_id, dialpad_call_id FROM qa_evaluations WHERE id >= {SANDY_ID_BASE}")
+        pg_set = {(r["team_id"], r["dialpad_call_id"]) for r in pg_pairs}
+        dupes = [r for r in sandy_rows
+                 if (r["team_id"], r["dialpad_call_id"]) in pg_set]
+        if dupes:
+            ids = ", ".join(str(r["id"]) for r in dupes)
+            print(f"RAILWAY-WINS: dropping {len(dupes)} Sandy-born duplicate eval(s): {ids}")
+            pg_to_d1.apply_sql(
+                "PRAGMA defer_foreign_keys = true;\n"
+                f"DELETE FROM qa_evaluation_sections WHERE evaluation_id IN ({ids});\n"
+                f"DELETE FROM qa_evaluations WHERE id IN ({ids});"
+            )
+
+        # 1. wipe + re-import of the RAILWAY-OWNED qa_* range (updates included)
         pg_to_d1.apply_sql(
             "PRAGMA defer_foreign_keys = true;\n"
-            + "\n".join(f"DELETE FROM {t};" for t in WIPE_ORDER)
+            + "\n".join(f"DELETE FROM {t} {w};".strip() for t, w in WIPE_ORDER.items())
         )
         for pg_name, d1_name in RESYNC:
             await pg_to_d1.import_table(conn, pg_name, d1_name, wipe=False)
@@ -205,12 +242,15 @@ async def main():
 
         # 3. spot reconciliation on the two load-bearing tables
         ok = True
-        for pg_name, d1_name in (("qa.evaluations", "qa_evaluations"),
-                                 ("qa.evaluation_sections", "qa_evaluation_sections")):
+        for pg_name, d1_name, guard in (
+            ("qa.evaluations", "qa_evaluations", f"WHERE id < {SANDY_ID_BASE}"),
+            ("qa.evaluation_sections", "qa_evaluation_sections",
+             f"WHERE evaluation_id < {SANDY_ID_BASE}"),
+        ):
             pg_row = await conn.fetchrow(
                 f"SELECT count(*) c, COALESCE(sum(id),0)::bigint s FROM {pg_name}")
             d1_row = pg_to_d1.d1_query(
-                f"SELECT count(*) c, COALESCE(sum(id),0) s FROM {d1_name}")[0]
+                f"SELECT count(*) c, COALESCE(sum(id),0) s FROM {d1_name} {guard}")[0]
             ok &= (pg_row["c"], pg_row["s"]) == (d1_row["c"], d1_row["s"])
         secs = (datetime.now(timezone.utc) - started).total_seconds()
         print(f"SHADOW SYNC {'OK' if ok else 'RECONCILE MISMATCH'}: "

@@ -137,17 +137,33 @@ export async function scoreTrigger(
     PULPO_MCP_TOKEN?: string;
   }
 ): Promise<Response> {
-  if (!env.DIALPAD_API_KEY)
-    return json({ detail: "DIALPAD_API_KEY app secret not configured" }, 503);
   let form: FormData;
   try {
     form = await request.formData();
   } catch {
     return json({ detail: "multipart/form-data body required" }, 422);
   }
-  const callId = (form.get("call_id") ?? "").toString().trim();
-  const agentEmail = (form.get("agent_email") ?? "").toString().trim().toLowerCase();
-  const managerEmail = (form.get("manager_email") ?? "").toString().trim().toLowerCase();
+  return scoreTriggerInternal(request, db, teamId, env, {
+    callId: (form.get("call_id") ?? "").toString().trim(),
+    agentEmail: (form.get("agent_email") ?? "").toString().trim().toLowerCase(),
+    managerEmail: (form.get("manager_email") ?? "").toString().trim().toLowerCase(),
+  });
+}
+
+async function scoreTriggerInternal(
+  request: Request,
+  db: D1Database,
+  teamId: string,
+  env: {
+    DIALPAD_API_KEY?: string;
+    PULPO_MCP_URL?: string;
+    PULPO_MCP_TOKEN?: string;
+  },
+  opts: { callId: string; agentEmail: string; managerEmail: string; rescoreOf?: number }
+): Promise<Response> {
+  if (!env.DIALPAD_API_KEY)
+    return json({ detail: "DIALPAD_API_KEY app secret not configured" }, 503);
+  const { callId, agentEmail, managerEmail } = opts;
   if (!callId || !agentEmail || !managerEmail)
     return json({ detail: "call_id, agent_email, manager_email required" }, 422);
 
@@ -170,14 +186,16 @@ export async function scoreTrigger(
     .first<any>();
   if (existing && ["pending", "running"].includes(existing.status))
     return json({ job_id: jobId, status: existing.status, deduped: true });
-  const already = await db
-    .prepare(
-      "SELECT id FROM qa_evaluations WHERE team_id = ? AND dialpad_call_id = ? LIMIT 1"
-    )
-    .bind(teamId, callId)
-    .first<any>();
-  if (already)
-    return json({ detail: `call ${callId} already has evaluation ${already.id}` }, 409);
+  if (!opts.rescoreOf) {
+    const already = await db
+      .prepare(
+        "SELECT id FROM qa_evaluations WHERE team_id = ? AND dialpad_call_id = ? LIMIT 1"
+      )
+      .bind(teamId, callId)
+      .first<any>();
+    if (already)
+      return json({ detail: `call ${callId} already has evaluation ${already.id}` }, 409);
+  }
 
   const config = await loadTeamConfig(db, teamId);
   const [transcript, details] = await Promise.all([
@@ -206,12 +224,19 @@ export async function scoreTrigger(
 
   const durationMs = Number(details.total_duration ?? 0);
   const extraNotes = buildLongCallNote(config.prompt_config, durationMs);
+  const teamLabel = teamId === "sales" ? "Sales" : "Member Support";
+  const teamLine = teamId === "sales" ? "sales line" : "member support line";
   const promptExtras = {
     sopTitle: sop.sop_title,
     sopContent: sop.block_text,
     agentName: agentName,
     extraNotes,
     callContextText,
+    teamContext:
+      `TEAM CONTEXT: this call was answered by the ${teamLabel} team on the ` +
+      `${teamLine}. Evaluate against ${teamLabel} expectations; if any SOP ` +
+      `below belongs to a different team or product line, do not hold the ` +
+      `agent to it.`,
   };
 
   const payload = {
@@ -228,7 +253,7 @@ export async function scoreTrigger(
     },
     judge: {
       provider: "anthropic",
-      model: "claude-sonnet-4-6", // pinned; SCORING_ANTHROPIC_MODEL parity to confirm
+      model: "claude-sonnet-5", // pinned — matches Railway's SCORING_ANTHROPIC_MODEL
       system: buildJudgeSystemPrompt(config.prompt_config),
       prompt_template: buildJudgePromptTemplate(config.prompt_config, promptExtras),
       max_tokens: 16384,
@@ -268,6 +293,7 @@ export async function scoreTrigger(
       sop_used: sop.sop_title || null,
       pulpo_docs: sop.provenance,
       sop_skipped_reason: sop.skipped_reason || null,
+      rescore_of: opts.rescoreOf ?? null,
     },
   };
 
@@ -318,6 +344,121 @@ export async function scoreStatus(
     error: result.ok === false ? result.note : result.error ?? null,
     created_at: row.created_at,
   });
+}
+
+// ── lifecycle actions (ScorecardActionsDesign §4.2 rescore / §4.4 delete) ──
+// Shadow-period doctrine: Sandy actions touch SANDY-BORN evaluations only
+// (id >= SANDY_ID_BASE). A Railway-born row edited here would be silently
+// reverted by the next sync — refuse loudly instead; act on Railway.
+
+const SANDY_BASE = 10_000_000;
+
+async function resolveEval(db: D1Database, teamId: string, ref: string) {
+  return db
+    .prepare(
+      `SELECT id, agent_id, agent_name_raw, agent_email, overall_score,
+              models_used, dialpad_call_id, dialpad_entry_point_call_id, state
+       FROM qa_evaluations
+       WHERE team_id = ? AND (dialpad_call_id = ? OR dialpad_entry_point_call_id = ?)
+       ORDER BY id DESC LIMIT 1`
+    )
+    .bind(teamId, ref, ref)
+    .first<any>();
+}
+
+async function auditRow(
+  db: D1Database,
+  fields: { role: string; evaluator: string; agentEmail: string; agentName: string;
+    callId: string; team: string; action: string; notes: string }
+) {
+  const idRow = await db
+    .prepare("SELECT COALESCE(MAX(id) + 1, ?) AS v FROM qa_score_audit WHERE id >= ?")
+    .bind(SANDY_BASE, SANDY_BASE)
+    .first<any>();
+  await db
+    .prepare(
+      `INSERT INTO qa_score_audit (id, api_key_role, evaluator_email, agent_email,
+        agent_name, call_id, target_team, action, notes) VALUES (?,?,?,?,?,?,?,?,?)`
+    )
+    .bind(idRow?.v ?? SANDY_BASE, fields.role, fields.evaluator, fields.agentEmail,
+      fields.agentName, fields.callId, fields.team, fields.action, fields.notes)
+    .run();
+}
+
+export async function rescoreEvaluation(
+  request: Request,
+  db: D1Database,
+  teamId: string,
+  ref: string,
+  env: { DIALPAD_API_KEY?: string; PULPO_MCP_URL?: string; PULPO_MCP_TOKEN?: string }
+): Promise<Response> {
+  let body: any = {};
+  try {
+    body = await request.json();
+  } catch {}
+  const evaluatorEmail = (body.evaluator_email ?? "").trim().toLowerCase();
+  if (!evaluatorEmail) return json({ detail: "evaluator_email required" }, 422);
+  const ev = await resolveEval(db, teamId, ref);
+  if (!ev) return json({ detail: "No evaluation matches this call id" }, 404);
+  if (ev.id < SANDY_BASE)
+    return json(
+      { detail: "This evaluation is Railway-owned during the shadow period — re-score it on Railway." },
+      409
+    );
+  let supersededModel: string | null = null;
+  try {
+    supersededModel = JSON.parse(ev.models_used ?? "{}")?.text?.model ?? null;
+  } catch {}
+  const callId = ev.dialpad_call_id;
+  await auditRow(db, {
+    role: "privileged", evaluator: evaluatorEmail, agentEmail: ev.agent_email ?? "",
+    agentName: ev.agent_name_raw, callId, team: teamId, action: "rescored",
+    notes: `superseded_score=${ev.overall_score ?? "null"} superseded_model=${supersededModel ?? "?"}`,
+  });
+  const trigger = await scoreTriggerInternal(request, db, teamId, env, {
+    callId,
+    agentEmail: ev.agent_email ?? "",
+    managerEmail: evaluatorEmail,
+    rescoreOf: ev.id,
+  });
+  if (trigger.status !== 200) return trigger;
+  const data: any = await trigger.clone().json();
+  return json({ ...data, superseded_score: ev.overall_score, superseded_model: supersededModel });
+}
+
+export async function deleteEvaluation(
+  request: Request,
+  db: D1Database,
+  teamId: string,
+  ref: string,
+  url: URL
+): Promise<Response> {
+  const evaluatorEmail =
+    (url.searchParams.get("evaluator_email") ?? "").trim().toLowerCase() || "unknown";
+  const ev = await resolveEval(db, teamId, ref);
+  if (!ev) return json({ detail: "No evaluation matches this call id" }, 404);
+  if (ev.id < SANDY_BASE)
+    return json(
+      { detail: "This evaluation is Railway-owned during the shadow period — delete it on Railway." },
+      409
+    );
+  await db.prepare("DELETE FROM qa_evaluation_sections WHERE evaluation_id = ?").bind(ev.id).run();
+  await db.prepare("DELETE FROM qa_evaluations WHERE id = ?").bind(ev.id).run();
+  // CC orphan latch (§3.9/§4.2): scored stays monotonic, orphaned flips on
+  const now = new Date().toISOString();
+  await db
+    .prepare(
+      `UPDATE cc_calls SET evaluation_orphaned = 1, evaluation_orphaned_at = ?
+       WHERE team_id = ? AND (dialpad_call_id = ? OR dialpad_entry_point_call_id = ?)`
+    )
+    .bind(now, teamId, ev.dialpad_call_id ?? "", ev.dialpad_entry_point_call_id ?? "")
+    .run();
+  await auditRow(db, {
+    role: "privileged", evaluator: evaluatorEmail, agentEmail: ev.agent_email ?? "",
+    agentName: ev.agent_name_raw, callId: ev.dialpad_call_id ?? ref, team: teamId,
+    action: "evaluation_orphaned", notes: `deleted eval ${ev.id} (score=${ev.overall_score ?? "null"})`,
+  });
+  return json({ ok: true, deleted_evaluation_id: ev.id });
 }
 
 // ── callback persist ───────────────────────────────────────────────────────
@@ -437,6 +578,28 @@ export async function scoringCallback(
     }
   }
 
+  // Sandy-born rows live in a reserved HIGH id range so the shadow sync
+  // (which wipes + re-imports the Railway-owned range) never touches
+  // them, and future Railway ids can never collide. A rescore REPLACES
+  // on the same row id (§4.2).
+  let newEvalId: number;
+  if (persist.rescore_of) {
+    newEvalId = persist.rescore_of;
+    await db
+      .prepare("DELETE FROM qa_evaluation_sections WHERE evaluation_id = ?")
+      .bind(newEvalId)
+      .run();
+    await db.prepare("DELETE FROM qa_evaluations WHERE id = ?").bind(newEvalId).run();
+  } else {
+    const idRow = await db
+      .prepare(
+        "SELECT COALESCE(MAX(id) + 1, ?) AS next_id FROM qa_evaluations WHERE id >= ?"
+      )
+      .bind(SANDY_BASE, SANDY_BASE)
+      .first<{ next_id: number }>();
+    newEvalId = idRow?.next_id ?? SANDY_BASE;
+  }
+
   const now = new Date().toISOString();
   const modelsUsed = {
     audio: p.annotator_model ? { provider: "gemini", model: p.annotator_model } : undefined,
@@ -459,7 +622,7 @@ export async function scoringCallback(
   const evalInsert = await db
     .prepare(
       `INSERT INTO qa_evaluations (
-        team_id, agent_id, agent_name_raw, agent_email, evaluator_email,
+        id, team_id, agent_id, agent_name_raw, agent_email, evaluator_email,
         state, source, call_connected_at, call_ended_at, call_duration_ms,
         language, dialpad_call_id, dialpad_entry_point_call_id,
         dialpad_master_call_id, dialpad_link, caller_name, caller_phone,
@@ -469,9 +632,10 @@ export async function scoringCallback(
         created_at, approved_at, finalized_at,
         dialpad_disposition_category, dialpad_disposition, ai_csat,
         command_center_call_id, dialpad_call_metadata
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     )
     .bind(
+      newEvalId,
       teamId, persist.agent_id, persist.agent_name, persist.agent_email,
       flagged ? null : persist.manager_email,
       flagged ? "draft" : "finalized", "ai",
@@ -496,18 +660,20 @@ export async function scoringCallback(
       JSON.stringify(meta)
     )
     .run();
-  const evalId = evalInsert.meta.last_row_id;
+  const evalId = newEvalId;
 
   for (const r of sectionRows) {
     await db
       .prepare(
         `INSERT INTO qa_evaluation_sections (
-          evaluation_id, section_id, section_number, score_type,
+          id, evaluation_id, section_id, section_number, score_type,
           numeric_score, binary_value, score_source, ai_provider, model,
           confidence, reasoning
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
       )
       .bind(
+        // deterministic high-range section ids (evalId × 100 + number)
+        evalId * 100 + r.section_number,
         evalId, r.section_id, r.section_number, r.score_type,
         r.numeric_score, r.binary_value, r.score_source, r.ai_provider,
         r.model, r.confidence, r.reasoning

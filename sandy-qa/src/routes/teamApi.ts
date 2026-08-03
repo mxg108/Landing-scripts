@@ -256,7 +256,20 @@ calls wait here.</p>
       PULPO_MCP_TOKEN: pulpo?.token,
     });
   }
+  m = path.match(/^\/api\/([^/]+)\/score\/([^/]+)\/rescore$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const { rescoreEvaluation } = await import("./scoring.js");
+    return rescoreEvaluation(request, db, m[1], decodeURIComponent(m[2]), {
+      DIALPAD_API_KEY: dialpadKey,
+      PULPO_MCP_URL: pulpo?.url,
+      PULPO_MCP_TOKEN: pulpo?.token,
+    });
+  }
   m = path.match(/^\/api\/([^/]+)\/score\/([^/]+)$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "DELETE") {
+    const { deleteEvaluation } = await import("./scoring.js");
+    return deleteEvaluation(request, db, m[1], decodeURIComponent(m[2]), url);
+  }
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
     const { scoreStatus } = await import("./scoring.js");
     return scoreStatus(db, decodeURIComponent(m[2]));
@@ -303,10 +316,12 @@ calls wait here.</p>
     );
   m = path.match(/^\/api\/([^/]+)\/whoami$/);
   if (m && KNOWN_TEAMS.has(m[1]))
-    // Read-only viewer identity behind SSO — team role hides the
-    // privileged-only controls (delete etc.); action routes don't exist
-    // here yet anyway.
-    return json({ role: "team", team_id: m[1] });
+    // QA staff on LOOKUP_ALLOW get privileged-key semantics (Delete etc.
+    // render); everyone else is a team-role viewer. Routes still guard.
+    return json({
+      role: lookupAllowed(request, lookupAllow) ? "privileged" : "team",
+      team_id: m[1],
+    });
 
   // ── lookup APIs (Dialpad-backed; needs the DIALPAD_API_KEY app secret) ───
   m = path.match(/^\/api\/([^/]+)\/lookup(\/calls|\/recording-link|\/scoring-permission)?$/);
