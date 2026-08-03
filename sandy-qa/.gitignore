@@ -5,3 +5,4 @@ _release/
 .wrangler/
 parity/fixture.json
 parity/lib.mjs
+parity/parity.log

@@ -47,22 +47,38 @@ export async function handleTeamRoutes(
   m = path.match(/^\/dashboard\/([^/]+)$/);
   if (m && KNOWN_TEAMS.has(m[1])) return html(teamDashboardHtml);
 
-  // Interim: datapoint drill-down ports in the next slice. Keep the link
-  // graph honest — page exists, explains itself, links to Railway.
-  m = path.match(/^\/datapoint\/([^/]+)\/([^/]+)$/);
-  if (m) {
-    const target = `${RAILWAY_BASE}/datapoint/${m[1]}/${encodeURIComponent(m[2])}`;
-    return html(
-      `<!DOCTYPE html><html><head><title>Datapoint — porting</title></head>
+  // Interim: datapoint + per-agent dashboard port in the next slice. Keep
+  // the link graph honest — pages exist, explain themselves, link to Railway.
+  const interimPage = (title: string, target: string) =>
+    html(
+      `<!DOCTYPE html><html><head><title>${title} — porting</title></head>
 <body style="font-family:monospace;background:#E7EFFB;color:#15192D;display:grid;place-items:center;min-height:100vh;margin:0">
 <div style="background:#fff;border:1px solid #c9d5e8;border-radius:12px;padding:32px;max-width:520px">
-<h2 style="margin-top:0">Datapoint drill-down: next port slice</h2>
-<p>This page hasn't moved to Sandy yet (strangler order: dashboards → stats → datapoint).</p>
-<p><a href="${target}" style="color:#1A61D9">Open this datapoint on Railway &rsaquo;</a></p>
+<h2 style="margin-top:0">${title}: next port slice</h2>
+<p>This page hasn't moved to Sandy yet (strangler order: dashboards → stats → drill-downs).</p>
+<p><a href="${target}" style="color:#1A61D9">Open on Railway &rsaquo;</a></p>
 <p><a href="javascript:history.back()" style="color:#5a6478">&larr; Back</a></p>
 </div></body></html>`
     );
-  }
+  m = path.match(/^\/datapoint\/([^/]+)\/([^/]+)$/);
+  if (m)
+    return interimPage(
+      "Datapoint drill-down",
+      `${RAILWAY_BASE}/datapoint/${m[1]}/${encodeURIComponent(m[2])}`
+    );
+  m = path.match(/^\/dashboard\/([^/]+)\/agent\/(.+)$/);
+  if (m && KNOWN_TEAMS.has(m[1]))
+    return interimPage(
+      "Per-agent dashboard",
+      `${RAILWAY_BASE}/dashboard/${m[1]}/agent/${m[2]}`
+    );
+
+  // ── drill-down list APIs (dist histogram + EWMA bar expansions) ──────────
+  m = path.match(/^\/api\/([^/]+)\/datapoints$/);
+  if (m && KNOWN_TEAMS.has(m[1])) return datapointsList(db, m[1], url);
+  m = path.match(/^\/api\/([^/]+)\/agents\/([^/]+)\/history$/);
+  if (m && KNOWN_TEAMS.has(m[1]))
+    return agentHistory(db, m[1], decodeURIComponent(m[2]), url);
 
   // ── team APIs: /api/{team}/team/* ─────────────────────────────────────────
   m = path.match(/^\/api\/([^/]+)\/(team\/[a-z_]+|events\/stream)$/);
@@ -139,6 +155,92 @@ export async function handleTeamRoutes(
   }
 
   return null;
+}
+
+// ── drill-down list endpoints ───────────────────────────────────────────────
+// EvaluationRecord-shaped rows (the fields the dashboard drill-downs render:
+// agent_name / timestamp / overall_score / eval_id / caller_name, plus the
+// cheap extras). Built from the same canonicalized frame the stats use.
+
+function recordFromFrameRow(r: import("../lib/historyFrame.js").FrameRow) {
+  return {
+    timestamp: new Date(r.ts).toISOString(),
+    agent_name: r.agent,
+    agent_email: r.agent_email,
+    manager_email: r.manager_email,
+    overall_score: r.overall_score,
+    sections: {},
+    eval_id: r.eval_id || null,
+    dialpad_link: r.eval_id
+      ? `https://dialpad.com/callhistory/callreview/${r.eval_id}`
+      : null,
+    caller_name: r.caller_name || null,
+    source: "ai",
+  };
+}
+
+function windowFilter(
+  rows: import("../lib/historyFrame.js").FrameRow[],
+  url: URL,
+  defaultDays: number,
+  maxDays: number
+) {
+  const p = url.searchParams;
+  const dateFrom = p.get("date_from");
+  const dateTo = p.get("date_to");
+  if (dateFrom && dateTo) {
+    const from = Date.parse(`${dateFrom}T00:00:00Z`);
+    const to = Date.parse(`${dateTo}T23:59:59.999Z`);
+    return rows.filter((r) => r.ts >= from && r.ts <= to);
+  }
+  const days = Math.min(
+    maxDays,
+    Math.max(1, parseInt(p.get("days") ?? String(defaultDays), 10) || defaultDays)
+  );
+  const cutoff = Date.now() - days * 86_400_000;
+  return rows.filter((r) => r.ts >= cutoff);
+}
+
+async function datapointsList(db: D1Database, teamId: string, url: URL) {
+  const p = url.searchParams;
+  const bin = p.get("bin");
+  const agent = p.get("agent");
+  if (!bin && !agent)
+    return json({ detail: "Provide 'bin' (e.g. '81-90') or 'agent' query parameter" }, 400);
+  const config = await loadTeamConfig(db, teamId);
+  let rows = await fetchHistoryFrame(db, config);
+  if (agent) {
+    const a = agent.trim().toLowerCase();
+    rows = rows.filter((r) => r.agent.toLowerCase() === a);
+  }
+  rows = windowFilter(rows, url, 90, 365);
+  if (p.get("active_only") !== "false" && !agent)
+    rows = rows.filter((r) => r.is_active);
+  if (bin) {
+    const parts = bin.split("-");
+    const lo = Number(parts[0]);
+    const hi = Number(parts[1]);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi))
+      return json({ detail: `Invalid bin format '${bin}', expected 'lo-hi'` }, 400);
+    rows = rows.filter((r) => r.overall_score >= lo && r.overall_score <= hi);
+  }
+  return json(rows.map(recordFromFrameRow));
+}
+
+async function agentHistory(
+  db: D1Database,
+  teamId: string,
+  agent: string,
+  url: URL
+) {
+  const config = await loadTeamConfig(db, teamId);
+  const a = agent.trim().toLowerCase();
+  let rows = (await fetchHistoryFrame(db, config)).filter(
+    (r) => r.agent.toLowerCase() === a
+  );
+  rows = windowFilter(rows, url, 90, 730);
+  if (!rows.length) return json({ detail: `No history for '${agent}'` }, 404);
+  return json(rows.map(recordFromFrameRow));
 }
 
 // ── SSE: D1-tailed event stream (PortManifest §6.1) ─────────────────────────

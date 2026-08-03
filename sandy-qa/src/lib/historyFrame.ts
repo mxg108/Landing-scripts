@@ -16,6 +16,10 @@ export interface FrameRow {
   eval_id: string;
   num: Record<string, number | null>;
   yn: Record<string, string>;
+  // Extras for the drill-down list endpoints (not part of the stats frame
+  // contract — excluded from parity's serializeTsFrame on purpose).
+  caller_name: string;
+  agent_email: string;
 }
 
 export function stripAccents(s: string): string {
@@ -64,6 +68,7 @@ export async function fetchHistoryFrame(
     db
       .prepare(
         `SELECT e.id, e.agent_id, e.agent_name_raw, e.evaluator_email, e.overall_score,
+                e.caller_name, e.agent_email,
                 e.dialpad_link, e.dialpad_entry_point_call_id, e.dialpad_call_metadata,
                 COALESCE(e.call_connected_at, e.approved_at) AS ts, e.approved_at,
                 COALESCE(a.canonical_name, a.name, e.agent_name_raw) AS agent_display,
@@ -188,6 +193,8 @@ export async function fetchHistoryFrame(
       eval_id: evalId,
       num,
       yn,
+      caller_name: ev.caller_name ?? "",
+      agent_email: ev.agent_email ?? "",
     });
   }
   return rows;
