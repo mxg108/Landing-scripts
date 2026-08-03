@@ -305,11 +305,19 @@ export async function scoreStatus(
     .bind(jobId)
     .first<any>();
   if (!row) return json({ detail: `no job ${jobId}` }, 404);
-  let result: any = null;
+  let result: any = {};
   try {
-    result = row.result ? JSON.parse(row.result) : null;
+    result = row.result ? JSON.parse(row.result) : {};
   } catch {}
-  return json({ job_id: row.run_id, status: row.status, result, created_at: row.created_at });
+  // Flattened so the lookup poller reads status/state/scoring_status/
+  // overall_score/error at the top level, like Railway's job dict.
+  return json({
+    ...result,
+    job_id: row.run_id,
+    status: row.status === "running" ? "pending" : row.status,
+    error: result.ok === false ? result.note : result.error ?? null,
+    created_at: row.created_at,
+  });
 }
 
 // ── callback persist ───────────────────────────────────────────────────────
@@ -534,5 +542,10 @@ export async function scoringCallback(
     note: flagged
       ? `evaluation ${evalId} parked for human review`
       : `evaluation ${evalId} finalized at ${overallScore}`,
+    evaluation_id: evalId,
+    state: flagged ? "draft" : "finalized",
+    scoring_status: flagged ? "flagged_human_review" : "complete",
+    overall_score: flagged ? null : overallScore,
+    eval_id: persist.dialpad_entry_point_call_id || p.call_id,
   };
 }

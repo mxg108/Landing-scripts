@@ -23,6 +23,8 @@ import datapointHtml from "../../pages/datapoint.html?raw";
 // @ts-ignore vite ?raw
 import lookupHtml from "../../pages/lookup.html?raw";
 // @ts-ignore vite ?raw
+import onepagerShellHtml from "../../pages/onepager.html?raw";
+// @ts-ignore vite ?raw
 import headerCss from "../../pages/static/header.css?raw";
 // @ts-ignore vite ?raw
 import headerJs from "../../pages/static/header.js?raw";
@@ -191,8 +193,50 @@ export async function handleTeamRoutes(
   if (m && KNOWN_TEAMS.has(m[1])) return html(datapointHtml);
   m = path.match(/^\/datapoint\/([^/]+)$/);
   if (m) return html(datapointHtml); // legacy no-team route (defaults MS)
+  m = path.match(/^\/dashboard\/([^/]+)\/onepager\/(.+)$/);
+  if (m && KNOWN_TEAMS.has(m[1])) return html(onepagerShellHtml);
   m = path.match(/^\/dashboard\/([^/]+)\/agent\/(.+)$/);
   if (m && KNOWN_TEAMS.has(m[1])) return html(agentDashboardHtml);
+
+  // Scorecard by job id: finalized → the datapoint page; flagged → the
+  // review-console interim; pending → self-refreshing status page.
+  m = path.match(/^\/scorecard\/([^/]+)\/([^/]+)$/);
+  if (m && KNOWN_TEAMS.has(m[1])) {
+    const row = await db
+      .prepare("SELECT status, result FROM workflow_runs WHERE run_id = ?")
+      .bind(decodeURIComponent(m[2]))
+      .first<any>();
+    let r: any = {};
+    try {
+      r = row?.result ? JSON.parse(row.result) : {};
+    } catch {}
+    if (r.state === "finalized" && r.eval_id)
+      return new Response(null, {
+        status: 302,
+        headers: { Location: `/datapoint/${m[1]}/${encodeURIComponent(r.eval_id)}` },
+      });
+    if (r.scoring_status === "flagged_human_review")
+      return html(
+        `<!DOCTYPE html><html><head><title>Flagged for review</title></head>
+<body style="font-family:monospace;background:#E7EFFB;color:#15192D;display:grid;place-items:center;min-height:100vh;margin:0">
+<div style="background:#fff;border:1px solid #c9d5e8;border-radius:12px;padding:32px;max-width:560px">
+<h2 style="margin-top:0">This call is parked for human review</h2>
+<p>A section score tripped the §3.14 human-review gate, so the evaluation
+is a draft awaiting an analyst. The review console (approve / edit /
+override) is the next port slice — until it lands, flagged Sandy-scored
+calls wait here.</p>
+<p><a href="javascript:history.back()" style="color:#5a6478">&larr; Back</a></p>
+</div></body></html>`
+      );
+    return html(
+      `<!DOCTYPE html><html><head><title>Scoring…</title><meta http-equiv="refresh" content="5"></head>
+<body style="font-family:monospace;background:#E7EFFB;color:#15192D;display:grid;place-items:center;min-height:100vh;margin:0">
+<div style="background:#fff;border:1px solid #c9d5e8;border-radius:12px;padding:32px;max-width:520px">
+<h2 style="margin-top:0">Scoring in progress…</h2>
+<p>Job <code>${m[2]}</code> is ${row?.status ?? "unknown"}. This page refreshes every 5&nbsp;seconds.</p>
+</div></body></html>`
+    );
+  }
   m = path.match(/^\/lookup\/([^/]+)$/);
   if (m && KNOWN_TEAMS.has(m[1]))
     return lookupAllowed(request, lookupAllow)
@@ -235,16 +279,22 @@ export async function handleTeamRoutes(
   if (m && KNOWN_TEAMS.has(m[1]))
     return agentHistory(db, m[1], decodeURIComponent(m[2]), url);
   m = path.match(/^\/api\/([^/]+)\/agents\/([^/]+)\/onepager$/);
-  if (m && KNOWN_TEAMS.has(m[1]))
-    return html(
-      `<!DOCTYPE html><html><head><title>One-pager — porting</title></head>
-<body style="font-family:monospace;background:#E7EFFB;color:#15192D;display:grid;place-items:center;min-height:100vh;margin:0">
-<div style="background:#fff;border:1px solid #c9d5e8;border-radius:12px;padding:32px;max-width:520px">
-<h2 style="margin-top:0">Monthly one-pager: later port slice</h2>
-<p>The one-pager renderer is coupled to the EOM export workflow and ports with it. Until then it lives on Railway.</p>
-<p><a href="javascript:history.back()" style="color:#5a6478">&larr; Back</a></p>
-</div></body></html>`
-    );
+  if (m && KNOWN_TEAMS.has(m[1])) {
+    const { renderMonthOnepager, lastClosedMonth } = await import("../lib/onepager.js");
+    const teamId2 = m[1];
+    const agent = decodeURIComponent(m[2]);
+    let month = url.searchParams.get("month");
+    if (month === null) month = lastClosedMonth();
+    else if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))
+      return json({ detail: "month must be YYYY-MM" }, 422);
+    const cfg = await loadTeamConfig(db, teamId2);
+    const frame = await fetchHistoryFrame(db, cfg);
+    const label = teamId2 === "sales" ? "Sales" : "Member Support";
+    const page = await renderMonthOnepager(db, cfg, frame, agent, month, label);
+    if (page === null)
+      return json({ detail: `No evaluations for '${agent}' in ${month}` }, 404);
+    return html(page);
+  }
   m = path.match(/^\/api\/([^/]+)\/agents\/([^/]+)\/progression$/);
   if (m && KNOWN_TEAMS.has(m[1]))
     return json(
@@ -465,16 +515,17 @@ async function lookupRoutes(
   const p = url.searchParams;
 
   if (sub === "/scoring-permission") {
-    // Sandy has no API-key roles: everyone behind SSO is a viewer for now
-    // (scoring actions port with the scoring-workflow slice), so the
-    // Score button stays inert while team resolution keeps row context.
+    // Everyone who can reach /lookup is on the LOOKUP_ALLOW list = QA
+    // staff → privileged-key semantics (may score anyone; the team-pick
+    // modal opens when the agent is unrostered). Mirrors Railway's
+    // privileged-caller branch in backend/routes/lookup.py.
     const email = p.get("email") ?? "";
     const resolved = email ? await resolveTeamForAgent(db, email) : null;
     return json({
       agent_email: email,
       resolved_team: resolved,
-      can_score: false,
-      needs_team_pick: false,
+      can_score: true,
+      needs_team_pick: resolved === null,
     });
   }
 
