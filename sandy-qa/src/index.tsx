@@ -18,6 +18,9 @@ export interface Env {
   // Dashboard-set app secret (Sandy UI → Edit Secrets) — enables /lookup's
   // live Dialpad calls. Absent → lookup APIs return 503 with instructions.
   DIALPAD_API_KEY?: string;
+  // Dashboard-set app secret: comma-separated emails allowed on /lookup
+  // (interim deny-by-default compliance lock until per-team RBAC lands).
+  LOOKUP_ALLOW?: string;
   // Optional: pre-select a specific workflow. Leave unset to list all available.
   WORKFLOW_ID?: string;
   // Provisioned automatically by Sandy at publish time for apps with cron schedules.
@@ -40,7 +43,9 @@ export default {
     }
 
     // ── Ported QA pages + team analytics APIs (PortManifest §3/§4/§6.1) ──
-    const teamRes = await handleTeamRoutes(request, env.DB, url, env.DIALPAD_API_KEY);
+    const teamRes = await handleTeamRoutes(
+      request, env.DB, url, env.DIALPAD_API_KEY, env.LOOKUP_ALLOW
+    );
     if (teamRes) return teamRes;
 
     // ── SSE transport spike (PortManifest §"SSE on Sandy") ───────────────
