@@ -38,11 +38,56 @@ const json = (data: unknown, status = 200) =>
     headers: { "Content-Type": "application/json" },
   });
 
+// SSO identity: Sandy's edge injects the platform-verified CF Access JWT.
+// We read the email claim for app-level authorization (signature validation
+// happens at the Access edge before the request reaches the worker; worth an
+// Engineering confirmation that tenant workers can rely on this header).
+function accessEmail(request: Request): string {
+  const jwt =
+    request.headers.get("Cf-Access-Jwt-Assertion") ??
+    request.headers.get("cf-access-jwt-assertion") ??
+    "";
+  const parts = jwt.split(".");
+  if (parts.length < 2) return "";
+  try {
+    const payload = JSON.parse(
+      atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"))
+    );
+    return (payload.email ?? "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+// Interim lookup lock (compliance): /lookup exposes every agent's calls +
+// recordings, so it is DENY-BY-DEFAULT until per-team/role RBAC lands.
+// LOOKUP_ALLOW (Dashboard app secret) = comma-separated allowed emails.
+function lookupAllowed(request: Request, lookupAllow?: string): boolean {
+  if (!lookupAllow) return false;
+  const email = accessEmail(request);
+  if (!email) return false;
+  return lookupAllow
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean)
+    .includes(email);
+}
+
+const LOOKUP_DENIED_PAGE = `<!DOCTYPE html><html><head><title>Lookup — restricted</title></head>
+<body style="font-family:monospace;background:#E7EFFB;color:#15192D;display:grid;place-items:center;min-height:100vh;margin:0">
+<div style="background:#fff;border:1px solid #c9d5e8;border-radius:12px;padding:32px;max-width:540px">
+<h2 style="margin-top:0">Call lookup is restricted</h2>
+<p>This page surfaces call recordings across the company, so access is
+limited to authorized QA staff while per-team role-based access is built.</p>
+<p style="color:#5a6478">If you need access, contact the QA team.</p>
+</div></body></html>`;
+
 export async function handleTeamRoutes(
   request: Request,
   db: D1Database,
   url: URL,
-  dialpadKey?: string
+  dialpadKey?: string,
+  lookupAllow?: string
 ): Promise<Response | null> {
   const path = url.pathname;
 
@@ -83,7 +128,13 @@ export async function handleTeamRoutes(
   m = path.match(/^\/dashboard\/([^/]+)\/agent\/(.+)$/);
   if (m && KNOWN_TEAMS.has(m[1])) return html(agentDashboardHtml);
   m = path.match(/^\/lookup\/([^/]+)$/);
-  if (m && KNOWN_TEAMS.has(m[1])) return html(lookupHtml);
+  if (m && KNOWN_TEAMS.has(m[1]))
+    return lookupAllowed(request, lookupAllow)
+      ? html(lookupHtml)
+      : new Response(LOOKUP_DENIED_PAGE, {
+          status: 403,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
 
   // ── drill-down + record APIs ─────────────────────────────────────────────
   m = path.match(/^\/api\/([^/]+)\/datapoints$/);
@@ -127,8 +178,11 @@ export async function handleTeamRoutes(
 
   // ── lookup APIs (Dialpad-backed; needs the DIALPAD_API_KEY app secret) ───
   m = path.match(/^\/api\/([^/]+)\/lookup(\/calls|\/recording-link|\/scoring-permission)?$/);
-  if (m && KNOWN_TEAMS.has(m[1]))
+  if (m && KNOWN_TEAMS.has(m[1])) {
+    if (!lookupAllowed(request, lookupAllow))
+      return json({ detail: "Lookup access restricted pending role-based access." }, 403);
     return lookupRoutes(db, m[1], m[2] ?? "", url, request, dialpadKey);
+  }
 
   // ── team APIs: /api/{team}/team/* ─────────────────────────────────────────
   m = path.match(/^\/api\/([^/]+)\/(team\/[a-z_]+|events\/stream)$/);
