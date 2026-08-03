@@ -34,6 +34,8 @@ WIPE_ORDER = [
     "qa_evaluation_tags", "qa_assessment_sections", "qa_assessments",
     "qa_formula_compliance_sweeps", "qa_evaluation_sections",
     "qa_evaluations", "qa_agents",
+    # FK-free tables re-imported by RESYNC — wipe or their PKs collide.
+    "qa_tags", "qa_score_audit", "qa_score_audit_archive", "qa_api_audit_log",
 ]
 # Re-import: agents first, then everything from qa_evaluations onward in
 # pg_to_d1's FK-safe order (cc_* tables stay on their initial snapshot until
