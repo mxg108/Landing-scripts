@@ -47,11 +47,22 @@ export default {
     }
 
     // ── Ported QA pages + team analytics APIs (PortManifest §3/§4/§6.1) ──
-    const teamRes = await handleTeamRoutes(
-      request, env.DB, url, env.DIALPAD_API_KEY, env.LOOKUP_ALLOW,
-      { url: env.PULPO_MCP_URL, token: env.PULPO_MCP_TOKEN }
-    );
-    if (teamRes) return teamRes;
+    // Global guard: a thrown handler must surface as JSON, never as
+    // Cloudflare's HTML 1101 page (observed: the editor's re-approve
+    // showed "Unexpected token '<'" instead of the real error).
+    try {
+      const teamRes = await handleTeamRoutes(
+        request, env.DB, url, env.DIALPAD_API_KEY, env.LOOKUP_ALLOW,
+        { url: env.PULPO_MCP_URL, token: env.PULPO_MCP_TOKEN }
+      );
+      if (teamRes) return teamRes;
+    } catch (err) {
+      console.log(`[route-error] ${url.pathname}: ${String(err).slice(0, 500)}`);
+      return Response.json(
+        { detail: `internal: ${String((err as any)?.message ?? err).slice(0, 300)}` },
+        { status: 500 }
+      );
+    }
 
     // ── SSE transport spike (PortManifest §"SSE on Sandy") ───────────────
     // Answers one question empirically: does the Sandy edge stack
