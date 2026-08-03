@@ -6,10 +6,22 @@
 import { loadTeamConfig } from "../lib/teamConfig.js";
 import { fetchHistoryFrame } from "../lib/historyFrame.js";
 import { assembleTeamEvals, assembleTeamStats } from "../lib/teamStats.js";
+import {
+  fetchRecords,
+  getByEvalId,
+  listAgents,
+  resolveTeamForAgent,
+} from "../lib/records.js";
 // @ts-ignore vite ?raw
 import teamDashboardHtml from "../../pages/team_dashboard.html?raw";
 // @ts-ignore vite ?raw
 import teamEvalsHtml from "../../pages/team_evals.html?raw";
+// @ts-ignore vite ?raw
+import agentDashboardHtml from "../../pages/dashboard.html?raw";
+// @ts-ignore vite ?raw
+import datapointHtml from "../../pages/datapoint.html?raw";
+// @ts-ignore vite ?raw
+import lookupHtml from "../../pages/lookup.html?raw";
 // @ts-ignore vite ?raw
 import headerCss from "../../pages/static/header.css?raw";
 // @ts-ignore vite ?raw
@@ -29,7 +41,8 @@ const json = (data: unknown, status = 200) =>
 export async function handleTeamRoutes(
   request: Request,
   db: D1Database,
-  url: URL
+  url: URL,
+  dialpadKey?: string
 ): Promise<Response | null> {
   const path = url.pathname;
 
@@ -60,25 +73,62 @@ export async function handleTeamRoutes(
 <p><a href="javascript:history.back()" style="color:#5a6478">&larr; Back</a></p>
 </div></body></html>`
     );
+  // Real pages (Railway originals, SSO shim) — datapoint, per-agent
+  // dashboard, and lookup. The one-pager stays interim (renderer +
+  // EOM-export coupling ports in a later slice).
   m = path.match(/^\/datapoint\/([^/]+)\/([^/]+)$/);
-  if (m)
-    return interimPage(
-      "Datapoint drill-down",
-      `${RAILWAY_BASE}/datapoint/${m[1]}/${encodeURIComponent(m[2])}`
-    );
+  if (m && KNOWN_TEAMS.has(m[1])) return html(datapointHtml);
+  m = path.match(/^\/datapoint\/([^/]+)$/);
+  if (m) return html(datapointHtml); // legacy no-team route (defaults MS)
   m = path.match(/^\/dashboard\/([^/]+)\/agent\/(.+)$/);
-  if (m && KNOWN_TEAMS.has(m[1]))
-    return interimPage(
-      "Per-agent dashboard",
-      `${RAILWAY_BASE}/dashboard/${m[1]}/agent/${m[2]}`
-    );
+  if (m && KNOWN_TEAMS.has(m[1])) return html(agentDashboardHtml);
+  m = path.match(/^\/lookup\/([^/]+)$/);
+  if (m && KNOWN_TEAMS.has(m[1])) return html(lookupHtml);
 
-  // ── drill-down list APIs (dist histogram + EWMA bar expansions) ──────────
+  // ── drill-down + record APIs ─────────────────────────────────────────────
   m = path.match(/^\/api\/([^/]+)\/datapoints$/);
   if (m && KNOWN_TEAMS.has(m[1])) return datapointsList(db, m[1], url);
+  m = path.match(/^\/api\/([^/]+)\/datapoints\/([^/]+)$/);
+  if (m && KNOWN_TEAMS.has(m[1])) {
+    const config = await loadTeamConfig(db, m[1]);
+    const rec = await getByEvalId(db, config, decodeURIComponent(m[2]));
+    return rec
+      ? json(rec)
+      : json({ detail: `No evaluation found for call_id '${m[2]}'.` }, 404);
+  }
+  m = path.match(/^\/api\/([^/]+)\/agents$/);
+  if (m && KNOWN_TEAMS.has(m[1])) return json(await listAgents(db, m[1]));
   m = path.match(/^\/api\/([^/]+)\/agents\/([^/]+)\/history$/);
   if (m && KNOWN_TEAMS.has(m[1]))
     return agentHistory(db, m[1], decodeURIComponent(m[2]), url);
+  m = path.match(/^\/api\/([^/]+)\/agents\/([^/]+)\/onepager$/);
+  if (m && KNOWN_TEAMS.has(m[1]))
+    return html(
+      `<!DOCTYPE html><html><head><title>One-pager — porting</title></head>
+<body style="font-family:monospace;background:#E7EFFB;color:#15192D;display:grid;place-items:center;min-height:100vh;margin:0">
+<div style="background:#fff;border:1px solid #c9d5e8;border-radius:12px;padding:32px;max-width:520px">
+<h2 style="margin-top:0">Monthly one-pager: later port slice</h2>
+<p>The one-pager renderer is coupled to the EOM export workflow and ports with it. Until then it lives on Railway.</p>
+<p><a href="javascript:history.back()" style="color:#5a6478">&larr; Back</a></p>
+</div></body></html>`
+    );
+  m = path.match(/^\/api\/([^/]+)\/agents\/([^/]+)\/progression$/);
+  if (m && KNOWN_TEAMS.has(m[1]))
+    return json(
+      { detail: "Progression assessments port with the scoring-workflow slice (AI generation)." },
+      503
+    );
+  m = path.match(/^\/api\/([^/]+)\/whoami$/);
+  if (m && KNOWN_TEAMS.has(m[1]))
+    // Read-only viewer identity behind SSO — team role hides the
+    // privileged-only controls (delete etc.); action routes don't exist
+    // here yet anyway.
+    return json({ role: "team", team_id: m[1] });
+
+  // ── lookup APIs (Dialpad-backed; needs the DIALPAD_API_KEY app secret) ───
+  m = path.match(/^\/api\/([^/]+)\/lookup(\/calls|\/recording-link|\/scoring-permission)?$/);
+  if (m && KNOWN_TEAMS.has(m[1]))
+    return lookupRoutes(db, m[1], m[2] ?? "", url, request, dialpadKey);
 
   // ── team APIs: /api/{team}/team/* ─────────────────────────────────────────
   m = path.match(/^\/api\/([^/]+)\/(team\/[a-z_]+|events\/stream)$/);
@@ -233,14 +283,195 @@ async function agentHistory(
   agent: string,
   url: URL
 ) {
+  // Mirrors backend/routes/dashboard.py::agent_history — provider-shaped
+  // records WITH section content (the per-agent dashboard renders section
+  // trends); raw-name match, 404 on empty, range overrides days.
   const config = await loadTeamConfig(db, teamId);
-  const a = agent.trim().toLowerCase();
-  let rows = (await fetchHistoryFrame(db, config)).filter(
-    (r) => r.agent.toLowerCase() === a
-  );
-  rows = windowFilter(rows, url, 90, 730);
-  if (!rows.length) return json({ detail: `No history for '${agent}'` }, 404);
-  return json(rows.map(recordFromFrameRow));
+  const p = url.searchParams;
+  const dateFrom = p.get("date_from");
+  const dateTo = p.get("date_to");
+  let records: any[];
+  if (dateFrom && dateTo) {
+    const fromMs = Date.parse(`${dateFrom}T00:00:00Z`);
+    const toMs = Date.parse(`${dateTo}T23:59:59.999Z`);
+    if (Number.isNaN(fromMs) || Number.isNaN(toMs))
+      return json({ detail: "date_from / date_to must be ISO YYYY-MM-DD" }, 422);
+    if (toMs < fromMs)
+      return json({ detail: "date_to must be on or after date_from" }, 422);
+    records = await fetchRecords(db, config, { agentRaw: agent, fromMs, toMs });
+    if (!records.length)
+      return json(
+        { detail: `No evaluations found for '${agent}' between ${dateFrom} and ${dateTo}` },
+        404
+      );
+    return json(records);
+  }
+  const days = Math.min(730, Math.max(1, parseInt(p.get("days") ?? "30", 10) || 30));
+  records = await fetchRecords(db, config, { agentRaw: agent, days });
+  if (!records.length)
+    return json(
+      { detail: `No evaluations found for '${agent}' in the last ${days} days` },
+      404
+    );
+  return json(records);
+}
+
+// ── lookup (Dialpad-backed) — port of backend/routes/lookup.py ──────────────
+
+async function lookupRoutes(
+  db: D1Database,
+  teamId: string,
+  sub: string,
+  url: URL,
+  request: Request,
+  dialpadKey?: string
+): Promise<Response> {
+  const p = url.searchParams;
+
+  if (sub === "/scoring-permission") {
+    // Sandy has no API-key roles: everyone behind SSO is a viewer for now
+    // (scoring actions port with the scoring-workflow slice), so the
+    // Score button stays inert while team resolution keeps row context.
+    const email = p.get("email") ?? "";
+    const resolved = email ? await resolveTeamForAgent(db, email) : null;
+    return json({
+      agent_email: email,
+      resolved_team: resolved,
+      can_score: false,
+      needs_team_pick: false,
+    });
+  }
+
+  if (!dialpadKey)
+    return json(
+      {
+        detail:
+          "DIALPAD_API_KEY app secret not configured — add it in the Sandy Dashboard (Edit Secrets) to enable /lookup.",
+      },
+      503
+    );
+  const auth = { authorization: `Bearer ${dialpadKey}` };
+  const DP = "https://dialpad.com/api/v2";
+  const epochIso = (v: any) =>
+    v ? new Date(Number(v)).toISOString() : null;
+
+  if (sub === "" ) {
+    const email = p.get("email");
+    if (!email) return json({ detail: "email query param required" }, 422);
+    const r = await fetch(`${DP}/users?email=${encodeURIComponent(email)}`, {
+      headers: auth,
+    });
+    if (!r.ok) return json({ detail: `Dialpad ${r.status}` }, 502);
+    const items = ((await r.json()) as any).items ?? [];
+    if (!items.length)
+      return json({ detail: `No Dialpad user found for '${email}'` }, 404);
+    const u = items[0];
+    return json({
+      id: String(u.id ?? ""),
+      display_name: u.display_name ?? "",
+      first_name: u.first_name ?? "",
+      last_name: u.last_name ?? "",
+      emails: u.emails ?? [],
+      extension: u.extension ?? "",
+      phone_numbers: u.phone_numbers ?? [],
+      job_title: u.job_title ?? "",
+      state: u.state ?? "",
+      license: u.license ?? "",
+      is_admin: u.is_admin ?? false,
+      is_online: u.is_online ?? false,
+      is_available: u.is_available ?? false,
+      is_on_duty: u.is_on_duty ?? false,
+      on_duty_status: u.on_duty_status ?? "",
+      timezone: u.timezone ?? "",
+      office_id: String(u.office_id ?? ""),
+      date_added: u.date_added ?? "",
+      duty_status_started: u.duty_status_started ?? "",
+      groups: (u.group_details ?? []).map((g: any) => ({
+        group_id: String(g.group_id ?? ""),
+        group_type: g.group_type ?? "",
+        role: g.role ?? "",
+      })),
+    });
+  }
+
+  if (sub === "/calls") {
+    const userId = p.get("user_id");
+    if (!userId) return json({ detail: "user_id query param required" }, 422);
+    const params = new URLSearchParams({
+      target_id: userId,
+      target_type: "user",
+      limit: String(Math.min(100, Math.max(1, parseInt(p.get("limit") ?? "10", 10) || 10))),
+    });
+    for (const [inKey, outKey] of [
+      ["date_start", "started_after"],
+      ["date_end", "started_before"],
+    ] as const) {
+      const v = p.get(inKey);
+      if (v) {
+        const t = Date.parse(v.includes("Z") || v.includes("+") ? v : v + "Z");
+        if (Number.isNaN(t))
+          return json({ detail: `${inKey} must be ISO format (YYYY-MM-DDTHH:MM)` }, 400);
+        params.set(outKey, String(t));
+      }
+    }
+    if (p.get("cursor")) params.set("cursor", p.get("cursor")!);
+    const r = await fetch(`${DP}/call?${params}`, { headers: auth });
+    if (!r.ok) return json({ user_id: userId, call_count: 0, calls: [], cursor: null });
+    const data = (await r.json()) as any;
+    const FLAG_MS = 25 * 60 * 1000;
+    const calls = (data.items ?? []).map((c: any) => {
+      const rec = c.recording_details?.[0] ?? null;
+      const duration = c.total_duration || c.duration || 0;
+      return {
+        call_id: String(c.call_id ?? ""),
+        date_started: epochIso(c.date_started),
+        date_connected: epochIso(c.date_connected),
+        date_ended: epochIso(c.date_ended),
+        duration,
+        direction: c.direction ?? "",
+        was_recorded: !!c.recording_details,
+        recording_id: rec ? String(rec.id ?? "") : "",
+        recording_url: rec ? rec.url ?? "" : "",
+        recording_duration: rec ? Math.trunc(Number(rec.duration ?? 0)) : 0,
+        recording_type: rec ? rec.recording_type ?? "" : "",
+        is_transferred: c.is_transferred ?? false,
+        external_number: c.external_number ?? "",
+        internal_number: c.internal_number ?? "",
+        contact_name: c.contact?.name ?? "",
+        contact_phone: c.contact?.phone ?? "",
+        mos_score: c.mos_score ?? null,
+        entry_point_call_id: String(c.entry_point_call_id ?? ""),
+        _flagged_long_call: duration > FLAG_MS,
+      };
+    });
+    return json({
+      user_id: userId,
+      call_count: calls.length,
+      calls,
+      cursor: data.cursor || null,
+    });
+  }
+
+  if (sub === "/recording-link" && request.method === "POST") {
+    const recordingId = p.get("recording_id");
+    if (!recordingId) return json({ detail: "recording_id required" }, 422);
+    const r = await fetch(`${DP}/recordingsharelink`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({
+        privacy: "company",
+        recording_type: p.get("recording_type") ?? "admincallrecording",
+        recording_id: recordingId,
+      }),
+    });
+    if (r.ok) {
+      const link = ((await r.json()) as any).access_link;
+      if (link) return json({ link });
+    }
+    return json({ detail: "Could not generate recording link" }, 404);
+  }
+
+  return json({ detail: "not found" }, 404);
 }
 
 // ── SSE: D1-tailed event stream (PortManifest §6.1) ─────────────────────────

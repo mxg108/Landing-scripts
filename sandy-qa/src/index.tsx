@@ -15,6 +15,9 @@ import { handleTeamRoutes } from "./routes/teamApi.js";
 
 export interface Env {
   DB: D1Database;
+  // Dashboard-set app secret (Sandy UI → Edit Secrets) — enables /lookup's
+  // live Dialpad calls. Absent → lookup APIs return 503 with instructions.
+  DIALPAD_API_KEY?: string;
   // Optional: pre-select a specific workflow. Leave unset to list all available.
   WORKFLOW_ID?: string;
   // Provisioned automatically by Sandy at publish time for apps with cron schedules.
@@ -37,7 +40,7 @@ export default {
     }
 
     // ── Ported QA pages + team analytics APIs (PortManifest §3/§4/§6.1) ──
-    const teamRes = await handleTeamRoutes(request, env.DB, url);
+    const teamRes = await handleTeamRoutes(request, env.DB, url, env.DIALPAD_API_KEY);
     if (teamRes) return teamRes;
 
     // ── SSE transport spike (PortManifest §"SSE on Sandy") ───────────────

@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Progression Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/header.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    :root {
+      --navy: #15192D;
+      --accent: #1A61D9;
+      --bg: #E7EFFB;
+      --surface: #ffffff;
+      --border: #c9d5e8;
+      --text: #15192D;
+      --muted: #5a6478;
+      --green: #28A745;
+      --amber: #E8A317;
+      --red: #D9534F;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'DM Mono', monospace;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    h1, h2, h3 { font-family: 'Fraunces', serif; }
+
+    /* Header CSS lives in /static/header.css (shared with team_dashboard.html). */
+
+    /* Layout */
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .card h2 {
+      font-size: 1.1rem;
+      margin-bottom: 16px;
+      color: var(--navy);
+    }
+    .hidden { display: none; }
+
+    /* Placeholder */
+    .placeholder {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    /* Stats row */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+    .stat-box {
+      text-align: center;
+      padding: 16px 8px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg);
+    }
+    .stat-box .stat-value {
+      font-family: 'Fraunces', serif;
+      font-size: 1.8rem;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+    .stat-box .stat-label {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* Charts */
+    .chart-wrapper {
+      position: relative;
+      height: 320px;
+      cursor: pointer;
+    }
+
+    /* Assessment */
+    .assessment-overall {
+      background: var(--bg);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 20px;
+      font-size: 0.9rem;
+      line-height: 1.6;
+    }
+    .section-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+    .section-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      background: var(--bg);
+    }
+    .section-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .section-card-header .section-name {
+      font-weight: 700;
+      text-transform: capitalize;
+      font-size: 0.9rem;
+    }
+    .trend-badge {
+      font-size: 0.7rem;
+      font-weight: 500;
+      padding: 2px 10px;
+      border-radius: 999px;
+      color: #fff;
+    }
+    .trend-badge.improving { background: var(--green); }
+    .trend-badge.stable { background: #6ba87b; }
+    .trend-badge.declining { background: var(--red); }
+    .trend-badge.fluctuating { background: var(--amber); }
+    .section-card .summary {
+      font-size: 0.82rem;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-bottom: 8px;
+    }
+    .coaching-toggle {
+      font-size: 0.8rem;
+      color: var(--accent);
+      cursor: pointer;
+      font-weight: 500;
+      user-select: none;
+    }
+    .coaching-tip {
+      display: none;
+      margin-top: 8px;
+      font-size: 0.82rem;
+      line-height: 1.5;
+      padding: 10px;
+      background: var(--surface);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+    .coaching-tip.visible { display: block; }
+
+    /* Footer */
+    .footer {
+      text-align: center;
+      padding: 16px;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    /* Score colors */
+    .score-green { color: var(--green); }
+    .score-amber { color: var(--amber); }
+    .score-red { color: var(--red); }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+      .stats-row { grid-template-columns: repeat(2, 1fr); }
+      .section-grid { grid-template-columns: 1fr; }
+      .chart-wrapper { height: 240px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="appHeader"></div>
+
+  <div class="container">
+    <div id="placeholder" class="placeholder">Select an agent to view their progression.</div>
+
+    <div id="statsCard" class="card hidden">
+      <h2>Summary</h2>
+      <div class="stats-row">
+        <div class="stat-box">
+          <div class="stat-value" id="statCount">--</div>
+          <div class="stat-label">Evaluations</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-value" id="statAvg">--</div>
+          <div class="stat-label">Average Score</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-value" id="statLatest">--</div>
+          <div class="stat-label">Latest Score</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-value" id="statHighest">--</div>
+          <div class="stat-label">Highest Score</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="trendCard" class="card hidden">
+      <h2>Overall Score Trend</h2>
+      <div class="chart-wrapper">
+        <canvas id="trendChart"></canvas>
+      </div>
+    </div>
+
+    <div id="sectionCard" class="card hidden">
+      <h2>Per-Section Averages</h2>
+      <div class="chart-wrapper">
+        <canvas id="sectionChart"></canvas>
+      </div>
+    </div>
+
+    <div id="onepagerCard" class="card hidden">
+      <h2>Monthly One-Pager</h2>
+      <p style="font-size:0.85rem;color:var(--muted);margin:0 0 10px;">
+        Print-ready QA summary for <strong id="onepagerMonth">the last closed month</strong> —
+        evaluation count and score stats, the score-progression sparkline, per-section
+        performance with trends, and the monthly AI assessment. Refreshes automatically on
+        the 1st of each month, in step with the monthly workbook export.
+      </p>
+      <a id="onepagerLink" href="#" target="_blank" rel="noopener"
+         style="font-family:'DM Mono',monospace;font-size:0.85rem;display:inline-block;padding:8px 18px;background:var(--accent);color:#fff;border-radius:6px;text-decoration:none;">
+        Open one-pager →
+      </a>
+    </div>
+
+    <div id="assessmentCard" class="card">
+      <h2>AI Progression Assessment</h2>
+      <div id="assessmentPlaceholder" style="text-align:center;padding:20px;">
+        <button id="aiBtn" onclick="loadAIAssessment()" style="font-family:'DM Mono',monospace;font-size:0.85rem;padding:10px 24px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;">Get AI Assessment</button>
+        <p style="font-size:0.75rem;color:var(--muted);margin-top:8px;">Generates a Gemini coaching assessment (~$0.15 per API call)</p>
+      </div>
+      <div id="assessmentContent" class="hidden">
+        <div id="assessmentOverall" class="assessment-overall"></div>
+        <div id="sectionGrid" class="section-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="footer" class="footer"></div>
+
+  <script src="/static/header.js"></script>
+  <script>
+    // --- Auth (Sandy port): Google SSO authenticates every request; the
+    // legacy API-key plumbing is vestigial. Function shapes preserved.
+    function getApiKey() { return 'sso'; }
+    function authHeaders() { return {}; }
+    const TEAM_ID = (location.pathname.match(/^\/dashboard\/([^\/]+)\/agent\//) || [, 'member_support'])[1];
+    const API_BASE = `${window.location.origin}/api/${TEAM_ID}`;
+
+    // Filter state mirrored from QAHeader (header.js). `selectedDays` is
+    // null when a custom range is active — in that case `dateFrom`/`dateTo`
+    // are used. The AI Assessment endpoint is days-only, so we hide that
+    // card while a custom range is active (see loadDashboard).
+    let selectedDays = 30;
+    let dateFrom = null;
+    let dateTo = null;
+    let qaHeader = null;
+    let trendChartInstance = null;
+    let sectionChartInstance = null;
+
+    // Team section metadata (populated by loadTeamSections before any render).
+    // `_numericSectionKeys` drives the bar chart; `_sectionLabels` titles cards.
+    let _teamSections = [];
+    let _sectionLabels = {};
+    let _numericSectionKeys = [];
+
+    async function loadTeamSections() {
+      try {
+        const res = await fetch(`${API_BASE}/team/sections`, { headers: authHeaders() });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        _teamSections = await res.json();
+        _sectionLabels = Object.fromEntries(
+          _teamSections.map(s => [s.history_id || s.id, s.name])
+        );
+        _numericSectionKeys = _teamSections
+          .filter(s => (s.score_type === 'numeric' || s.score_type === 'manual') && !s.auto_value)
+          .map(s => s.history_id || s.id);
+      } catch (e) {
+        console.error('Failed to load team sections:', e);
+      }
+    }
+
+    // Overall score is 0-100 scale
+    function overallColor(score) {
+      if (score >= 85) return '#28A745';
+      if (score >= 70) return '#E8A317';
+      return '#D9534F';
+    }
+    function overallClass(score) {
+      if (score >= 85) return 'score-green';
+      if (score >= 70) return 'score-amber';
+      return 'score-red';
+    }
+    // Section scores are 1-5 scale
+    function sectionColor(score) {
+      if (score >= 4.25) return '#28A745';
+      if (score >= 3.5) return '#E8A317';
+      return '#D9534F';
+    }
+
+    // Extract a numeric score from a section object (handles string "4", "Yes", etc.)
+    function parseSectionScore(section) {
+      if (!section) return null;
+      const val = section.score != null ? section.score : section;
+      const num = parseFloat(val);
+      return isNaN(num) ? null : num;
+    }
+
+    async function fetchJSON(url) {
+      try {
+        const res = await fetch(url, { headers: authHeaders() });
+        if (res.status === 401) {
+          sessionStorage.removeItem('qa_api_key');
+          alert('Invalid API key. Please reload and try again.');
+          return null;
+        }
+        if (res.status === 404) return null;
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.json();
+      } catch (e) {
+        console.error('Fetch error:', e);
+        return null;
+      }
+    }
+
+    // Extract agent name from URL: /dashboard/{team_id}/agent/{name}
+    function getAgentFromURL() {
+      const m = window.location.pathname.match(/^\/dashboard\/[^\/]+\/agent\/(.+)$/);
+      return m ? decodeURIComponent(m[1]) : null;
+    }
+
+    const currentAgent = getAgentFromURL();
+
+    // --- Monthly one-pager card ---
+    // "Last closed month" in the project bucket TZ (America/Los_Angeles),
+    // mirroring the backend's last_closed_month(): the label and link roll
+    // forward automatically on the 1st, in step with the workbook export.
+    const MONTH_NAMES = ['January','February','March','April','May','June',
+                         'July','August','September','October','November','December'];
+    function lastClosedMonthLA() {
+      const parts = new Intl.DateTimeFormat('en-US',
+        { timeZone: 'America/Los_Angeles', year: 'numeric', month: 'numeric' }
+      ).formatToParts(new Date());
+      let y = +parts.find(p => p.type === 'year').value;
+      let m = +parts.find(p => p.type === 'month').value - 1;
+      if (m === 0) { m = 12; y -= 1; }
+      return { label: `${MONTH_NAMES[m - 1]} ${y}`, y, m };
+    }
+
+    function renderOnepagerCard(agentName) {
+      const { label } = lastClosedMonthLA();
+      document.getElementById('onepagerMonth').textContent = label;
+      const link = document.getElementById('onepagerLink');
+      link.textContent = `Open the ${label} one-pager →`;
+      link.href = `/dashboard/${TEAM_ID}/onepager/${encodeURIComponent(agentName)}`;
+      // sessionStorage is per-tab, so the viewer shell in the new tab
+      // can't see this tab's key and would re-prompt. Hand it over in the
+      // URL fragment: never sent to the server, stripped by the shell on
+      // arrival, and the copyable href above stays key-free (a shared
+      // link should still prompt). Assignment (not addEventListener) so
+      // re-renders never stack handlers.
+      link.onclick = function (e) {
+        const key = sessionStorage.getItem('qa_api_key');
+        if (!key) return; // plain navigation; the shell will prompt
+        e.preventDefault();
+        window.open(this.href + '#k=' + encodeURIComponent(key), '_blank', 'noopener');
+      };
+      document.getElementById('onepagerCard').classList.remove('hidden');
+    }
+
+    async function loadDashboard(agentName) {
+      if (!agentName) return;
+
+      document.getElementById('placeholder').textContent = 'Loading...';
+      document.getElementById('placeholder').classList.remove('hidden');
+      ['statsCard', 'trendCard', 'sectionCard', 'onepagerCard'].forEach(id =>
+        document.getElementById(id).classList.add('hidden')
+      );
+      // Reset AI assessment
+      _resetAIButton();
+      document.getElementById('assessmentPlaceholder').classList.remove('hidden');
+      document.getElementById('assessmentContent').classList.add('hidden');
+      // Backend progression endpoint is days-only; hide the AI card while
+      // a custom range is active so the button can't generate a window
+      // mismatch ("last 30 days" assessment shown next to a bonus-range
+      // chart). Falls back to whatever the last preset would have shown.
+      const customActive = !!(dateFrom && dateTo);
+      document.getElementById('assessmentCard').classList.toggle('hidden', customActive);
+      document.getElementById('footer').textContent = '';
+
+      const params = new URLSearchParams();
+      if (customActive) {
+        params.set('date_from', dateFrom);
+        params.set('date_to', dateTo);
+      } else {
+        params.set('days', selectedDays);
+      }
+      const history = await fetchJSON(
+        `${API_BASE}/agents/${encodeURIComponent(agentName)}/history?${params}`
+      );
+
+      if (!history) {
+        const windowLabel = customActive ? `${dateFrom} – ${dateTo}` : `the last ${selectedDays} days`;
+        document.getElementById('placeholder').textContent =
+          `No evaluations found for "${agentName}" in ${windowLabel}.`;
+        return;
+      }
+
+      document.getElementById('placeholder').classList.add('hidden');
+      renderStats(history);
+      renderTrendChart(history);
+      renderSectionChart(history);
+      renderOnepagerCard(agentName);
+
+      const windowLabel = customActive ? `${dateFrom} – ${dateTo}` : `Last ${selectedDays} days`;
+      document.getElementById('footer').textContent =
+        `Data source: Google Sheets | ${history.length} evaluations | ${windowLabel}`;
+
+      // Restore cached AI assessment if available (preset-windows only).
+      if (!customActive) {
+        const cachedAssessment = _getCachedAssessment();
+        if (cachedAssessment) {
+          _showAssessment(cachedAssessment);
+        }
+      }
+    }
+
+    function _assessmentCacheKey() {
+      return `qa_assessment_${currentAgent}_${selectedDays}`;
+    }
+
+    function _cacheAssessment(progression) {
+      try {
+        const entry = { data: progression, cachedAt: Date.now() };
+        sessionStorage.setItem(_assessmentCacheKey(), JSON.stringify(entry));
+      } catch (e) { /* sessionStorage full or unavailable — ignore */ }
+    }
+
+    function _getCachedAssessment() {
+      try {
+        const raw = sessionStorage.getItem(_assessmentCacheKey());
+        if (!raw) return null;
+        const entry = JSON.parse(raw);
+        // 1-hour TTL (matches backend cache)
+        if (Date.now() - entry.cachedAt > 3600000) {
+          sessionStorage.removeItem(_assessmentCacheKey());
+          return null;
+        }
+        return entry.data;
+      } catch (e) { return null; }
+    }
+
+    function _resetAIButton() {
+      const btn = document.getElementById('aiBtn');
+      btn.textContent = 'Get AI Assessment';
+      btn.disabled = false;
+    }
+
+    function _showAssessment(progression) {
+      renderAssessment(progression);
+      document.getElementById('assessmentPlaceholder').classList.add('hidden');
+      document.getElementById('assessmentContent').classList.remove('hidden');
+    }
+
+    async function loadAIAssessment() {
+      if (!currentAgent) return;
+      const btn = document.getElementById('aiBtn');
+      btn.disabled = true;
+      btn.textContent = 'Generating...';
+
+      const progression = await fetchJSON(
+        `${API_BASE}/agents/${encodeURIComponent(currentAgent)}/progression?days=${selectedDays}`
+      );
+
+      if (progression) {
+        _showAssessment(progression);
+        _cacheAssessment(progression);
+        _resetAIButton();
+      } else {
+        btn.textContent = 'Failed — retry';
+        btn.disabled = false;
+      }
+    }
+
+    function renderStats(history) {
+      const scores = history.map(r => r.overall_score).filter(s => s != null);
+      const count = history.length;
+      const avg = scores.length ? (scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+      const latest = scores.length ? scores[scores.length - 1] : 0;
+      const highest = scores.length ? Math.max(...scores) : 0;
+
+      document.getElementById('statCount').textContent = count;
+      document.getElementById('statCount').className = 'stat-value';
+
+      document.getElementById('statAvg').textContent = avg.toFixed(1);
+      document.getElementById('statAvg').className = 'stat-value ' + overallClass(avg);
+
+      document.getElementById('statLatest').textContent = latest.toFixed(1);
+      document.getElementById('statLatest').className = 'stat-value ' + overallClass(latest);
+
+      document.getElementById('statHighest').textContent = highest.toFixed(1);
+      document.getElementById('statHighest').className = 'stat-value ' + overallClass(highest);
+
+      document.getElementById('statsCard').classList.remove('hidden');
+    }
+
+    function renderTrendChart(history) {
+      const ctx = document.getElementById('trendChart').getContext('2d');
+      if (trendChartInstance) { trendChartInstance.destroy(); trendChartInstance = null; }
+
+      const labels = history.map(r => {
+        const d = new Date(r.timestamp);
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      });
+      const data = history.map(r => r.overall_score);
+      const pointColors = data.map(s => overallColor(s));
+
+      trendChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Overall Score',
+            data,
+            borderColor: '#1A61D9',
+            backgroundColor: 'rgba(26, 97, 217, 0.1)',
+            fill: true,
+            tension: 0.3,
+            pointBackgroundColor: pointColors,
+            pointBorderColor: pointColors,
+            pointRadius: 5,
+            pointHoverRadius: 7
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          onClick: (event, activeElements) => {
+            if (activeElements.length) {
+              const idx = activeElements[0].index;
+              const rec = history[idx];
+              if (rec.eval_id) window.location.href = `/datapoint/${TEAM_ID}/${rec.eval_id}`;
+            }
+          },
+          scales: {
+            y: { min: 0, max: 100, ticks: { stepSize: 10 } }
+          },
+          plugins: {
+            tooltip: {
+              callbacks: {
+                afterBody(items) {
+                  const idx = items[0].dataIndex;
+                  const rec = history[idx];
+                  let lines = [];
+                  if (rec.key_strengths) {
+                    const str = typeof rec.key_strengths === 'string' ? rec.key_strengths : '';
+                    lines.push('Strengths: ' + str.substring(0, 80) + (str.length > 80 ? '...' : ''));
+                  }
+                  if (rec.improvements) {
+                    const imp = typeof rec.improvements === 'string' ? rec.improvements : '';
+                    lines.push('Improve: ' + imp.substring(0, 80) + (imp.length > 80 ? '...' : ''));
+                  }
+                  return lines;
+                }
+              }
+            }
+          }
+        },
+        plugins: [{
+          id: 'goalLine',
+          afterDraw(chart) {
+            const yScale = chart.scales.y;
+            const goalY = yScale.getPixelForValue(85);
+            const ctx2 = chart.ctx;
+            ctx2.save();
+            ctx2.setLineDash([6, 4]);
+            ctx2.strokeStyle = '#28A745';
+            ctx2.lineWidth = 1.5;
+            ctx2.beginPath();
+            ctx2.moveTo(chart.chartArea.left, goalY);
+            ctx2.lineTo(chart.chartArea.right, goalY);
+            ctx2.stroke();
+            ctx2.setLineDash([]);
+            ctx2.fillStyle = '#28A745';
+            ctx2.font = '11px DM Mono';
+            ctx2.fillText('Goal: 85', chart.chartArea.right - 60, goalY - 6);
+            ctx2.restore();
+          }
+        }]
+      });
+
+      document.getElementById('trendCard').classList.remove('hidden');
+    }
+
+    function renderSectionChart(history) {
+      const ctx = document.getElementById('sectionChart').getContext('2d');
+      if (sectionChartInstance) { sectionChartInstance.destroy(); sectionChartInstance = null; }
+
+      // Extract numeric scores from sections dict: r.sections[key].score
+      const avgs = _numericSectionKeys.map(key => {
+        const vals = history
+          .map(r => r.sections ? parseSectionScore(r.sections[key]) : null)
+          .filter(v => v != null);
+        return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+      });
+
+      const bgColors = avgs.map(s => {
+        if (s >= 4.25) return 'rgba(40, 167, 69, 0.2)';
+        if (s >= 3.5) return 'rgba(232, 163, 23, 0.2)';
+        return 'rgba(217, 83, 79, 0.2)';
+      });
+      const borderColors = avgs.map(s => {
+        if (s >= 4.25) return '#28A745';
+        if (s >= 3.5) return '#E8A317';
+        return '#D9534F';
+      });
+
+      sectionChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: _numericSectionKeys.map(k => _sectionLabels[k] || k),
+          datasets: [{
+            label: 'Average Score',
+            data: avgs,
+            backgroundColor: bgColors,
+            borderColor: borderColors,
+            borderWidth: 2,
+            borderRadius: 4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            y: { min: 0, max: 5, ticks: { stepSize: 1 } }
+          },
+          plugins: {
+            legend: { display: false }
+          }
+        }
+      });
+
+      document.getElementById('sectionCard').classList.remove('hidden');
+    }
+
+    function renderAssessment(progression) {
+      const overall = document.getElementById('assessmentOverall');
+      overall.textContent = progression.overall_assessment || 'No overall assessment available.';
+
+      const grid = document.getElementById('sectionGrid');
+      grid.innerHTML = '';
+
+      // section_assessments is a dict: { "greeting": { trend, summary, coaching_tip }, ... }
+      const assessments = progression.section_assessments || {};
+      Object.entries(assessments).forEach(([key, sec]) => {
+        const card = document.createElement('div');
+        card.className = 'section-card';
+
+        const trendClass = (sec.trend || 'stable').toLowerCase();
+        const trendLabel = trendClass.charAt(0).toUpperCase() + trendClass.slice(1);
+
+        card.innerHTML = `
+          <div class="section-card-header">
+            <span class="section-name">${_sectionLabels[key] || key}</span>
+            <span class="trend-badge ${trendClass}">${trendLabel}</span>
+          </div>
+          <div class="summary">${sec.summary || ''}</div>
+          <div class="coaching-toggle" onclick="this.nextElementSibling.classList.toggle('visible')">
+            Coaching Tip
+          </div>
+          <div class="coaching-tip">${sec.coaching_tip || 'No tip available.'}</div>
+        `;
+        grid.appendChild(card);
+      });
+
+    }
+
+    // QAHeader (header.js) owns the time-window chiclets / custom-range
+    // popover. Active Only / Supervisor are rendered disabled on this page
+    // (they don't apply to a single agent) — see header.js init for the
+    // page='agent' branch.
+    qaHeader = window.QAHeader.init({
+      page: 'agent',
+      team: TEAM_ID,
+      agent: currentAgent,
+      title: currentAgent || 'Agent Dashboard',
+      onChange: ({ days, dateFrom: f, dateTo: t }) => {
+        selectedDays = days;
+        dateFrom = f;
+        dateTo = t;
+        if (currentAgent) loadDashboard(currentAgent);
+      },
+    });
+
+    // Init — load team sections first, then dashboard. QAHeader's first
+    // onChange already triggered loadDashboard, but it ran before sections
+    // were ready; we re-run after to make sure section labels are populated.
+    (async () => {
+      await loadTeamSections();
+      if (currentAgent) {
+        loadDashboard(currentAgent);
+      } else {
+        document.getElementById('placeholder').textContent = 'No agent specified in URL.';
+      }
+    })();
+  </script>
+</body>
+</html>
