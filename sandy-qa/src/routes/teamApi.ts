@@ -168,7 +168,8 @@ export async function handleTeamRoutes(
   url: URL,
   dialpadKey?: string,
   lookupAllow?: string,
-  pulpo?: { url?: string; token?: string }
+  pulpo?: { url?: string; token?: string },
+  gasUrls?: { member_support?: string; sales?: string }
 ): Promise<Response | null> {
   const path = url.pathname;
 
@@ -275,18 +276,20 @@ export async function handleTeamRoutes(
     const { approveEvaluation } = await import("./scoring.js");
     return approveEvaluation(request, db, m[1], decodeURIComponent(m[2]), {
       editOfFinalized: false,
+      gasUrls,
     });
   }
   m = path.match(/^\/api\/([^/]+)\/score\/([^/]+)\/override$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
     const { overrideEvaluation } = await import("./scoring.js");
-    return overrideEvaluation(request, db, m[1], decodeURIComponent(m[2]));
+    return overrideEvaluation(request, db, m[1], decodeURIComponent(m[2]), gasUrls);
   }
   m = path.match(/^\/api\/([^/]+)\/datapoints\/([^/]+)\/edit$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
     const { approveEvaluation } = await import("./scoring.js");
     return approveEvaluation(request, db, m[1], decodeURIComponent(m[2]), {
       editOfFinalized: true,
+      gasUrls,
     });
   }
   m = path.match(/^\/api\/([^/]+)\/score\/([^/]+)$/);
