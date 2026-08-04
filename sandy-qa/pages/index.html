@@ -468,7 +468,12 @@
         const res = await fetch(`${API_BASE}/score`, { method: 'POST', body: formData });
         const data = await res.json().catch(() => ({ detail: res.statusText }));
         if (!res.ok) {
-          failed.push({ callId, detail: data.detail || `HTTP ${res.status}` });
+          failed.push({
+            callId,
+            detail: data.detail || `HTTP ${res.status}`,
+            rescoreAvailable: res.status === 409 && data.rescore_available === true,
+            evaluationId: data.evaluation_id,
+          });
         } else {
           jobs.push({ jobId: data.job_id, callId });
         }
@@ -491,7 +496,7 @@
     // Batch (or partial failure): stay here, render per-row status.
     statusArea.style.display = 'block';
     statusArea.scrollIntoView({ behavior: 'smooth' });
-    saveActiveJobs(jobs);
+    trackJobs(jobs);
     pollJobs(jobs, failed);
   });
 
@@ -503,20 +508,33 @@
   // tab, dropped session) had no recovery path but resubmitting.
   const JOBS_KEY = `qa_score_active_jobs_${TEAM_ID}`;
   const JOBS_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+  let _activeJobs = []; // every in-flight job across batches + rescores
 
-  function saveActiveJobs(jobs) {
+  function saveActiveJobs() {
     try {
-      localStorage.setItem(JOBS_KEY, JSON.stringify({ ts: Date.now(), jobs }));
+      if (!_activeJobs.length) { localStorage.removeItem(JOBS_KEY); return; }
+      localStorage.setItem(JOBS_KEY, JSON.stringify({ ts: Date.now(), jobs: _activeJobs }));
     } catch {}
   }
-  function clearActiveJobs() {
-    try { localStorage.removeItem(JOBS_KEY); } catch {}
+  function trackJobs(jobs) {
+    for (const j of jobs) {
+      if (!_activeJobs.some(a => a.jobId === j.jobId)) _activeJobs.push(j);
+    }
+    saveActiveJobs();
+  }
+  function untrackJob(jobId) {
+    _activeJobs = _activeJobs.filter(a => a.jobId !== jobId);
+    saveActiveJobs();
   }
   function restoreActiveJobs() {
     try {
       const saved = JSON.parse(localStorage.getItem(JOBS_KEY) || 'null');
       if (!saved || !Array.isArray(saved.jobs) || !saved.jobs.length) return;
-      if (Date.now() - (saved.ts || 0) > JOBS_MAX_AGE_MS) { clearActiveJobs(); return; }
+      if (Date.now() - (saved.ts || 0) > JOBS_MAX_AGE_MS) {
+        localStorage.removeItem(JOBS_KEY);
+        return;
+      }
+      _activeJobs = saved.jobs;
       statusArea.style.display = 'block';
       pollJobs(saved.jobs, []);
     } catch {}
@@ -526,14 +544,28 @@
   // --- Batch polling ---
   function pollJobs(jobs, failed) {
     jobListEl.innerHTML = '';
-    for (const { callId, detail } of failed || []) {
+    for (const f of failed || []) {
       const row = document.createElement('div');
       row.className = 'job-row';
-      row.innerHTML = `
-        <span>${esc(callId)}</span>
-        <span class="status-badge status-error">rejected</span>
-        <span class="job-error-detail">${esc(detail)}</span>
-      `;
+      row.id = `job-reject-${f.callId}`;
+      if (f.rescoreAvailable) {
+        // Already scored on Sandy → offer the §4.2 Re-score action in
+        // place (same audited endpoint as the datapoint page's button).
+        row.innerHTML = `
+          <span>${esc(f.callId)}</span>
+          <span class="status-badge status-flagged">already scored</span>
+          <span class="job-error-detail" style="color:var(--muted)">evaluation ${esc(f.evaluationId)}</span>
+          <button type="button" class="open-editor-link" style="background:none;cursor:pointer"
+            onclick="rescoreFromConsole('${esc(f.callId)}', '${esc(f.evaluationId)}', this)">Re-score</button>
+          <a class="open-editor-link" href="/scorecard/${TEAM_ID}/${encodeURIComponent(f.callId)}" target="_blank" rel="noopener">Open</a>
+        `;
+      } else {
+        row.innerHTML = `
+          <span>${esc(f.callId)}</span>
+          <span class="status-badge status-error">rejected</span>
+          <span class="job-error-detail">${esc(f.detail)}</span>
+        `;
+      }
       jobListEl.appendChild(row);
     }
     jobs.forEach(({ jobId, callId }) => {
@@ -546,7 +578,7 @@
       `;
       jobListEl.appendChild(row);
     });
-    if (!jobs.length) { clearActiveJobs(); return; }
+    if (!jobs.length) return;
 
     // Poll failures must be VISIBLE: a silent catch froze the badge on
     // its last state indefinitely (observed: "pending" forever while the
@@ -574,8 +606,10 @@
           const data = await res.json();
           failCounts[jobId] = 0;
           updateJobRow(jobId, callId, data);
-          if (['complete', 'approved', 'error'].includes(data.status)) terminal[jobId] = true;
-          else allDone = false;
+          if (['complete', 'approved', 'error'].includes(data.status)) {
+            terminal[jobId] = true;
+            untrackJob(jobId);
+          } else allDone = false;
         } catch (e) {
           allDone = false;
           failCounts[jobId] = (failCounts[jobId] || 0) + 1;
@@ -584,8 +618,81 @@
       }
       if (allDone) {
         clearInterval(interval);
-        clearActiveJobs();
         loadReviewQueue(); // flagged jobs land in the queue below
+      }
+    }, 3000);
+  }
+
+  // --- Console re-score (§4.2) ---
+  // Same audited endpoint as the datapoint page's Re-Score button: a fresh
+  // AI pass REPLACES the evaluation on the same record; the operator picks
+  // whether the re-scored email goes out (S4 suppress).
+  async function rescoreFromConsole(callId, evalId, btn) {
+    const managerEmail = (document.getElementById('manager-email').value || '').trim();
+    if (!managerEmail) {
+      alert('Enter your manager email first — it stamps the audit row.');
+      return;
+    }
+    if (!window.confirm(
+      `Re-score call ${callId}?\n\nA fresh AI pass will REPLACE evaluation ` +
+      `${evalId} on the same record. The intervention is audited.`)) return;
+    const suppress = !window.confirm(
+      'Send the evaluation email (with the re-score disclaimer) when the ' +
+      'fresh pass finalizes?\n\nOK = send (default) · Cancel = suppress');
+    btn.disabled = true;
+    try {
+      const res = await fetch(`${API_BASE}/score/${encodeURIComponent(callId)}/rescore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ evaluator_email: managerEmail, suppress_email: suppress }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      const row = document.getElementById(`job-reject-${callId}`);
+      if (row) {
+        row.id = `job-${data.job_id}`;
+        row.innerHTML = `
+          <span>${esc(callId)}</span>
+          <span class="status-badge status-pending">${esc(data.status || 'pending')}</span>
+        `;
+      }
+      trackJobs([{ jobId: data.job_id, callId }]);
+      pollOne(data.job_id, callId);
+    } catch (e) {
+      alert(`Re-score failed: ${e.message}`);
+      btn.disabled = false;
+    }
+  }
+
+  // Single-job poller for rescores started after the batch interval began
+  // (pollJobs' interval closes over its own job list).
+  function pollOne(jobId, callId) {
+    let fails = 0;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/score/${encodeURIComponent(jobId)}`,
+          { cache: 'no-store' });
+        if (res.status === 404) {
+          updateJobRow(jobId, callId, { status: 'error', error: 'Job not found — it may have expired.' });
+          clearInterval(interval);
+          untrackJob(jobId);
+          return;
+        }
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        fails = 0;
+        updateJobRow(jobId, callId, data);
+        if (['complete', 'approved', 'error'].includes(data.status)) {
+          clearInterval(interval);
+          untrackJob(jobId);
+          loadReviewQueue();
+        }
+      } catch (e) {
+        fails += 1;
+        if (fails >= 3) showPollWarning(jobId, e.message);
       }
     }, 3000);
   }

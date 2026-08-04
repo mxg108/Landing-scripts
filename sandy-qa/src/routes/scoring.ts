@@ -200,7 +200,18 @@ async function scoreTriggerInternal(
       .bind(teamId, callId)
       .first<any>();
     if (already)
-      return json({ detail: `call ${callId} already has evaluation ${already.id}` }, 409);
+      // Structured so the console can offer the §4.2 Re-score action in
+      // place (Sandy-born only — Railway-born rows re-score on Railway).
+      return json(
+        {
+          detail: `call ${callId} already has evaluation ${already.id}`,
+          evaluation_id: already.id,
+          call_id: callId,
+          sandy_born: already.id >= SANDY_BASE,
+          rescore_available: already.id >= SANDY_BASE,
+        },
+        409
+      );
   }
 
   const config = await loadTeamConfig(db, teamId);
@@ -525,17 +536,45 @@ export async function reviewQueue(
 
 const SANDY_BASE = 10_000_000;
 
-async function resolveEval(db: D1Database, teamId: string, ref: string) {
-  return db
-    .prepare(
-      `SELECT id, agent_id, agent_name_raw, agent_email, overall_score,
-              models_used, dialpad_call_id, dialpad_entry_point_call_id, state
-       FROM qa_evaluations
-       WHERE team_id = ? AND (dialpad_call_id = ? OR dialpad_entry_point_call_id = ?)
-       ORDER BY id DESC LIMIT 1`
-    )
-    .bind(teamId, ref, ref)
+// A job-id ref (score-{team}-{call}-{agent}) maps to the call ref its run
+// persisted. Actions arrive with the editor URL's ref — which IS the job id
+// whenever the editor was opened from a batch/console "Open editor" link
+// (observed: approve on such a tab answered "No evaluation matches this
+// call id" while the eval sat finalized in D1).
+async function jobRefToCallRef(
+  db: D1Database,
+  ref: string
+): Promise<string | null> {
+  const job = await db
+    .prepare("SELECT result FROM workflow_runs WHERE run_id = ?")
+    .bind(ref)
     .first<any>();
+  if (!job?.result) return null;
+  try {
+    const r = JSON.parse(job.result);
+    const mapped = r.eval_id ?? r.call_id;
+    return mapped ? String(mapped) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveEval(db: D1Database, teamId: string, ref: string) {
+  const byRef = (r: string) =>
+    db
+      .prepare(
+        `SELECT id, agent_id, agent_name_raw, agent_email, overall_score,
+                models_used, dialpad_call_id, dialpad_entry_point_call_id, state
+         FROM qa_evaluations
+         WHERE team_id = ? AND (dialpad_call_id = ? OR dialpad_entry_point_call_id = ?)
+         ORDER BY id DESC LIMIT 1`
+      )
+      .bind(teamId, r, r)
+      .first<any>();
+  const direct = await byRef(ref);
+  if (direct) return direct;
+  const mapped = await jobRefToCallRef(db, ref);
+  return mapped ? byRef(mapped) : null;
 }
 
 async function auditRow(
@@ -803,14 +842,21 @@ export async function approveEvaluation(
   const evaluatorEmail = (body.evaluator_email ?? "").trim().toLowerCase();
   if (!evaluatorEmail) return json({ detail: "evaluator_email required" }, 422);
 
-  const ev = await db
-    .prepare(
-      `SELECT * FROM qa_evaluations
-       WHERE team_id = ? AND (dialpad_call_id = ? OR dialpad_entry_point_call_id = ?)
-       ORDER BY id DESC LIMIT 1`
-    )
-    .bind(teamId, ref, ref)
-    .first<any>();
+  const fullByRef = (r: string) =>
+    db
+      .prepare(
+        `SELECT * FROM qa_evaluations
+         WHERE team_id = ? AND (dialpad_call_id = ? OR dialpad_entry_point_call_id = ?)
+         ORDER BY id DESC LIMIT 1`
+      )
+      .bind(teamId, r, r)
+      .first<any>();
+  let ev = await fullByRef(ref);
+  if (!ev) {
+    // Editor tabs opened from a batch link carry the JOB id as the ref.
+    const mapped = await jobRefToCallRef(db, ref);
+    if (mapped) ev = await fullByRef(mapped);
+  }
   if (!ev) return json({ detail: "No evaluation matches this call id" }, 404);
   if (ev.id < SANDY_BASE)
     return json(
