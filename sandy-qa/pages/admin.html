@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QA Scoring — Access Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,300;0,400;0,600;1,300&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #E7EFFB; --surface: #fff; --border: #c9d5e8; --text: #15192D;
+      --muted: #5a6478; --accent: #1A61D9; --navy: #15192D;
+      --success: #2d6a4f; --warning: #b45309; --error: #991b1b;
+      --badge-high: #d1fae5; --badge-medium: #fef3c7; --badge-low: #fee2e2;
+    }
+    body { font-family: 'DM Mono', monospace; background: var(--bg); color: var(--text); min-height: 100vh; }
+    header { background: var(--navy); color: #fff; padding: 1.5rem 2rem; margin-bottom: 2rem; }
+    header h1 { font-family: 'Fraunces', serif; font-weight: 300; font-size: 2rem; letter-spacing: -0.02em; }
+    header p { color: rgba(255,255,255,0.7); font-size: 0.8rem; margin-top: 0.25rem; }
+    .card { max-width: 860px; margin: 0 auto 1.5rem; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .card h2 { font-family: 'Fraunces', serif; font-weight: 400; font-size: 1.1rem; padding: 0.75rem 1.25rem; background: var(--navy); color: #fff; display: flex; justify-content: space-between; align-items: center; }
+    .count { font-size: 0.7rem; padding: 0.15rem 0.6rem; border-radius: 20px; background: rgba(255,255,255,0.15); }
+    table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+    th { text-align: left; padding: 0.6rem 1rem; color: var(--muted); font-weight: 400; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.65rem; border-bottom: 1px solid var(--border); }
+    td { padding: 0.6rem 1rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    .empty { padding: 1.25rem; font-size: 0.8rem; color: var(--muted); text-align: center; }
+    .pill { padding: 0.15rem 0.6rem; border-radius: 20px; font-size: 0.68rem; }
+    .pill.admin { background: #ede9fe; color: #5b21b6; }
+    .pill.qa { background: var(--badge-high); color: var(--success); }
+    .pill.manager { background: var(--badge-medium); color: var(--warning); }
+    .pill.viewer { background: #e5e7eb; color: #374151; }
+    select, input {
+      font-family: 'DM Mono', monospace; font-size: 0.78rem; padding: 0.4rem 0.55rem;
+      border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); outline: none;
+    }
+    input:focus, select:focus { border-color: var(--accent); }
+    .btn {
+      font-family: 'DM Mono', monospace; font-size: 0.72rem; padding: 4px 12px;
+      border-radius: 4px; cursor: pointer; border: 1px solid var(--accent);
+      background: transparent; color: var(--accent); white-space: nowrap;
+    }
+    .btn:hover { background: var(--accent); color: #fff; }
+    .btn.danger { border-color: var(--error); color: var(--error); }
+    .btn.danger:hover { background: var(--error); color: #fff; }
+    .btn.go { border-color: var(--success); color: var(--success); }
+    .btn.go:hover { background: var(--success); color: #fff; }
+    .add-row { display: flex; gap: 0.5rem; padding: 1rem; border-top: 1px solid var(--border); flex-wrap: wrap; }
+    .add-row input[type="email"] { flex: 1; min-width: 220px; }
+    .note-cell { font-size: 0.7rem; color: var(--muted); max-width: 220px; }
+    .muted { color: var(--muted); font-size: 0.7rem; }
+    #flash { max-width: 860px; margin: 0 auto 1rem; padding: 0 0.25rem; font-size: 0.75rem; color: var(--error); min-height: 1.1em; }
+  </style>
+</head>
+<body>
+<header>
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <div>
+      <h1>Access Admin</h1>
+      <p>Roles resolve automatically from Google SSO — grant, revoke, and triage access requests here.</p>
+    </div>
+    <a href="/" style="font-family:'DM Mono',monospace;font-size:0.82rem;padding:8px 16px;border:1px solid rgba(255,255,255,0.3);border-radius:6px;color:#fff;text-decoration:none;">Home</a>
+  </div>
+</header>
+
+<div id="flash"></div>
+
+<div class="card">
+  <h2>Access Requests <span class="count" id="req-count">…</span></h2>
+  <div id="requests"><div class="empty">Loading…</div></div>
+</div>
+
+<div class="card">
+  <h2>Roles <span class="count" id="role-count">…</span></h2>
+  <div id="roles"><div class="empty">Loading…</div></div>
+  <div class="add-row">
+    <input type="email" id="new-email" placeholder="person@hellolanding.com" />
+    <select id="new-role">
+      <option value="qa" selected>qa — evaluator (lookup + scoring + actions)</option>
+      <option value="admin">admin — everything + this page</option>
+      <option value="viewer">viewer — dashboards only (revokes privileges)</option>
+    </select>
+    <button type="button" class="btn go" onclick="addRole()">Grant</button>
+  </div>
+</div>
+
+<script>
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function flash(msg) {
+  document.getElementById('flash').textContent = msg || '';
+  if (msg) setTimeout(() => flash(''), 6000);
+}
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+  return data;
+}
+
+async function load() {
+  try {
+    const data = await api('/api/admin/overview');
+    renderRequests(data.requests || []);
+    renderRoles(data.roles || []);
+  } catch (e) {
+    flash(`Load failed: ${e.message}`);
+  }
+}
+
+function renderRequests(reqs) {
+  const el = document.getElementById('requests');
+  document.getElementById('req-count').textContent = String(reqs.length);
+  if (!reqs.length) {
+    el.innerHTML = '<div class="empty">No pending requests.</div>';
+    return;
+  }
+  el.innerHTML = `<div style="overflow-x:auto"><table>
+    <thead><tr><th>Who</th><th>Wants</th><th>Note</th><th>When</th><th></th></tr></thead>
+    <tbody>${reqs.map(r => `<tr>
+      <td>${esc(r.email)}</td>
+      <td>${esc(r.page)}${r.team_id ? ` (${esc(r.team_id)})` : ''}</td>
+      <td class="note-cell">${esc(r.note || '')}</td>
+      <td class="muted">${esc((r.created_at || '').slice(0, 10))}</td>
+      <td style="white-space:nowrap">
+        <select id="req-role-${r.id}"><option value="qa" selected>qa</option><option value="admin">admin</option></select>
+        <button type="button" class="btn go" onclick="resolveReq(${r.id}, 'approve')">Approve</button>
+        <button type="button" class="btn danger" onclick="resolveReq(${r.id}, 'deny')">Deny</button>
+      </td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+function renderRoles(roles) {
+  const el = document.getElementById('roles');
+  document.getElementById('role-count').textContent = String(roles.length);
+  if (!roles.length) {
+    el.innerHTML = '<div class="empty">No explicit roles yet.</div>';
+    return;
+  }
+  el.innerHTML = `<div style="overflow-x:auto"><table>
+    <thead><tr><th>Email</th><th>Role</th><th>Granted by</th><th>When</th><th>Note</th><th></th></tr></thead>
+    <tbody>${roles.map(r => `<tr>
+      <td>${esc(r.email)}</td>
+      <td><span class="pill ${esc(r.role)}">${esc(r.role)}</span></td>
+      <td class="muted">${esc(r.granted_by)}</td>
+      <td class="muted">${esc((r.granted_at || '').slice(0, 10))}</td>
+      <td class="note-cell">${esc(r.note || '')}</td>
+      <td><button type="button" class="btn danger" onclick="removeRole('${esc(r.email)}')">Remove</button></td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+async function addRole() {
+  const email = document.getElementById('new-email').value.trim().toLowerCase();
+  const role = document.getElementById('new-role').value;
+  if (!email || !email.includes('@')) { flash('Enter a valid email.'); return; }
+  try {
+    await api('/api/admin/roles', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, role }),
+    });
+    document.getElementById('new-email').value = '';
+    load();
+  } catch (e) { flash(`Grant failed: ${e.message}`); }
+}
+
+async function removeRole(email) {
+  if (!confirm(`Remove the explicit role for ${email}?\n\nThey fall back to viewer (dashboards only).`)) return;
+  try {
+    await api('/api/admin/roles', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, action: 'remove' }),
+    });
+    load();
+  } catch (e) { flash(`Remove failed: ${e.message}`); }
+}
+
+async function resolveReq(id, action) {
+  const role = action === 'approve'
+    ? (document.getElementById(`req-role-${id}`) || { value: 'qa' }).value
+    : undefined;
+  try {
+    await api(`/api/admin/access-requests/${id}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, role }),
+    });
+    load();
+  } catch (e) { flash(`${action} failed: ${e.message}`); }
+}
+
+load();
+</script>
+</body>
+</html>
