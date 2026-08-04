@@ -27,6 +27,8 @@ import onepagerShellHtml from "../../pages/onepager.html?raw";
 // @ts-ignore vite ?raw
 import scorecardHtml from "../../pages/scorecard.html?raw";
 // @ts-ignore vite ?raw
+import scoringConsoleHtml from "../../pages/index.html?raw";
+// @ts-ignore vite ?raw
 import headerCss from "../../pages/static/header.css?raw";
 // @ts-ignore vite ?raw
 import headerJs from "../../pages/static/header.js?raw";
@@ -91,9 +93,11 @@ h1,h2,h3{font-family:'Fraunces',serif}
     <li><b>Datapoint</b> — every score links to the full scorecard: section scores, confidence, reasoning.</li>
     <li><b>Call lookup</b> — <span class="path">/lookup/&lt;team&gt;</span>: Dialpad call history + recordings.
       <b>Restricted</b> to authorized QA staff.</li>
+    <li><b>Scoring console</b> — <span class="path">/score/&lt;team&gt;</span>: batch-score calls by
+      Dialpad ID + the human-review queue. <b>Restricted</b> to authorized QA staff.</li>
   </ul></div>
-  <div class="note">Scoring &amp; review actions run on the current production system during the
-  migration shadow period; this app mirrors all evaluation data live and takes over scoring next.</div>
+  <div class="note">During the migration shadow period this app mirrors production evaluation
+  data live; AI scoring &amp; review actions are live here for QA staff via the scoring console.</div>
 </div></body></html>`;
 
 const html = (body: string) =>
@@ -145,6 +149,16 @@ const LOOKUP_DENIED_PAGE = `<!DOCTYPE html><html><head><title>Lookup — restric
 <h2 style="margin-top:0">Call lookup is restricted</h2>
 <p>This page surfaces call recordings across the company, so access is
 limited to authorized QA staff while per-team role-based access is built.</p>
+<p style="color:#5a6478">If you need access, contact the QA team.</p>
+</div></body></html>`;
+
+const SCORING_DENIED_PAGE = `<!DOCTYPE html><html><head><title>Scoring — restricted</title></head>
+<body style="font-family:monospace;background:#E7EFFB;color:#15192D;display:grid;place-items:center;min-height:100vh;margin:0">
+<div style="background:#fff;border:1px solid #c9d5e8;border-radius:12px;padding:32px;max-width:540px">
+<h2 style="margin-top:0">The scoring console is restricted</h2>
+<p>Triggering AI evaluations creates progression records for agents, so
+access is limited to authorized QA staff while per-team role-based access
+is built.</p>
 <p style="color:#5a6478">If you need access, contact the QA team.</p>
 </div></body></html>`;
 
@@ -213,9 +227,33 @@ export async function handleTeamRoutes(
           headers: { "Content-Type": "text/html; charset=utf-8" },
         });
 
+  // Scoring console (index.html port) — batch score-by-call-ID + the §0.3
+  // review queue. Same interim QA-staff gate as /lookup (scoring creates
+  // progression records; per-team RBAC replaces this).
+  m = path.match(/^\/score\/([^/]+)$/);
+  if (m && KNOWN_TEAMS.has(m[1]))
+    return lookupAllowed(request, lookupAllow)
+      ? html(scoringConsoleHtml)
+      : new Response(SCORING_DENIED_PAGE, {
+          status: 403,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+
   // ── scoring trigger + status (scoring.ts) ────────────────────────────────
+  m = path.match(/^\/api\/([^/]+)\/review-queue$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
+    const { reviewQueue } = await import("./scoring.js");
+    return reviewQueue(db, m[1]);
+  }
   m = path.match(/^\/api\/([^/]+)\/score$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    // Both trigger surfaces (/lookup, /score console) sit behind the QA-staff
+    // gate; the API enforces the same line so the pages aren't the only wall.
+    if (!lookupAllowed(request, lookupAllow))
+      return json(
+        { detail: "Scoring is restricted to QA staff pending role-based access." },
+        403
+      );
     const { scoreTrigger } = await import("./scoring.js");
     return scoreTrigger(request, db, m[1], {
       DIALPAD_API_KEY: dialpadKey,
@@ -258,7 +296,7 @@ export async function handleTeamRoutes(
   }
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
     const { scorecardPayload } = await import("./scoring.js");
-    return scorecardPayload(db, m[1], decodeURIComponent(m[2]));
+    return scorecardPayload(db, m[1], decodeURIComponent(m[2]), request);
   }
 
   // ── drill-down + record APIs ─────────────────────────────────────────────

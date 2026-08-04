@@ -40,3 +40,4 @@ appsscript.json
 scripts/annotations/
 # Pulpo compendium snapshots — full internal KB contents, never commit
 scripts/.compendium/
+scripts/shadow_sync.log

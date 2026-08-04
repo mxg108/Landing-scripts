@@ -207,7 +207,7 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
       console.log(`[callback] workflow=${workflowName} run_id=${body.run_id} status=${body.status}`);
       // qa-scoring-pipeline: persist the evaluation (draft/finalize + toast)
       if (workflowName === "qa-scoring-pipeline") {
-        const { scoringCallback } = await import("./routes/scoring.js");
+        const { scoringCallback, drainScoreQueue } = await import("./routes/scoring.js");
         try {
           const outcome = await scoringCallback(body, env.DB);
           const jobId = (body as any).persist
@@ -221,10 +221,27 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
             )
               .bind(outcome.ok ? "complete" : "error", JSON.stringify(outcome), jobId)
               .run();
+            await env.DB.prepare(
+              "UPDATE qa_score_queue SET status = ?, last_error = ?, finished_at = ? WHERE job_id = ?"
+            )
+              .bind(
+                outcome.ok ? "done" : "error",
+                outcome.ok ? null : outcome.note,
+                new Date().toISOString(),
+                jobId
+              )
+              .run();
           }
           console.log(`[scoring] ${outcome.ok ? "OK" : "FAIL"}: ${outcome.note}`);
         } catch (err) {
           console.log(`[scoring] persist threw: ${String(err).slice(0, 300)}`);
+        }
+        // A finished run frees the single workflow slot — start the next
+        // queued job even when persist failed or the job id was missing.
+        try {
+          await drainScoreQueue(env.DB, request);
+        } catch (err) {
+          console.log(`[scoring] queue drain threw: ${String(err).slice(0, 300)}`);
         }
       }
       return Response.json({ ok: true });
