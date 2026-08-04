@@ -159,7 +159,13 @@ async function scoreTriggerInternal(
     PULPO_MCP_URL?: string;
     PULPO_MCP_TOKEN?: string;
   },
-  opts: { callId: string; agentEmail: string; managerEmail: string; rescoreOf?: number }
+  opts: {
+    callId: string;
+    agentEmail: string;
+    managerEmail: string;
+    rescoreOf?: number;
+    rescoreSuppressEmail?: boolean;
+  }
 ): Promise<Response> {
   if (!env.DIALPAD_API_KEY)
     return json({ detail: "DIALPAD_API_KEY app secret not configured" }, 503);
@@ -294,6 +300,9 @@ async function scoreTriggerInternal(
       pulpo_docs: sop.provenance,
       sop_skipped_reason: sop.skipped_reason || null,
       rescore_of: opts.rescoreOf ?? null,
+      // S4: the operator's re-send choice rides the queue payload so the
+      // callback (which owns the finalize email) can honor it.
+      rescore_suppress_email: opts.rescoreSuppressEmail ?? false,
     },
   };
 
@@ -583,6 +592,7 @@ export async function rescoreEvaluation(
     agentEmail: ev.agent_email ?? "",
     managerEmail: evaluatorEmail,
     rescoreOf: ev.id,
+    rescoreSuppressEmail: body.suppress_email === true,
   });
   if (trigger.status !== 200) return trigger;
   const data: any = await trigger.clone().json();
@@ -783,7 +793,10 @@ export async function approveEvaluation(
   db: D1Database,
   teamId: string,
   ref: string,
-  opts: { editOfFinalized: boolean }
+  opts: {
+    editOfFinalized: boolean;
+    gasUrls?: { member_support?: string; sales?: string };
+  }
 ): Promise<Response> {
   let body: any = {};
   try { body = await request.json(); } catch { return json({ detail: "JSON body required" }, 422); }
@@ -952,9 +965,25 @@ export async function approveEvaluation(
       })
     )
     .run();
+  // Finalize-seam email (Railway line: review_resolution wins over
+  // edit_finalized; suppress_email leaves a visible receipt — S7's §8.1
+  // checkbox on the edit-of-finalized flow).
+  let emailDispatch: any;
+  if (body.suppress_email === true) {
+    emailDispatch = { status: "suppressed", message: "caller requested suppress_email" };
+  } else {
+    const { dispatchScorecardEmail, gasUrlForTeam } = await import(
+      "../lib/emailDispatch.js"
+    );
+    emailDispatch = await dispatchScorecardEmail(
+      db, teamId, ev.id, gasUrlForTeam(opts.gasUrls, teamId),
+      wasFlagged ? "review_resolution" : opts.editOfFinalized ? "edit_finalized" : null
+    );
+  }
+
   return json({
     ok: true, evaluation_id: ev.id, overall_score: overall, state: "finalized",
-    edited, coaching_id: coachingId, email: "not_ported_yet",
+    edited, coaching_id: coachingId, email_dispatch: emailDispatch,
   });
 }
 
@@ -962,7 +991,8 @@ export async function overrideEvaluation(
   request: Request,
   db: D1Database,
   teamId: string,
-  ref: string
+  ref: string,
+  gasUrls?: { member_support?: string; sales?: string }
 ): Promise<Response> {
   let body: any = {};
   try { body = await request.json(); } catch { return json({ detail: "JSON body required" }, 422); }
@@ -1003,7 +1033,23 @@ export async function overrideEvaluation(
     action: "overridden",
     notes: `override=${score} was=${ev.overall_score ?? "null"} coaching=${coachingId}${body.sop_gap?.note ? " sop_gap" : ""}`,
   });
-  return json({ ok: true, evaluation_id: ev.id, overall_score: score, coaching_id: coachingId });
+  // §4.3: the corrected scorecard reaches the agent with the override
+  // disclaimer unless the caller suppresses (coaching-first conversations).
+  let emailDispatch: any;
+  if (body.suppress_email === true) {
+    emailDispatch = { status: "suppressed", message: "caller requested suppress_email" };
+  } else {
+    const { dispatchScorecardEmail, gasUrlForTeam } = await import(
+      "../lib/emailDispatch.js"
+    );
+    emailDispatch = await dispatchScorecardEmail(
+      db, teamId, ev.id, gasUrlForTeam(gasUrls, teamId), "override"
+    );
+  }
+  return json({
+    ok: true, evaluation_id: ev.id, overall_score: score,
+    coaching_id: coachingId, email_dispatch: emailDispatch,
+  });
 }
 
 // ── callback persist ───────────────────────────────────────────────────────
@@ -1084,7 +1130,8 @@ function answersFromSectionRows(rows: any[]): Record<string, number | string> {
 
 export async function scoringCallback(
   body: any,
-  db: D1Database
+  db: D1Database,
+  gasUrls?: { member_support?: string; sales?: string }
 ): Promise<{ ok: boolean; note: string }> {
   const jobStatus = body.status === "complete" ? "complete" : "error";
   const p = body; // workflow result payload
@@ -1252,6 +1299,27 @@ export async function scoringCallback(
       .run();
   }
 
+  // Finalize-seam email (Railway parity: the auto-flow dispatches with no
+  // disclaimer; a rescore's re-finalize carries its cause). Flagged rows
+  // don't email — the approve that resolves them does.
+  let emailDispatch: any = null;
+  if (!flagged) {
+    if (persist.rescore_of && persist.rescore_suppress_email) {
+      emailDispatch = {
+        status: "suppressed",
+        message: "rescore (manual) requested suppress_email",
+      };
+    } else {
+      const { dispatchScorecardEmail, gasUrlForTeam } = await import(
+        "../lib/emailDispatch.js"
+      );
+      emailDispatch = await dispatchScorecardEmail(
+        db, teamId, evalId, gasUrlForTeam(gasUrls, teamId),
+        persist.rescore_of ? "rescore_manual" : null
+      );
+    }
+  }
+
   return {
     ok: true,
     note: flagged
@@ -1262,5 +1330,6 @@ export async function scoringCallback(
     scoring_status: flagged ? "flagged_human_review" : "complete",
     overall_score: flagged ? null : overallScore,
     eval_id: persist.dialpad_entry_point_call_id || p.call_id,
+    ...(emailDispatch ? { email_dispatch: emailDispatch } : {}),
   };
 }

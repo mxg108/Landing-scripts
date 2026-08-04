@@ -73,6 +73,48 @@ class QAEntry {
     return entry;
   }
 
+  /**
+   * Constructs a QAEntry from an inline JSON payload (Sandy's payload
+   * mode — see Main.js). The sender is authoritative for NA semantics:
+   * numericScores values arrive as number|null and binaryChecks as
+   * true|false|null, so no sentinel parsing happens here. Unknown
+   * section keys are carried as-is; the email cards only iterate
+   * CONFIG.*_CATEGORIES, so extras are ignored.
+   *
+   * @param  {Object} obj — the `entry` object of a payload-mode POST
+   * @return {QAEntry}
+   */
+  static fromPayload(obj) {
+    var entry = Object.create(QAEntry.prototype);
+    var str = function(v) { return (v || '').toString().trim(); };
+
+    entry.agentName    = str(obj.agentName);
+    entry.agentEmail   = str(obj.agentEmail);
+    entry.timestamp    = new Date(obj.timestamp || Date.now());
+    entry.managerEmail = str(obj.managerEmail);
+    entry.dialpadLink  = str(obj.dialpadLink);
+    entry.overallScore = parseFloat(obj.overallScore) || 0;
+
+    entry.numericScores = obj.numericScores || {};
+    entry.binaryChecks  = obj.binaryChecks  || {};
+    entry.aiReasoning   = obj.aiReasoning   || {};
+    entry.aiConfidence  = obj.aiConfidence  || {};
+
+    entry.strengths    = str(obj.strengths);
+    entry.improvements = str(obj.improvements);
+    entry.callSummary  = str(obj.callSummary);
+    entry.callerName   = str(obj.callerName);
+    entry.callerPhone  = str(obj.callerPhone);
+
+    entry.disposition = str(obj.disposition);
+    entry.aiCsat      = str(obj.aiCsat);
+    entry.sopReferences = (obj.sopReferences || [])
+      .map(function(s) { return (s || '').toString().trim(); })
+      .filter(String);
+
+    return entry;
+  }
+
   // ────────────────────────────────────────────────────────────────
   // Public helpers
   // ────────────────────────────────────────────────────────────────

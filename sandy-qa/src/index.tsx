@@ -25,6 +25,12 @@ export interface Env {
   // v1-essential; absent → prompts take the sop_context_missing path).
   PULPO_MCP_URL?: string;
   PULPO_MCP_TOKEN?: string;
+  // Dashboard-set app secrets: per-team GAS webapp URLs for scorecard email
+  // dispatch (payload mode — qa-automation/src/Main.js). Absent → actions
+  // report email_dispatch {status:'skipped'}; setting them is the go-live
+  // switch for agent-facing email from Sandy.
+  GAS_WEBAPP_URL_MS?: string;
+  GAS_WEBAPP_URL_SALES?: string;
   // Optional: pre-select a specific workflow. Leave unset to list all available.
   WORKFLOW_ID?: string;
   // Provisioned automatically by Sandy at publish time for apps with cron schedules.
@@ -53,7 +59,8 @@ export default {
     try {
       const teamRes = await handleTeamRoutes(
         request, env.DB, url, env.DIALPAD_API_KEY, env.LOOKUP_ALLOW,
-        { url: env.PULPO_MCP_URL, token: env.PULPO_MCP_TOKEN }
+        { url: env.PULPO_MCP_URL, token: env.PULPO_MCP_TOKEN },
+        { member_support: env.GAS_WEBAPP_URL_MS, sales: env.GAS_WEBAPP_URL_SALES }
       );
       if (teamRes) return teamRes;
     } catch (err) {
@@ -209,7 +216,10 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
       if (workflowName === "qa-scoring-pipeline") {
         const { scoringCallback, drainScoreQueue } = await import("./routes/scoring.js");
         try {
-          const outcome = await scoringCallback(body, env.DB);
+          const outcome = await scoringCallback(body, env.DB, {
+            member_support: env.GAS_WEBAPP_URL_MS,
+            sales: env.GAS_WEBAPP_URL_SALES,
+          });
           const jobId = (body as any).persist
             ? `score-${(body as any).team_id}-${(body as any).call_id}-${String((body as any).persist.agent_name ?? "")
                 .toLowerCase()
