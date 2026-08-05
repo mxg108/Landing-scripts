@@ -10,9 +10,24 @@ One-time deployment, done **while logged in as `member-support@hellolanding.com`
 2. Name it `Mass Notifications Dispatcher`.
 3. Replace the default `Code.gs` content with **`Dispatcher.gs`** from this folder.
 4. Project Settings (gear) → check **"Show appsscript.json manifest file"** →
-   replace its content with **`appsscript.json`** from this folder.
-   (`ANYONE_ANONYMOUS` is required — the caller is a Cloudflare worker with no
-   Google identity; auth is the shared secret, not Google login.)
+   replace its content with the manifest below (also in this folder as
+   `appsscript.json`, untracked — the repo .gitignore excludes all
+   appsscript.json files). `ANYONE_ANONYMOUS` is required — the caller is a
+   Cloudflare worker with no Google identity; auth is the shared secret, not
+   Google login.
+
+   ```json
+   {
+     "timeZone": "America/Mexico_City",
+     "dependencies": {},
+     "exceptionLogging": "STACKDRIVER",
+     "runtimeVersion": "V8",
+     "webapp": {
+       "executeAs": "USER_DEPLOYING",
+       "access": "ANYONE_ANONYMOUS"
+     }
+   }
+   ```
 5. Project Settings → **Script Properties** → add:
    - `DISPATCH_SECRET` = a long random string. Generate one locally:
      `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`
