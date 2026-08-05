@@ -29,9 +29,12 @@ import scorecardHtml from "../../pages/scorecard.html?raw";
 // @ts-ignore vite ?raw
 import scoringConsoleHtml from "../../pages/index.html?raw";
 // @ts-ignore vite ?raw
+import adminHtml from "../../pages/admin.html?raw";
+// @ts-ignore vite ?raw
 import headerCss from "../../pages/static/header.css?raw";
 // @ts-ignore vite ?raw
 import headerJs from "../../pages/static/header.js?raw";
+import { accessEmail, resolveAccess, type Access } from "../lib/rbac.js";
 
 const RAILWAY_BASE = "https://hellolanding-qa.up.railway.app";
 const KNOWN_TEAMS = new Set(["member_support", "sales"]);
@@ -108,59 +111,70 @@ const json = (data: unknown, status = 200) =>
     headers: { "Content-Type": "application/json" },
   });
 
-// SSO identity: Sandy's edge injects the platform-verified CF Access JWT.
-// We read the email claim for app-level authorization (signature validation
-// happens at the Access edge before the request reaches the worker; worth an
-// Engineering confirmation that tenant workers can rely on this header).
-function accessEmail(request: Request): string {
-  const jwt =
-    request.headers.get("Cf-Access-Jwt-Assertion") ??
-    request.headers.get("cf-access-jwt-assertion") ??
-    "";
-  const parts = jwt.split(".");
-  if (parts.length < 2) return "";
+// RBAC (lib/rbac.ts): roles resolve automatically from the SSO email —
+// users discover restrictions only by hitting one, and the denial page
+// offers a self-service access request. LOOKUP_ALLOW remains a grandfather
+// bridge inside resolveAccess until the secret is deleted.
+
+// Denial page with the request-access flow. The person never needed to
+// know RBAC existed until this moment — the page explains the wall and
+// lets them request through it in place.
+function deniedPage(kind: "lookup" | "score", teamId: string): Response {
+  const copy =
+    kind === "lookup"
+      ? {
+          title: "Call lookup is restricted",
+          why: "This page surfaces call history and recordings across the company, so it is limited to authorized QA staff.",
+        }
+      : {
+          title: "The scoring console is restricted",
+          why: "Triggering AI evaluations creates progression records for agents, so it is limited to authorized QA staff.",
+        };
+  const body = `<!DOCTYPE html><html><head><title>${copy.title}</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"></head>
+<body style="font-family:'DM Mono',monospace;background:#E7EFFB;color:#15192D;display:grid;place-items:center;min-height:100vh;margin:0">
+<div style="background:#fff;border:1px solid #c9d5e8;border-radius:12px;padding:32px;max-width:560px">
+<h2 style="margin-top:0">${copy.title}</h2>
+<p style="font-size:.85rem;line-height:1.55">${copy.why}</p>
+<div id="req" style="margin-top:20px">
+  <textarea id="req-note" placeholder="Optional: why do you need access?"
+    style="width:100%;font-family:inherit;font-size:.8rem;padding:10px;border:1px solid #c9d5e8;border-radius:6px;background:#E7EFFB;min-height:64px"></textarea>
+  <button id="req-btn" onclick="requestAccess()"
+    style="margin-top:10px;font-family:inherit;font-size:.82rem;padding:10px 20px;border:1px solid #1A61D9;border-radius:6px;background:#1A61D9;color:#fff;cursor:pointer">
+    Request access</button>
+  <span id="req-status" style="display:block;margin-top:10px;font-size:.75rem;color:#5a6478"></span>
+</div>
+<p style="color:#5a6478;font-size:.72rem;margin-top:18px"><a href="/" style="color:#1A61D9">&larr; Back to dashboards</a></p>
+</div>
+<script>
+async function requestAccess() {
+  const btn = document.getElementById('req-btn');
+  const status = document.getElementById('req-status');
+  btn.disabled = true;
   try {
-    const payload = JSON.parse(
-      atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"))
-    );
-    return (payload.email ?? "").toLowerCase();
-  } catch {
-    return "";
+    const res = await fetch('/api/access-request', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page: '${kind}', team_id: '${teamId}',
+        note: document.getElementById('req-note').value.trim() }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+    status.textContent = data.deduped
+      ? 'You already have a pending request — the QA team will review it.'
+      : 'Request sent — the QA team will review it.';
+    btn.style.display = 'none';
+    document.getElementById('req-note').style.display = 'none';
+  } catch (e) {
+    status.textContent = 'Request failed: ' + e.message;
+    btn.disabled = false;
   }
 }
-
-// Interim lookup lock (compliance): /lookup exposes every agent's calls +
-// recordings, so it is DENY-BY-DEFAULT until per-team/role RBAC lands.
-// LOOKUP_ALLOW (Dashboard app secret) = comma-separated allowed emails.
-function lookupAllowed(request: Request, lookupAllow?: string): boolean {
-  if (!lookupAllow) return false;
-  const email = accessEmail(request);
-  if (!email) return false;
-  return lookupAllow
-    .split(",")
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean)
-    .includes(email);
+</script></body></html>`;
+  return new Response(body, {
+    status: 403,
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  });
 }
-
-const LOOKUP_DENIED_PAGE = `<!DOCTYPE html><html><head><title>Lookup — restricted</title></head>
-<body style="font-family:monospace;background:#E7EFFB;color:#15192D;display:grid;place-items:center;min-height:100vh;margin:0">
-<div style="background:#fff;border:1px solid #c9d5e8;border-radius:12px;padding:32px;max-width:540px">
-<h2 style="margin-top:0">Call lookup is restricted</h2>
-<p>This page surfaces call recordings across the company, so access is
-limited to authorized QA staff while per-team role-based access is built.</p>
-<p style="color:#5a6478">If you need access, contact the QA team.</p>
-</div></body></html>`;
-
-const SCORING_DENIED_PAGE = `<!DOCTYPE html><html><head><title>Scoring — restricted</title></head>
-<body style="font-family:monospace;background:#E7EFFB;color:#15192D;display:grid;place-items:center;min-height:100vh;margin:0">
-<div style="background:#fff;border:1px solid #c9d5e8;border-radius:12px;padding:32px;max-width:540px">
-<h2 style="margin-top:0">The scoring console is restricted</h2>
-<p>Triggering AI evaluations creates progression records for agents, so
-access is limited to authorized QA staff while per-team role-based access
-is built.</p>
-<p style="color:#5a6478">If you need access, contact the QA team.</p>
-</div></body></html>`;
 
 export async function handleTeamRoutes(
   request: Request,
@@ -220,27 +234,139 @@ export async function handleTeamRoutes(
   m = path.match(/^\/scorecard\/([^/]+)\/([^/]+)$/);
   if (m && KNOWN_TEAMS.has(m[1])) return html(scorecardHtml);
   m = path.match(/^\/lookup\/([^/]+)$/);
-  if (m && KNOWN_TEAMS.has(m[1]))
-    return lookupAllowed(request, lookupAllow)
-      ? html(lookupHtml)
-      : new Response(LOOKUP_DENIED_PAGE, {
-          status: 403,
-          headers: { "Content-Type": "text/html; charset=utf-8" },
-        });
+  if (m && KNOWN_TEAMS.has(m[1])) {
+    const access = await resolveAccess(request, db, lookupAllow);
+    return access.privileged ? html(lookupHtml) : deniedPage("lookup", m[1]);
+  }
 
   // Scoring console (index.html port) — batch score-by-call-ID + the §0.3
-  // review queue. Same interim QA-staff gate as /lookup (scoring creates
-  // progression records; per-team RBAC replaces this).
+  // review queue. Privileged (admin|qa): scoring creates progression records.
   m = path.match(/^\/score\/([^/]+)$/);
-  if (m && KNOWN_TEAMS.has(m[1]))
-    return lookupAllowed(request, lookupAllow)
-      ? html(scoringConsoleHtml)
-      : new Response(SCORING_DENIED_PAGE, {
-          status: 403,
-          headers: { "Content-Type": "text/html; charset=utf-8" },
-        });
+  if (m && KNOWN_TEAMS.has(m[1])) {
+    const access = await resolveAccess(request, db, lookupAllow);
+    return access.privileged ? html(scoringConsoleHtml) : deniedPage("score", m[1]);
+  }
+
+  // ── access admin (roles + request inbox) ─────────────────────────────────
+  if (path === "/admin") {
+    const access = await resolveAccess(request, db, lookupAllow);
+    if (access.role !== "admin")
+      return new Response("Admins only.", { status: 403 });
+    return html(adminHtml);
+  }
+  if (path === "/api/admin/overview" && request.method === "GET") {
+    const access = await resolveAccess(request, db, lookupAllow);
+    if (access.role !== "admin") return json({ detail: "Admins only." }, 403);
+    const roles = await db
+      .prepare("SELECT email, role, team_id, granted_by, granted_at, note FROM qa_roles ORDER BY role, email")
+      .all<any>();
+    const requests = await db
+      .prepare("SELECT id, email, page, team_id, note, created_at FROM qa_access_requests WHERE status = 'pending' ORDER BY created_at")
+      .all<any>();
+    return json({ roles: roles.results, requests: requests.results, me: access.email });
+  }
+  if (path === "/api/admin/roles" && request.method === "POST") {
+    const access = await resolveAccess(request, db, lookupAllow);
+    if (access.role !== "admin") return json({ detail: "Admins only." }, 403);
+    let body: any = {};
+    try { body = await request.json(); } catch { return json({ detail: "JSON body required" }, 422); }
+    const email = (body.email ?? "").trim().toLowerCase();
+    if (!email.includes("@")) return json({ detail: "valid email required" }, 422);
+    if (body.action === "remove") {
+      if (email === access.email)
+        return json({ detail: "You can't remove your own admin role (lockout guard)." }, 422);
+      await db.prepare("DELETE FROM qa_roles WHERE email = ?").bind(email).run();
+      return json({ ok: true, removed: email });
+    }
+    const role = body.role;
+    if (!["admin", "qa", "manager", "viewer"].includes(role))
+      return json({ detail: "role must be admin|qa|manager|viewer" }, 422);
+    if (email === access.email && role !== "admin")
+      return json({ detail: "You can't demote your own admin role (lockout guard)." }, 422);
+    await db
+      .prepare(
+        `INSERT INTO qa_roles (email, role, team_id, granted_by, note) VALUES (?,?,?,?,?)
+         ON CONFLICT(email) DO UPDATE SET role=excluded.role, team_id=excluded.team_id,
+           granted_by=excluded.granted_by, granted_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+           note=excluded.note`
+      )
+      .bind(email, role, body.team_id ?? null, access.email, body.note ?? null)
+      .run();
+    return json({ ok: true, email, role });
+  }
+  m = path.match(/^\/api\/admin\/access-requests\/(\d+)$/);
+  if (m && request.method === "POST") {
+    const access = await resolveAccess(request, db, lookupAllow);
+    if (access.role !== "admin") return json({ detail: "Admins only." }, 403);
+    let body: any = {};
+    try { body = await request.json(); } catch { return json({ detail: "JSON body required" }, 422); }
+    const reqRow = await db
+      .prepare("SELECT id, email, page, status FROM qa_access_requests WHERE id = ?")
+      .bind(Number(m[1]))
+      .first<any>();
+    if (!reqRow) return json({ detail: "request not found" }, 404);
+    if (reqRow.status !== "pending") return json({ detail: `already ${reqRow.status}` }, 409);
+    const action = body.action;
+    if (!["approve", "deny"].includes(action))
+      return json({ detail: "action must be approve|deny" }, 422);
+    if (action === "approve") {
+      const role = ["admin", "qa"].includes(body.role) ? body.role : "qa";
+      await db
+        .prepare(
+          `INSERT INTO qa_roles (email, role, granted_by, note) VALUES (?,?,?,?)
+           ON CONFLICT(email) DO UPDATE SET role=excluded.role,
+             granted_by=excluded.granted_by, granted_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+             note=excluded.note`
+        )
+        .bind(reqRow.email, role, access.email, `via access request #${reqRow.id} (${reqRow.page})`)
+        .run();
+    }
+    await db
+      .prepare(
+        "UPDATE qa_access_requests SET status = ?, resolved_by = ?, resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"
+      )
+      .bind(action === "approve" ? "approved" : "denied", access.email, reqRow.id)
+      .run();
+    return json({ ok: true, id: reqRow.id, status: action === "approve" ? "approved" : "denied" });
+  }
+
+  // Self-service access request (any SSO-authenticated employee) — the
+  // denial pages POST here. /admin is the inbox.
+  if (path === "/api/access-request" && request.method === "POST") {
+    const email = accessEmail(request);
+    if (!email) return json({ detail: "No SSO identity on this request." }, 401);
+    let body: any = {};
+    try { body = await request.json(); } catch { return json({ detail: "JSON body required" }, 422); }
+    const page = body.page === "score" ? "score" : "lookup";
+    const pending = await db
+      .prepare(
+        "SELECT id FROM qa_access_requests WHERE email = ? AND page = ? AND status = 'pending' LIMIT 1"
+      )
+      .bind(email, page)
+      .first<any>();
+    if (pending) return json({ ok: true, deduped: true });
+    await db
+      .prepare(
+        "INSERT INTO qa_access_requests (email, page, team_id, note) VALUES (?,?,?,?)"
+      )
+      .bind(email, page, body.team_id ?? null, (body.note ?? "").toString().slice(0, 500) || null)
+      .run();
+    // Slack notification seam — deliberately NOT built yet (the Slack
+    // integration gets its own design pass rather than a rushed webhook).
+    // When it lands: notify the QA admin channel/DM here with the request
+    // row; until then /admin's pending badge is the inbox.
+    return json({ ok: true });
+  }
 
   // ── scoring trigger + status (scoring.ts) ────────────────────────────────
+  // One shared privileged gate for every mutating scoring action — the
+  // pages render buttons by whoami role, but the API is the real wall.
+  const requirePrivileged = async (): Promise<Response | null> => {
+    const access = await resolveAccess(request, db, lookupAllow);
+    return access.privileged
+      ? null
+      : json({ detail: "This action is restricted to QA staff — request access from the Lookup or Scoring page." }, 403);
+  };
   m = path.match(/^\/api\/([^/]+)\/review-queue$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
     const { reviewQueue } = await import("./scoring.js");
@@ -248,13 +374,8 @@ export async function handleTeamRoutes(
   }
   m = path.match(/^\/api\/([^/]+)\/score$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
-    // Both trigger surfaces (/lookup, /score console) sit behind the QA-staff
-    // gate; the API enforces the same line so the pages aren't the only wall.
-    if (!lookupAllowed(request, lookupAllow))
-      return json(
-        { detail: "Scoring is restricted to QA staff pending role-based access." },
-        403
-      );
+    const deny = await requirePrivileged();
+    if (deny) return deny;
     const { scoreTrigger } = await import("./scoring.js");
     return scoreTrigger(request, db, m[1], {
       DIALPAD_API_KEY: dialpadKey,
@@ -264,6 +385,8 @@ export async function handleTeamRoutes(
   }
   m = path.match(/^\/api\/([^/]+)\/score\/([^/]+)\/rescore$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const deny = await requirePrivileged();
+    if (deny) return deny;
     const { rescoreEvaluation } = await import("./scoring.js");
     return rescoreEvaluation(request, db, m[1], decodeURIComponent(m[2]), {
       DIALPAD_API_KEY: dialpadKey,
@@ -273,6 +396,8 @@ export async function handleTeamRoutes(
   }
   m = path.match(/^\/api\/([^/]+)\/score\/([^/]+)\/approve$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const deny = await requirePrivileged();
+    if (deny) return deny;
     const { approveEvaluation } = await import("./scoring.js");
     return approveEvaluation(request, db, m[1], decodeURIComponent(m[2]), {
       editOfFinalized: false,
@@ -281,11 +406,15 @@ export async function handleTeamRoutes(
   }
   m = path.match(/^\/api\/([^/]+)\/score\/([^/]+)\/override$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const deny = await requirePrivileged();
+    if (deny) return deny;
     const { overrideEvaluation } = await import("./scoring.js");
     return overrideEvaluation(request, db, m[1], decodeURIComponent(m[2]), gasUrls);
   }
   m = path.match(/^\/api\/([^/]+)\/datapoints\/([^/]+)\/edit$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const deny = await requirePrivileged();
+    if (deny) return deny;
     const { approveEvaluation } = await import("./scoring.js");
     return approveEvaluation(request, db, m[1], decodeURIComponent(m[2]), {
       editOfFinalized: true,
@@ -294,6 +423,8 @@ export async function handleTeamRoutes(
   }
   m = path.match(/^\/api\/([^/]+)\/score\/([^/]+)$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "DELETE") {
+    const deny = await requirePrivileged();
+    if (deny) return deny;
     const { deleteEvaluation } = await import("./scoring.js");
     return deleteEvaluation(request, db, m[1], decodeURIComponent(m[2]), url);
   }
@@ -342,19 +473,23 @@ export async function handleTeamRoutes(
       503
     );
   m = path.match(/^\/api\/([^/]+)\/whoami$/);
-  if (m && KNOWN_TEAMS.has(m[1]))
-    // QA staff on LOOKUP_ALLOW get privileged-key semantics (Delete etc.
-    // render); everyone else is a team-role viewer. Routes still guard.
+  if (m && KNOWN_TEAMS.has(m[1])) {
+    // Pages render action buttons off `role` (privileged|team — the
+    // Railway contract); rbac_role/email are the richer RBAC identity.
+    const access = await resolveAccess(request, db, lookupAllow);
     return json({
-      role: lookupAllowed(request, lookupAllow) ? "privileged" : "team",
+      role: access.privileged ? "privileged" : "team",
       team_id: m[1],
+      rbac_role: access.role,
+      email: access.email,
     });
+  }
 
   // ── lookup APIs (Dialpad-backed; needs the DIALPAD_API_KEY app secret) ───
   m = path.match(/^\/api\/([^/]+)\/lookup(\/calls|\/recording-link|\/scoring-permission)?$/);
   if (m && KNOWN_TEAMS.has(m[1])) {
-    if (!lookupAllowed(request, lookupAllow))
-      return json({ detail: "Lookup access restricted pending role-based access." }, 403);
+    const deny = await requirePrivileged();
+    if (deny) return deny;
     return lookupRoutes(db, m[1], m[2] ?? "", url, request, dialpadKey);
   }
 
