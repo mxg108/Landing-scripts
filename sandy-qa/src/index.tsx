@@ -179,10 +179,21 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
         return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
       }
       const { cron } = await request.json() as { cron: string; timestamp: string };
-      console.log("[cron] fired", cron, "at", new Date().toISOString());
-      // TODO: add your scheduled logic here. env.DB is available for database access.
-      // Switch on `cron` if you have multiple schedules doing different things.
-      return Response.json({ ok: true });
+      const { runHourlyPump, runDailyMaintenance } = await import("./lib/maintenance.js");
+      let note: string;
+      try {
+        note =
+          cron === "37 9 * * *"
+            ? await runDailyMaintenance(env.DB, request)
+            : await runHourlyPump(env.DB, request); // "7 * * * *" + default
+      } catch (err) {
+        note = JSON.stringify({ error: String((err as any)?.message ?? err).slice(0, 300) });
+      }
+      await env.DB.prepare("INSERT INTO cron_runs (cron, note) VALUES (?, ?)")
+        .bind(cron, note)
+        .run();
+      console.log(`[cron] ${cron}: ${note}`);
+      return Response.json({ ok: true, note });
     }
 
     // POST /api/v1/callbacks/:workflow-name — receives results POSTed back by a Sandy Workflow.
