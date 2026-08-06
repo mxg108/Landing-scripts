@@ -5,7 +5,7 @@
 import { Navbar } from "./brand/Navbar.js";
 import { Footer } from "./brand/Footer.js";
 import { Icon } from "./brand/Icon.js";
-import { EMAIL_TEMPLATES, type CampaignConfig } from "./emailkit.js";
+import { EMAIL_TEMPLATES, entitiesToEmoji, type CampaignConfig } from "./emailkit.js";
 
 // A D1-backed editable email asset (templates table, kind='card'|'disclaimer').
 export interface AssetRow {
@@ -171,9 +171,6 @@ function HomePage({ role, campaigns, roleRequests, flash, error }: AppProps) {
             Member Support · Property Notifications
           </span>
           <h1 className="display-sm" style={{ margin: 0 }}>Mass Notifications</h1>
-          <a href="/edit" className="label-xs" style={{ color: "var(--landing-bright-blue)", textDecoration: "none" }}>
-            ✎ Manage cards &amp; disclaimers
-          </a>
         </div>
 
         {flash && <Banner kind="success">{flash}</Banner>}
@@ -317,21 +314,29 @@ function RecipientsSection({ c, recipients }: { c: CampaignRow; recipients: Reci
                     {r.phone_e164 ?? "—"}
                   </td>
                   <td style={{ padding: "var(--space-2) var(--space-3)" }}>
-                    <form method="POST" action={`/api/recipients/${r.id}`} className="flex items-center gap-1">
-                      <input type="hidden" name="action" value="status" />
+                    {["PENDING", "READY", "REVIEW", ""].includes(r.status) ? (
+                      // One control: a pill-styled select that saves on change.
+                      <form method="POST" action={`/api/recipients/${r.id}`} className="flex items-center gap-1">
+                        <input type="hidden" name="action" value="status" />
+                        <select name="status" data-autosubmit defaultValue={r.status || "PENDING"}
+                          style={{
+                            height: 26, fontSize: "var(--label-xs)", fontWeight: 600,
+                            padding: "0 var(--space-2)", borderRadius: 999,
+                            border: "1px solid transparent", cursor: "pointer",
+                            background: (STATUS_COLORS[r.status || "PENDING"] ?? STATUS_COLORS.PENDING).bg,
+                            color: (STATUS_COLORS[r.status || "PENDING"] ?? STATUS_COLORS.PENDING).text,
+                          }}>
+                          <option value="PENDING">PENDING</option>
+                          <option value="READY">READY</option>
+                          <option value="REVIEW">REVIEW</option>
+                        </select>
+                        <noscript>
+                          <button type="submit" className="btn btn-tertiary btn-sm" style={{ height: 26, padding: "0 8px" }}>Set</button>
+                        </noscript>
+                      </form>
+                    ) : (
                       <StatusChip status={r.status} />
-                      {["PENDING", "READY", "REVIEW", ""].includes(r.status) && (
-                        <>
-                          <select name="status" defaultValue={r.status || "PENDING"} className="ds-input"
-                            style={{ height: 28, fontSize: "var(--label-xs)", padding: "0 var(--space-1)" }}>
-                            <option value="PENDING">PENDING</option>
-                            <option value="READY">READY</option>
-                            <option value="REVIEW">REVIEW</option>
-                          </select>
-                          <button type="submit" className="btn btn-tertiary btn-sm" style={{ height: 28, padding: "0 8px" }}>Set</button>
-                        </>
-                      )}
-                    </form>
+                    )}
                   </td>
                   <td className="body-xs" style={{ padding: "var(--space-2) var(--space-3)", color: r.email_state === "error" ? "var(--status-error-text)" : "var(--text-tertiary)", maxWidth: 200 }}>{r.notes}</td>
                   <td style={{ padding: "var(--space-2) var(--space-3)" }}>
@@ -359,26 +364,46 @@ function ConfigureSection({ c, cfg, cards, disclaimers }: {
 }) {
   const activeCards = cards.filter((a) => a.active);
   const activeDisclaimers = disclaimers.filter((a) => a.active);
+  const subPanel = {
+    border: "1px solid var(--border-secondary)", borderRadius: "var(--radius-sm)",
+    padding: "var(--space-3) var(--space-4)", marginBottom: "var(--space-4)",
+    background: "var(--bg-secondary)",
+  } as const;
   return (
     <SectionCard icon="pencil" title="2 · Configure">
-      {/* Template chips */}
-      <div className="flex gap-2 flex-wrap" style={{ marginBottom: "var(--space-4)" }}>
-        {Object.keys(EMAIL_TEMPLATES).map((name) => (
-          <form key={name} method="POST" action={`/api/campaigns/${c.id}/template`}>
-            <input type="hidden" name="name" value={name} />
-            <button type="submit" className="btn btn-secondary btn-sm">{name}</button>
-          </form>
-        ))}
+      {/* ── Email templates: whole-email starting points ── */}
+      <div style={subPanel}>
+        <div className="flex items-baseline gap-2 flex-wrap" style={{ marginBottom: "var(--space-1)" }}>
+          <span className="label-sm" style={{ color: "var(--landing-blue)" }}>Email templates</span>
+        </div>
+        <p className="body-xs" style={{ color: "var(--text-secondary)", margin: "0 0 var(--space-3)" }}>
+          A template rewrites the <strong>entire email</strong> — subject, banner, card,
+          body copy, and closing — as a ready-made starting point. Load one, then fill in
+          the blanks (manager, dates) and tweak below.
+        </p>
+        <div className="flex gap-2 flex-wrap">
+          {Object.keys(EMAIL_TEMPLATES).map((name) => (
+            <form key={name} method="POST" action={`/api/campaigns/${c.id}/template`}>
+              <input type="hidden" name="name" value={name} />
+              <button type="submit" className="btn btn-secondary btn-sm">{name}</button>
+            </form>
+          ))}
+        </div>
       </div>
 
-      {/* Notification card chiclets — instant apply, no Save needed */}
-      <div style={{ marginBottom: "var(--space-4)" }}>
-        <div className="flex items-baseline gap-2" style={{ marginBottom: "var(--space-2)" }}>
-          <span className="label-xs" style={{ color: "var(--text-secondary)" }}>Notification card</span>
+      {/* ── Notification card: one swappable block inside the email ── */}
+      <div style={subPanel}>
+        <div className="flex items-baseline gap-2 flex-wrap" style={{ marginBottom: "var(--space-1)" }}>
+          <span className="label-sm" style={{ color: "var(--landing-blue)" }}>Notification card</span>
           <a href="/edit" className="label-xs" style={{ color: "var(--landing-bright-blue)", textDecoration: "none" }}>
             ✎ Manage cards &amp; disclaimers
           </a>
         </div>
+        <p className="body-xs" style={{ color: "var(--text-secondary)", margin: "0 0 var(--space-3)" }}>
+          Unlike a template, a card is just <strong>one highlight block</strong> dropped into
+          the middle of your email. Swap or remove it without touching the rest — applies
+          instantly, check the preview below.
+        </p>
         <div className="flex gap-2 flex-wrap">
           <form method="POST" action={`/api/campaigns/${c.id}/config-card`}>
             <input type="hidden" name="card" value="" />
@@ -396,14 +421,10 @@ function ConfigureSection({ c, cfg, cards, disclaimers }: {
             </form>
           ))}
         </div>
-      </div>
-
-      {/* Disclaimer chiclets — instant apply, fills the disclaimer field below */}
-      <div style={{ marginBottom: "var(--space-4)" }}>
-        <span className="label-xs" style={{ color: "var(--text-secondary)", display: "block", marginBottom: "var(--space-2)" }}>
-          Disclaimer presets
-        </span>
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap" style={{ marginTop: "var(--space-3)" }}>
+          <span className="label-xs" style={{ color: "var(--text-secondary)", alignSelf: "center" }}>
+            Disclaimer presets:
+          </span>
           {activeDisclaimers.map((a) => (
             <form key={a.id} method="POST" action={`/api/campaigns/${c.id}/config-disclaimer`}>
               <input type="hidden" name="template_id" value={a.id} />
@@ -701,8 +722,8 @@ function EditorPage({ editorKind, editing, editorPreviewHtml, flash, error }: Ap
                   <Field label="Accent color">
                     <input type="text" name="accent" defaultValue={cfg.accent ?? "#1A61D9"} className="ds-input" style={inputStyle} />
                   </Field>
-                  <Field label="Icon (HTML entity, e.g. &amp;#x1F525;)">
-                    <input type="text" name="icon" defaultValue={cfg.icon ?? ""} className="ds-input" style={inputStyle} />
+                  <Field label="Icon (type or paste an emoji — stored Gmail-safe automatically)">
+                    <input type="text" name="icon" defaultValue={entitiesToEmoji(cfg.icon ?? "")} className="ds-input" style={inputStyle} />
                   </Field>
                 </div>
                 <Field label="Body HTML ({{tokens}} supported; inline styles only — Gmail strips <style> blocks)">
@@ -792,9 +813,11 @@ function CampaignPage(props: AppProps) {
 }
 
 export default function App(props: AppProps) {
+  const active = props.page === "edit" || props.page === "editor" ? "edit" : "campaigns";
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: "var(--bg-secondary)" }}>
-      <Navbar />
+    // #E7EFFB — the OG GAS WebApp page background (Landing light blue).
+    <div className="min-h-screen flex flex-col" style={{ background: "#E7EFFB" }}>
+      <Navbar userEmail={props.role ? props.user.email : undefined} active={active} />
       {props.page === "access" ? <AccessPage user={props.user} role={props.role} />
         : props.page === "campaign" ? <CampaignPage {...props} />
         : props.page === "edit" ? <EditListPage {...props} />

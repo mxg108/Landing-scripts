@@ -54,6 +54,25 @@ export function renderTokens(
   );
 }
 
+// Card icons: operators type/paste a plain emoji; we store HTML hex entities
+// (Gmail-safe, matches the legacy GAS convention of escaping non-ASCII).
+export function emojiToEntities(s: string): string {
+  const trimmed = String(s ?? "").trim();
+  if (!trimmed) return "";
+  if (/^(&#x?[0-9a-fA-F]+;\s*)+$/.test(trimmed)) return trimmed.replace(/\s+/g, "");
+  return Array.from(trimmed).map((ch) => {
+    const cp = ch.codePointAt(0)!;
+    return cp > 127 ? `&#x${cp.toString(16).toUpperCase()};` : ch;
+  }).join("");
+}
+
+// Inverse — show the emoji back in the editor field.
+export function entitiesToEmoji(s: string): string {
+  return String(s ?? "")
+    .replace(/&#x([0-9a-fA-F]+);/g, (_m, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_m, dec) => String.fromCodePoint(parseInt(dec, 10)));
+}
+
 export function normalizeTelLinks(html: string): string {
   if (!html) return "";
   let out = String(html);

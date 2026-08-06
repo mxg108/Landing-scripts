@@ -18,7 +18,7 @@ import { serveFont } from "./design-system/fonts.js";
 import {
   parseConfig, composeBodyTemplate, buildGlobalTokens, buildRecipientTokens,
   renderTokens, renderCard, applyTemplate, validateForDispatch, CONFIG_DEFAULTS,
-  SEED_CARDS, SEED_DISCLAIMERS, formatToday,
+  SEED_CARDS, SEED_DISCLAIMERS, formatToday, emojiToEntities,
   type CampaignConfig, type CardDef,
 } from "./emailkit.js";
 import type { AssetRow } from "./App.js";
@@ -591,7 +591,8 @@ export default {
           key,
           label: form.get("label")?.toString().trim() || key,
           accent: form.get("accent")?.toString().trim() || "#1A61D9",
-          icon: form.get("icon")?.toString().trim() || "",
+          // Operators paste a plain emoji; store as Gmail-safe hex entities.
+          icon: emojiToEntities(form.get("icon")?.toString() ?? ""),
           title: form.get("title")?.toString().trim() || key,
           body_html: form.get("body_html")?.toString() ?? "",
         };
@@ -706,8 +707,29 @@ export default {
   },
 };
 
+// Injected on every page:
+//  - strips flash/error params after render so banners can't go stale on
+//    refresh or SSE-triggered reloads (keeps other params like ?preview)
+//  - binds data-autosubmit selects (recipient status pills) to save on change
+const BASE_SCRIPT = `
+(function(){
+  try {
+    var u = new URL(location.href);
+    if (u.searchParams.has("flash") || u.searchParams.has("error")) {
+      u.searchParams.delete("flash"); u.searchParams.delete("error");
+      var q = u.searchParams.toString();
+      history.replaceState(null, "", u.pathname + (q ? "?" + q : ""));
+    }
+  } catch(e){}
+  var sels = document.querySelectorAll("select[data-autosubmit]");
+  for (var i = 0; i < sels.length; i++) {
+    (function(s){ s.addEventListener("change", function(){ if (s.form) s.form.submit(); }); })(sels[i]);
+  }
+})();`;
+
 function renderPage(props: AppProps, extraScript?: string): Response {
   const appHtml = renderToString(<App {...props} />);
+  const script = BASE_SCRIPT + (extraScript ? `\n${extraScript}` : "");
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -717,7 +739,8 @@ function renderPage(props: AppProps, extraScript?: string): Response {
   <style>${styles}</style>
 </head>
 <body>
-  <div id="root">${appHtml}</div>${extraScript ? `\n  <script>${extraScript}</script>` : ""}
+  <div id="root">${appHtml}</div>
+  <script>${script}</script>
 </body>
 </html>`;
   return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });

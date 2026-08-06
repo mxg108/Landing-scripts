@@ -23,6 +23,15 @@ fetch workflow `ffaa18b1-92a6-4eef-8219-c85c950c9068`.
 
 ## Change Log
 
+> v0.7 : 2026-08-06
+- Frontend polish (operator feedback): custom navy app header + slim footer
+  (no stock marketing dead links), OG GAS WebApp background (#E7EFFB);
+  flash banners auto-clear from the URL (no stale "Fetch queued");
+  recipient status is one pill-styled auto-saving select (duplicate chip +
+  cramped Set button gone); Configure gains labeled Templates vs Card
+  sub-panels with layman explanations; /edit icon field accepts plain
+  emoji and stores Gmail-safe hex entities (round-trips back as emoji).
+
 > v0.6 : 2026-08-06
 - Editable email assets: cards + disclaimers live in D1 (templates table,
   seeded from emailkit SEED_* on first run), managed at **/edit** (list,
