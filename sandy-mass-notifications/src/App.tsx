@@ -50,6 +50,7 @@ export interface AppProps {
   editorKind?: "card" | "disclaimer";
   editing?: AssetRow;
   editorPreviewHtml?: string;
+  generating?: boolean;
   config?: CampaignConfig;
   previewHtml?: string;
   previewSubject?: string;
@@ -696,7 +697,16 @@ function EditListPage({ cards, disclaimers, flash, error }: AppProps) {
   );
 }
 
-function EditorPage({ editorKind, editing, editorPreviewHtml, flash, error }: AppProps) {
+const ACCENT_SWATCHES: { name: string; hex: string }[] = [
+  { name: "Accent blue", hex: "#1A61D9" },
+  { name: "Dark navy", hex: "#15192D" },
+  { name: "Amber", hex: "#E8A317" },
+  { name: "Orange", hex: "#D4600A" },
+  { name: "Red", hex: "#D9534F" },
+  { name: "Green", hex: "#28A745" },
+];
+
+function EditorPage({ editorKind, editing, editorPreviewHtml, generating, flash, error }: AppProps) {
   const isCard = editorKind === "card";
   const cfg = editing?.config ?? {};
   return (
@@ -731,13 +741,56 @@ function EditorPage({ editorKind, editing, editorPreviewHtml, flash, error }: Ap
                   <Field label="Card title (header bar)">
                     <input type="text" name="title" defaultValue={cfg.title ?? ""} className="ds-input" style={inputStyle} />
                   </Field>
-                  <Field label="Accent color">
-                    <input type="text" name="accent" defaultValue={cfg.accent ?? "#1A61D9"} className="ds-input" style={inputStyle} />
-                  </Field>
                   <Field label="Icon (type or paste an emoji — stored Gmail-safe automatically)">
                     <input type="text" name="icon" defaultValue={entitiesToEmoji(cfg.icon ?? "")} className="ds-input" style={inputStyle} />
                   </Field>
                 </div>
+                <div>
+                  <span className="label-xs" style={{ color: "var(--text-secondary)", display: "block", marginBottom: 2 }}>
+                    Accent color (border &amp; header bar)
+                  </span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <input type="color" name="accent" defaultValue={/^#[0-9a-fA-F]{6}$/.test(cfg.accent ?? "") ? cfg.accent : "#1A61D9"}
+                      style={{ width: 56, height: 36, padding: 2, border: "1px solid var(--border-secondary)", borderRadius: "var(--radius-sm)", background: "#fff", cursor: "pointer" }} />
+                    {ACCENT_SWATCHES.map((s) => (
+                      <button key={s.hex} type="button" data-set-accent={s.hex} title={`${s.name} ${s.hex}`}
+                        style={{
+                          width: 28, height: 28, borderRadius: "50%", background: s.hex,
+                          border: "2px solid #fff", boxShadow: "0 0 0 1px var(--border-secondary)", cursor: "pointer",
+                        }} />
+                    ))}
+                    <span className="body-xs" style={{ color: "var(--text-tertiary)" }}>
+                      pick any color, or tap a Landing palette swatch
+                    </span>
+                  </div>
+                </div>
+                {editing ? (
+                  <div style={{
+                    border: "1px dashed var(--landing-bright-blue)", borderRadius: "var(--radius-sm)",
+                    padding: "var(--space-3) var(--space-4)",
+                  }}>
+                    <span className="label-xs" style={{ color: "var(--landing-blue)", display: "block", marginBottom: 2 }}>
+                      ✨ Describe your notification card (optional)
+                    </span>
+                    <p className="body-xs" style={{ color: "var(--text-secondary)", margin: "0 0 var(--space-2)" }}>
+                      Say what the card should tell residents — AI (Haiku) drafts the row HTML
+                      straight into Body HTML below. Review, tweak, then Save.
+                    </p>
+                    <div className="flex gap-2 flex-wrap items-start">
+                      <textarea name="description" form="gen-form" rows={2}
+                        placeholder="e.g. Pool closed for resurfacing during the window; residents should use the north pool; contact the office with questions"
+                        className="ds-input" style={{ flex: 1, minWidth: 240, fontSize: "var(--label-xs)" }} />
+                      <button type="submit" form="gen-form" className="btn btn-secondary btn-sm" disabled={generating}>
+                        {generating ? "Generating…" : "Generate with AI"}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="body-xs" style={{ color: "var(--text-tertiary)", margin: 0 }}>
+                    💡 Save the card first — then a "describe your card" AI helper appears here
+                    to draft the Body HTML for you.
+                  </p>
+                )}
                 <Field label="Body HTML ({{tokens}} supported; inline styles only — Gmail strips <style> blocks)">
                   <textarea name="body_html" rows={10} defaultValue={cfg.body_html ?? ""} className="ds-input font-mono" style={{ fontSize: "var(--label-xs)" }} />
                 </Field>
@@ -761,6 +814,10 @@ function EditorPage({ editorKind, editing, editorPreviewHtml, flash, error }: Ap
               <button type="submit" className="btn btn-primary btn-sm">Save</button>
             </div>
           </form>
+          {/* External form target for the AI describe field (forms can't nest). */}
+          {isCard && editing && (
+            <form id="gen-form" method="POST" action={`/api/edit/card/${editing.id}/generate`} />
+          )}
         </SectionCard>
 
         {editing && (

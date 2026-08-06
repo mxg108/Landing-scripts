@@ -208,6 +208,24 @@ export default {
         .where(eq(workflowRuns.run_id, body.run_id));
 
       const now = new Date().toISOString();
+
+      // Card generation: write the AI HTML into the card row and finish.
+      const cardBody = body as unknown as { kind?: string; card_id?: string; card_body_html?: string };
+      if (cardBody.kind === "card_gen" && cardBody.card_id) {
+        if (body.status === "complete" && cardBody.card_body_html) {
+          const row = (await db.select().from(templates).where(eq(templates.id, cardBody.card_id)).limit(1))[0];
+          if (row) {
+            let cfgJson: Record<string, string> = {};
+            try { cfgJson = JSON.parse(row.config_json); } catch { /* keep empty */ }
+            cfgJson.body_html = cardBody.card_body_html;
+            await db.update(templates)
+              .set({ config_json: JSON.stringify(cfgJson), updated_by: "ai-generate", updated_at: now })
+              .where(eq(templates.id, cardBody.card_id));
+          }
+        }
+        return Response.json({ ok: true });
+      }
+
       const results = body.results ?? [];
       const okCount = results.filter((r) => r.ok).length;
 
@@ -654,16 +672,74 @@ export default {
           ? renderTokens(renderCard(editing.config as unknown as CardDef), sample, true)
           : renderTokens(String(editing.config.html ?? ""), sample, true);
       }
+      // While AI generation runs, poll the card's updated_at and reload when
+      // the workflow callback lands the new body_html.
+      const generating = url.searchParams.get("generating") === "1" && editing && kind === "card";
+      const genScript = generating ? `
+(function(){
+  var initial = ${JSON.stringify(editing!.updated_at ?? "")};
+  var tries = 0;
+  var timer = setInterval(function(){
+    if (++tries > 45) { clearInterval(timer); return; }
+    fetch("/api/edit/card/${editing!.id}/state").then(function(r){ return r.json(); }).then(function(d){
+      if (d.updated_at && d.updated_at !== initial) {
+        clearInterval(timer);
+        location.replace(location.pathname + "?flash=AI+draft+loaded+into+Body+HTML+—+review+and+Save");
+      }
+    }).catch(function(){});
+  }, 2000);
+})();` : undefined;
       return renderPage({
         page: "editor", user, role,
         campaigns: [], recipients: [], roleRequests: [], runs: [],
         cards, disclaimers,
         editorKind: kind as "card" | "disclaimer",
         editing, editorPreviewHtml,
+        generating: !!generating,
         flash: url.searchParams.get("flash") ?? undefined,
         error: url.searchParams.get("error") ?? undefined,
-      });
+      }, genScript);
     }
+    // ── AI card generation: describe → Haiku → body_html on the saved card ───
+    const genMatch = url.pathname.match(/^\/api\/edit\/card\/([0-9a-f-]{36})\/generate$/);
+    if (genMatch && request.method === "POST") {
+      const cardId = genMatch[1];
+      const form = await request.formData();
+      const description = form.get("description")?.toString().trim() ?? "";
+      const row = (await db.select().from(templates).where(eq(templates.id, cardId)).limit(1))[0];
+      if (!row) return Response.redirect(new URL("/edit?error=Card+not+found", request.url).toString(), 303);
+      if (description.length < 10) {
+        return Response.redirect(new URL(`/edit/card/${cardId}?error=Describe+the+card+in+a+sentence+or+two`, request.url).toString(), 303);
+      }
+      let cardCfg: Record<string, string> = {};
+      try { cardCfg = JSON.parse(row.config_json); } catch { /* empty */ }
+      const wfId = (await db.select().from(appConfig).where(eq(appConfig.key, "dispatch_workflow_id")).limit(1))[0]?.value
+        ?? DISPATCH_WORKFLOW_ID;
+      try {
+        const run = await triggerWorkflowWithCallback(wfId, DISPATCH_WORKFLOW_NAME, request, {
+          kind: "card_gen",
+          card_gen: { card_id: cardId, title: cardCfg.title || row.name, description },
+        });
+        await db.insert(workflowRuns).values({
+          run_id: run.id, workflow_name: DISPATCH_WORKFLOW_NAME,
+          status: "pending", created_at: new Date().toISOString(),
+        });
+        return Response.redirect(
+          new URL(`/edit/card/${cardId}?generating=1&flash=Generating+card+HTML+with+AI…`, request.url).toString(), 303);
+      } catch (e: any) {
+        return Response.redirect(
+          new URL(`/edit/card/${cardId}?error=${encodeURIComponent(e?.message ?? String(e))}`, request.url).toString(), 303);
+      }
+    }
+
+    // Poll target for the editor while generation runs.
+    const stateMatch = url.pathname.match(/^\/api\/edit\/card\/([0-9a-f-]{36})\/state$/);
+    if (stateMatch && request.method === "GET") {
+      const row = (await db.select({ updated_at: templates.updated_at, updated_by: templates.updated_by })
+        .from(templates).where(eq(templates.id, stateMatch[1])).limit(1))[0];
+      return Response.json({ ok: true, updated_at: row?.updated_at ?? null, updated_by: row?.updated_by ?? null });
+    }
+
     const editApiMatch = url.pathname.match(/^\/api\/edit\/(card|disclaimer)$/);
     if (editApiMatch && request.method === "POST") {
       const kind = editApiMatch[1];
@@ -821,6 +897,13 @@ const BASE_SCRIPT = `
   var sels = document.querySelectorAll("[data-autosubmit]");
   for (var i = 0; i < sels.length; i++) {
     (function(s){ s.addEventListener("change", function(){ if (s.form) s.form.submit(); }); })(sels[i]);
+  }
+  var swatches = document.querySelectorAll("[data-set-accent]");
+  for (var j = 0; j < swatches.length; j++) {
+    (function(b){ b.addEventListener("click", function(){
+      var input = document.querySelector("input[name=accent]");
+      if (input) input.value = b.getAttribute("data-set-accent");
+    }); })(swatches[j]);
   }
 })();`;
 

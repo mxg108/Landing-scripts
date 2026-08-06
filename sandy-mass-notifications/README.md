@@ -23,6 +23,14 @@ fetch workflow `ffaa18b1-92a6-4eef-8219-c85c950c9068`.
 
 ## Change Log
 
+> v0.9 : 2026-08-06
+- Card editor upgrades: native color picker + Landing palette swatches for
+  the accent field; "Describe your notification card" AI helper — Haiku
+  (claude-haiku-4-5, via workflow kind card_gen) drafts the row HTML straight
+  into Body HTML on saved cards, editor polls and reloads when it lands.
+  E2E: elevator-maintenance description → 1.7k chars of correctly patterned
+  rows with {{property_name}}/{{date_range}} tokens.
+
 > v0.8 : 2026-08-06
 - P3 SMS companion (OpsVP): dispatch workflow v0.2 adds an SMS phase — one
   AI summary per campaign (AI Gateway, ≤320 chars, length-guarded, sentence

@@ -279,17 +279,68 @@ async function sendCallback(callbackUrl, payload, sandySecrets) {
 
 // ── Workflow ─────────────────────────────────────────────────────────────────
 
-const KINDS = ["send", "dryrun", "test", "sms_preview", "sms_test", "sms_only"];
+const KINDS = ["send", "dryrun", "test", "sms_preview", "sms_test", "sms_only", "card_gen"];
+
+// ── Card generation (editor "describe your card" feature) ────────────────────
+// Pinned to Haiku for cheap, fast HTML transforms; falls back to the gateway's
+// dynamic route if the pinned slug is rejected.
+
+const CARD_GEN_MODEL = "anthropic/claude-haiku-4-5-20251001";
+
+async function aiGenerateCardHtml(title, description, secrets) {
+  const token = secrets?.AI_GATEWAY_TOKEN;
+  if (!token) throw new Error("AI_GATEWAY_TOKEN secret missing");
+  const system =
+    "You generate the inner body HTML for a Landing resident notification card " +
+    "(an email component). Output ONLY raw HTML — no markdown fences, no commentary. " +
+    "Constraints: email-safe HTML with ALL styles inline (Gmail strips <style> blocks). " +
+    "Compose 2–4 key/value rows, each following EXACTLY this pattern: " +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:6px;">' +
+    '<tr><td style="font-size:12px;color:#4A4A4A;text-transform:uppercase;letter-spacing:0.5px;' +
+    'width:38%;vertical-align:top;padding-right:8px;">LABEL</td>' +
+    '<td style="font-size:14px;font-weight:bold;color:#15192D;vertical-align:top;">VALUE</td></tr></table> ' +
+    "Row order: a Property row first with value {{property_name}}; a timing row with " +
+    "{{date_range}} (scheduled windows) or {{today}} (live incidents) when relevant; then " +
+    "1–2 guidance rows telling residents what to expect or do. You may use these tokens, " +
+    "substituted later: {{property_name}}, {{event_name}}, {{date_range}}, {{today}}, " +
+    "{{manager_name}}. Use <strong> for emphasis inside values. Do NOT include the outer " +
+    "card shell (border, colored header) — only the inner rows.";
+  const call = async (model) => {
+    const res = await fetch(AI_GATEWAY, {
+      method: "POST",
+      headers: { "cf-aig-authorization": token, "content-type": "application/json" },
+      body: JSON.stringify({
+        model, max_tokens: 1000, temperature: 0.4,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: `Card title: ${title}\n\nDescribe the card to generate:\n${description}` },
+        ],
+      }),
+      signal: AbortSignal.timeout(120000),
+    });
+    if (!res.ok) throw new Error(`AI Gateway ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    return ((await res.json()).choices?.[0]?.message?.content ?? "").trim();
+  };
+  let out;
+  try { out = await call(CARD_GEN_MODEL); }
+  catch { out = await call(AI_MODEL); } // fallback: dynamic route
+  // Strip markdown fences if the model wrapped its output anyway.
+  return out.replace(/^```(?:html)?\s*/i, "").replace(/\s*```$/, "").trim();
+}
 
 export class TenantWorkflow extends WorkflowEntrypoint {
   async run(event, step) {
-    const { campaign_id, app_run_id, kind, config, recipients, sms, callback_url, callback_token } = event.payload || {};
+    const { campaign_id, app_run_id, kind, config, recipients, sms, card_gen, callback_url, callback_token } = event.payload || {};
     const secrets = event.payload?._sandySecrets || {};
 
     try {
       await step.do("validate-inputs", async () => {
         if (!callback_url) throw new Error("callback_url is required");
         if (!KINDS.includes(kind)) throw new Error(`bad kind: ${kind}`);
+        if (kind === "card_gen") {
+          if (!card_gen?.card_id || !card_gen?.description) throw new Error("card_gen.card_id and description required");
+          return { ok: true };
+        }
         if (!config?.subjectTemplate || !config?.bodyTemplate) throw new Error("config templates missing");
         const isEmailKind = ["send", "dryrun", "test"].includes(kind);
         if (isEmailKind && (!secrets.MN_DISPATCH_URL || !secrets.MN_DISPATCH_SECRET)) {
@@ -301,6 +352,29 @@ export class TenantWorkflow extends WorkflowEntrypoint {
         if (kind === "sms_test" && !sms?.test_number) throw new Error("sms.test_number is required");
         return { ok: true };
       });
+
+      // ── Card generation (standalone kind — no email/SMS phases) ───────────
+      if (kind === "card_gen") {
+        const bodyHtml = await step.do(
+          "generate-card-html",
+          { retries: { limit: 2, delay: "10 seconds", backoff: "exponential" } },
+          async () => aiGenerateCardHtml(card_gen.title || "Notification", card_gen.description, secrets)
+        );
+        await step.do(
+          "send-callback",
+          { retries: { limit: 2, delay: "30 seconds", backoff: "linear" } },
+          async () => sendCallback(callback_url, {
+            run_id: event.instanceId,
+            callback_token, campaign_id: null, app_run_id: null, kind,
+            status: "complete",
+            card_id: card_gen.card_id,
+            card_body_html: bodyHtml,
+            results: [], sms_text: null, sms_truncated: false, sms_results: [], sms_warning: null,
+            quota_remaining: null, error: null,
+          }, secrets)
+        );
+        return { ok: true, generated_chars: bodyHtml.length };
+      }
 
       // ── Email phase ────────────────────────────────────────────────────────
       const results = [];
