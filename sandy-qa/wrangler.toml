@@ -50,9 +50,9 @@ database_id = "local-placeholder"
 #   - Day-of-week accepts: * | single value (MON or 1) | range (MON-FRI) | comma list (MON,WED,FRI)
 #   - Cloudflare day names: SUN MON TUE WED THU FRI SAT
 #
-# Uncomment and edit to enable:
-# [triggers]
-# crons = ["0 * * * *"]              # hourly at :00
-# crons = ["30 * * * *"]             # hourly at :30
-# crons = ["0 9 * * MON-FRI"]        # 9:00 AM weekdays
-# crons = ["0 9 * * *", "0 21 * * *"] # 9 AM and 9 PM daily (2 schedules)
+# hourly :07 = scoring-queue pump (recovers wedged queued jobs when no
+# callback/poll is alive to pump); daily 09:37 UTC (early morning LA) =
+# D1 maintenance pruning (workflow_runs, qa_score_queue, qa_events bus,
+# cron_runs history). Handlers: src/lib/maintenance.ts via /_sandy/cron.
+[triggers]
+crons = ["7 * * * *", "37 9 * * *"]
