@@ -44,11 +44,13 @@ One-time deployment, done **while logged in as `member.support@hellolanding.com`
 ## Verify
 
 Apps Script answers `/exec` with a **302 redirect** to `script.googleusercontent.com`
-— a plain `curl` shows a "Moved Temporarily" page. Follow redirects with `-L`
-(or use any redirect-following HTTP client):
+— a plain `curl` shows a "Moved Temporarily" page, so follow redirects with `-L`.
+**Do NOT pass `-X POST`**: it forces POST onto the redirected request too, and the
+googleusercontent echo endpoint only serves GET (you get a Drive "couldn't open
+the file" page). `-d` already makes the first request a POST:
 
 ```bash
-curl -sL -X POST '<EXEC_URL>' -H 'Content-Type: application/json' \
+curl -sL '<EXEC_URL>' -H 'Content-Type: application/json' \
   -d '{"secret":"<SECRET>","mode":"health"}'
 # → {"status":"ok","account":"member.support@hellolanding.com","quotaRemaining":<N>,"version":"mn-dispatcher v1.0.0"}
 ```
