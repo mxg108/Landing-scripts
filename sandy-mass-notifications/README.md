@@ -23,6 +23,14 @@ fetch workflow `ffaa18b1-92a6-4eef-8219-c85c950c9068`.
 
 ## Change Log
 
+> v0.5 : 2026-08-06
+- P2 send pipeline: `emailkit.ts` (token engine with HTML-escape-by-default +
+  {{html:}} escape hatch, body composer, 6 cards, 6 seeded templates — legacy
+  parity), campaign Configure/Preview/Send UI, `mass-notify-dispatch` workflow
+  (batched GAS dispatcher calls, per-recipient results, callback), runs audit
+  with undo, dry-run drafts + test-send. E2E verified: draft created in
+  member.support@ for a real Wayland recipient, D1 states updated end-to-end.
+
 > v0.1 : 2026-08-05
 - P1 recipient pipeline: campaigns CRUD, warehouse fetch via
   `mass-notify-fetch` (Snowflake `LANDING.CORE`, legacy Looker "Active
