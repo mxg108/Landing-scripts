@@ -8,7 +8,7 @@ import App, { type AppProps, type CampaignRow, type RecipientRow, type RoleRow, 
 // @ts-ignore — Vite resolves ?inline to a CSS string at build time
 import styles from "./styles.css?inline";
 import { createDb, campaigns, recipients, roles, runs, workflowRuns, appConfig, templates } from "./db.js";
-import { desc, eq, and, asc } from "drizzle-orm";
+import { desc, eq, and, asc, inArray, isNull } from "drizzle-orm";
 import { triggerWorkflowWithCallback } from "./workflow.js";
 // MCP server disabled in v0.1: the agents/mcp package pulls mimetext's node
 // build (`node:os`), which Sandy's deploy config rejects. Re-enable in P2 with
@@ -35,6 +35,8 @@ const FETCH_WORKFLOW_ID = "ffaa18b1-92a6-4eef-8219-c85c950c9068";
 const FETCH_WORKFLOW_NAME = "mass-notify-fetch";
 const DISPATCH_WORKFLOW_ID = "1afe1706-2986-4ee9-9436-133820030f7b";
 const DISPATCH_WORKFLOW_NAME = "mass-notify-dispatch";
+// PRD D4 — verified Member Support Line. Override via app_config 'sms_from_number'.
+const SMS_FROM_NUMBER = "+14159804986";
 
 interface User { email: string; username: string }
 
@@ -87,6 +89,19 @@ async function loadAssets(db: ReturnType<typeof createDb>) {
   const cardMap: Record<string, CardDef> = {};
   for (const c of cards) if (c.active) cardMap[String(c.config.key)] = c.config as unknown as CardDef;
   return { cards, disclaimers, cardMap };
+}
+
+// Change signature for the SSE watcher: campaign status + SMS preview length
+// + incomplete-run count. Any async completion shifts at least one component.
+async function campaignSig(db: ReturnType<typeof createDb>, cid: string): Promise<string> {
+  const row = (await db.select({
+    status: campaigns.status,
+    sms_preview_text: campaigns.sms_preview_text,
+  }).from(campaigns).where(eq(campaigns.id, cid)).limit(1))[0];
+  if (!row) return "gone";
+  const open = await db.select({ id: runs.id }).from(runs)
+    .where(and(eq(runs.campaign_id, cid), isNull(runs.completed_at)));
+  return `${row.status}|${row.sms_preview_text?.length ?? 0}|${open.length}`;
 }
 
 const SAMPLE_TOKENS: Record<string, string> = {
@@ -183,18 +198,20 @@ export default {
         run_id?: string; status?: string; campaign_id?: string; app_run_id?: string;
         kind?: string; error?: string | null; quota_remaining?: number | null;
         results?: Array<{ id: string; email: string; ok: boolean; error: string | null }>;
+        sms_text?: string | null; sms_truncated?: boolean; sms_warning?: string | null;
+        sms_results?: Array<{ id: string; state: string; error: string | null }>;
       };
       if (!body.run_id) return Response.json({ ok: false, error: "missing run_id" }, { status: 400 });
 
       await db.update(workflowRuns)
-        .set({ status: body.status ?? "error", result: JSON.stringify({ ...body, results: undefined }) })
+        .set({ status: body.status ?? "error", result: JSON.stringify({ ...body, results: undefined, sms_results: undefined }) })
         .where(eq(workflowRuns.run_id, body.run_id));
 
       const now = new Date().toISOString();
       const results = body.results ?? [];
       const okCount = results.filter((r) => r.ok).length;
 
-      // Per-recipient state updates (test uses a synthetic recipient — no rows match).
+      // Per-recipient email state updates (test uses a synthetic recipient — no rows match).
       for (const r of results) {
         if (!r.id || r.id === "test") continue;
         if (r.ok) {
@@ -214,18 +231,41 @@ export default {
         }
       }
 
+      // SMS: cache the summary on the campaign; apply per-recipient states.
+      if (body.campaign_id && body.sms_text) {
+        await db.update(campaigns)
+          .set({ sms_preview_text: body.sms_text, sms_preview_truncated: body.sms_truncated ? 1 : 0 })
+          .where(eq(campaigns.id, body.campaign_id));
+      }
+      for (const s of body.sms_results ?? []) {
+        if (!s.id || s.id === "sms_test") continue;
+        await db.update(recipients)
+          .set({
+            sms_state: s.state,
+            sms_error: s.error ?? null,
+            ...(s.state === "sent" ? { sms_sent_at: now, sms_body: body.sms_text ?? null } : {}),
+          })
+          .where(eq(recipients.id, s.id));
+      }
+
       if (body.app_run_id) {
+        const smsSent = (body.sms_results ?? []).filter((s) => s.state === "sent").length;
+        const emailFailed = results.filter((r) => !r.ok).length;
+        const parts: string[] = [];
+        if (body.status === "error") parts.push(body.error ?? "unknown");
+        if (emailFailed) parts.push(`${emailFailed} email(s) failed`);
+        if (body.sms_warning) parts.push(`warning: ${body.sms_warning}`);
         await db.update(runs)
           .set({
-            count: okCount,
+            count: body.kind === "sms_only" ? smsSent : okCount,
             completed_at: now,
-            error: body.status === "error" ? (body.error ?? "unknown")
-              : results.some((r) => !r.ok) ? `${results.filter((r) => !r.ok).length} failed` : null,
+            error: parts.length ? parts.join("; ") : null,
           })
           .where(eq(runs.id, body.app_run_id));
       }
 
-      if (body.campaign_id) {
+      // Campaign status: email kinds drive it; SMS-only kinds leave it alone.
+      if (body.campaign_id && ["send", "dryrun", "test"].includes(body.kind ?? "")) {
         const newStatus = body.status !== "complete" ? "errored"
           : body.kind === "send" ? "complete" : "ready";
         await db.update(campaigns)
@@ -382,7 +422,10 @@ export default {
       return back(`Disclaimer set: ${d.name}`);
     }
 
-    // ── SSE: live campaign status (replaces refresh-to-see-results) ──────────
+    // ── SSE: live campaign change signal (replaces refresh-to-see-results) ───
+    // Emits a change signature covering status transitions, SMS preview
+    // arrival, and run completions; the page reloads when it differs from the
+    // signature it rendered with.
     if (campaign && action === "/events" && request.method === "GET") {
       const enc = new TextEncoder();
       const stream = new ReadableStream({
@@ -391,10 +434,8 @@ export default {
             controller.enqueue(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
           try {
             for (let i = 0; i < 25; i++) { // ~50s, then EventSource auto-reconnects
-              const row = (await db.select({ status: campaigns.status })
-                .from(campaigns).where(eq(campaigns.id, cid!)).limit(1))[0];
-              send({ status: row?.status ?? "gone" });
-              if (!row || !["fetching", "sending"].includes(row.status)) break;
+              const sig = await campaignSig(db, cid!);
+              send({ sig });
               await new Promise((r) => setTimeout(r, 2000));
             }
           } catch { /* client went away */ }
@@ -410,11 +451,20 @@ export default {
       });
     }
 
-    // ── Dispatch: send / dryrun / test ───────────────────────────────────────
+    // ── SMS enable/disable toggle ────────────────────────────────────────────
+    if (campaign && action === "/sms-toggle" && request.method === "POST") {
+      const form = await request.formData();
+      const enabled = form.get("sms_enabled") === "on" ? 1 : 0;
+      await db.update(campaigns).set({ sms_enabled: enabled }).where(eq(campaigns.id, cid!));
+      return back(enabled ? "SMS companion enabled for this campaign" : "SMS companion disabled");
+    }
+
+    // ── Dispatch: send / dryrun / test / sms_preview / sms_test / sms_only ───
     if (campaign && action === "/dispatch" && request.method === "POST") {
       const form = await request.formData();
       const kind = form.get("kind")?.toString() ?? "";
-      if (!["send", "dryrun", "test"].includes(kind)) return back("Bad dispatch kind", true);
+      const KINDS = ["send", "dryrun", "test", "sms_preview", "sms_test", "sms_only"];
+      if (!KINDS.includes(kind)) return back("Bad dispatch kind", true);
       if (kind === "send" && form.get("confirm") !== "on") {
         return back("Check the confirmation box to send", true);
       }
@@ -425,28 +475,53 @@ export default {
         .orderBy(asc(recipients.unit), asc(recipients.email));
       const eligibleRows = allRows.filter((r) => ELIGIBLE.includes(r.status));
 
-      const errors = validateForDispatch(cfg, campaign.property_name, eligibleRows.length, kind,
-        new Set(Object.keys(cardMap)));
+      // SMS kinds don't need eligible recipients (validate like "test").
+      const isSmsKind = kind.startsWith("sms_");
+      const errors = validateForDispatch(cfg, campaign.property_name, eligibleRows.length,
+        isSmsKind ? "test" : kind, new Set(Object.keys(cardMap)));
       if (errors.length) return back(errors.join(" "), true);
 
+      let testNumber = "";
+      if (kind === "sms_test") {
+        testNumber = (form.get("test_number")?.toString() ?? "").replace(/[^\d+]/g, "");
+        if (!/^\+\d{8,15}$/.test(testNumber)) {
+          return back("Test SMS needs a number in E.164 form, e.g. +15551234567", true);
+        }
+      }
+
+      // Target selection per kind.
       const limit = kind === "dryrun" ? cfg.dry_run_limit : cfg.max_per_run;
-      const targets = eligibleRows.slice(0, limit);
+      let targets: typeof allRows = [];
+      if (kind === "sms_only") {
+        targets = allRows.filter((r) =>
+          r.status === "SENT" && r.phone_e164 && !["sent", "skipped_optout"].includes(r.sms_state));
+        if (targets.length === 0) return back("No emailed recipients pending SMS", true);
+      } else if (!isSmsKind) {
+        targets = eligibleRows.slice(0, limit);
+      }
+
       const globals = buildGlobalTokens(campaign.property_name, campaign.event_name, cfg);
       const configAttachmentIds = parseIdList(cfg.attachment_file_ids);
-
+      const toWfRecipient = (r: typeof allRows[number]) => ({
+        id: r.id, email: r.email, name: r.name, unit: r.unit,
+        attachmentIds: parseIdList(r.attach_ids_json ?? ""),
+        phone_e164: r.phone_e164, segment_timezone: r.segment_timezone,
+      });
       const wfRecipients = kind === "test"
         ? [{
             id: "test", email: user.email,
             name: targets[0]?.name || "Resident Test",
             unit: targets[0]?.unit || "101",
-            attachmentIds: [],
+            attachmentIds: [] as string[], phone_e164: null, segment_timezone: null,
           }]
-        : targets.map((r) => ({
-            id: r.id, email: r.email, name: r.name, unit: r.unit,
-            attachmentIds: parseIdList(r.attach_ids_json ?? ""),
-          }));
+        : targets.map(toWfRecipient);
 
-      const appRunId = crypto.randomUUID();
+      const smsEnabled = campaign.sms_enabled === 1;
+      const smsFrom = (await db.select().from(appConfig).where(eq(appConfig.key, "sms_from_number")).limit(1))[0]?.value
+        ?? SMS_FROM_NUMBER;
+
+      const auditedKinds: Record<string, string> = { send: "send", dryrun: "dryrun", test: "test", sms_only: "sms" };
+      const appRunId = auditedKinds[kind] ? crypto.randomUUID() : null;
       const rowStates = kind === "send"
         ? targets.map((r) => ({ id: r.id, prevStatus: r.status }))
         : null;
@@ -469,22 +544,42 @@ export default {
             configAttachmentIds,
           },
           recipients: wfRecipients,
+          sms: {
+            enabled: smsEnabled,
+            from_number: smsFrom,
+            quiet_start: 8, quiet_end: 21,
+            ...(testNumber ? { test_number: testNumber } : {}),
+          },
         });
-        await db.insert(runs).values({
-          id: appRunId, campaign_id: cid!, kind, actor: user.email,
-          count: 0, row_states_json: rowStates ? JSON.stringify(rowStates) : null,
-          started_at: new Date().toISOString(),
-        });
+        if (appRunId) {
+          await db.insert(runs).values({
+            id: appRunId, campaign_id: cid!, kind: auditedKinds[kind], actor: user.email,
+            count: 0, row_states_json: rowStates ? JSON.stringify(rowStates) : null,
+            started_at: new Date().toISOString(),
+          });
+        }
         await db.insert(workflowRuns).values({
           run_id: run.id, workflow_name: DISPATCH_WORKFLOW_NAME,
           status: "pending", created_at: new Date().toISOString(),
         });
         if (kind === "send") {
           await db.update(campaigns).set({ status: "sending" }).where(eq(campaigns.id, cid!));
+          if (smsEnabled) {
+            // Live-feedback: mark targets with a phone as queued; callback finalizes.
+            const phoneIds = targets.filter((r) => r.phone_e164).map((r) => r.id);
+            for (let i = 0; i < phoneIds.length; i += 90) {
+              await db.update(recipients).set({ sms_state: "queued" })
+                .where(inArray(recipients.id, phoneIds.slice(i, i + 90)));
+            }
+          }
         }
-        const label = kind === "send" ? `Sending to ${wfRecipients.length} recipients`
+        const label =
+          kind === "send" ? `Sending to ${wfRecipients.length} recipients${smsEnabled ? " (email + SMS)" : ""}`
           : kind === "dryrun" ? `Creating ${wfRecipients.length} drafts in member.support@`
-          : `Test email queued to ${user.email}`;
+          : kind === "test" ? `Test email queued to ${user.email}`
+          : kind === "sms_preview" ? "Generating SMS preview"
+          : kind === "sms_test" ? `Test SMS queued to ${testNumber}`
+          : `SMS queued for ${wfRecipients.length} recipients`;
         return back(`${label} — results will appear here automatically`);
       } catch (e: any) {
         return back(e?.message ?? String(e), true);
@@ -660,23 +755,25 @@ export default {
       const previewHtml = renderTokens(composeBodyTemplate(cfg, cardMap), tokens, true);
       const previewSubject = renderTokens(cfg.subject_template, tokens, false);
 
-      // Live status watcher: SSE while fetching/sending, reload on transition.
-      const watchScript = ["fetching", "sending"].includes(campaign.status) ? `
+      // Live watcher: reload when the campaign's change signature moves
+      // (status transitions, SMS preview arrival, run completions).
+      const initialSig = await campaignSig(db, cid!);
+      const watchScript = `
 (function(){
   if (!window.EventSource) return;
-  var initial = ${JSON.stringify(campaign.status)};
+  var initial = ${JSON.stringify(initialSig)};
   function watch(){
     var es = new EventSource(location.pathname.replace(/\\/$/, "") + "/events");
     es.onmessage = function(ev){
       try {
         var d = JSON.parse(ev.data);
-        if (d.status && d.status !== initial) { es.close(); location.reload(); }
+        if (d.sig && d.sig !== initial) { es.close(); location.reload(); }
       } catch(e){}
     };
     es.onerror = function(){ es.close(); setTimeout(watch, 3000); };
   }
   watch();
-})();` : undefined;
+})();`;
 
       return renderPage({
         page: "campaign", user, role,
@@ -721,7 +818,7 @@ const BASE_SCRIPT = `
       history.replaceState(null, "", u.pathname + (q ? "?" + q : ""));
     }
   } catch(e){}
-  var sels = document.querySelectorAll("select[data-autosubmit]");
+  var sels = document.querySelectorAll("[data-autosubmit]");
   for (var i = 0; i < sels.length; i++) {
     (function(s){ s.addEventListener("change", function(){ if (s.form) s.form.submit(); }); })(sels[i]);
   }

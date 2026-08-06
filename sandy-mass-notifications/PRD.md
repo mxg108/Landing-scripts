@@ -198,7 +198,7 @@ Same pattern as qa-scoring v0.22 (live, smoke-tested): a minimal Apps Script Web
 
 ### 6.4 Dialpad SMS
 
-`POST api.dialpad.com/v2/sms` from the workflow, `DIALPAD_API_KEY` secret, **from +1 (415) 980-4986** (verified Member Support Line, D4). Sent per member after that member's email send succeeds. Quiet hours: queue by `MS_TIMEZONE` (no SMS outside 08:00–21:00 local; configurable). Members with `text_notifications_enabled = false` (GraphQL `User`) are skipped and audited as `skipped_optout`.
+`POST dialpad.com/api/v2/sms` from the workflow, `DIALPAD_API_KEY` secret, **from +1 (415) 980-4986** (verified Member Support Line, D4). Sent per member after that member's email send succeeds. Quiet hours (as built, v0.8): no SMS outside 08:00–21:00 local (`MS_TIMEZONE`, Rails→IANA mapped) — members outside the window are **marked `skipped_quiet_hours` and re-sent via the one-click "Send SMS to N emailed recipients" action** rather than scheduled (v1 simplification; timed scheduling can come later). Members with `text_notifications_enabled = false` (GraphQL `User`) are skipped as `skipped_optout`; a lookup failure degrades to sending with an audited warning (parity: the manual Hub-Manager process had no opt-out check). One AI summary per campaign (not per member); operator can preview/regenerate it and test-send to their own number before anything goes to members.
 
 ### 6.5 AI calls — Cloudflare AI Gateway
 

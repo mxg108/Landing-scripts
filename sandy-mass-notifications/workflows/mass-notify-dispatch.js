@@ -1,53 +1,63 @@
 /**
- * mass-notify-dispatch — Sandy Workflow
+ * mass-notify-dispatch — Sandy Workflow (v0.2: email + SMS companion)
  *
- * Email send pipeline for the mass-notifications app. Receives a composed
- * body/subject template (tokens intact) plus per-recipient token data,
- * renders each message, and dispatches through the GAS mail dispatcher
- * deployed under member.support@hellolanding.com (payload mode, batches of
- * up to 10 messages per call). Reports per-recipient results via callback.
+ * Email send pipeline for the mass-notifications app, plus the P3 SMS
+ * companion (OpsVP): one AI-summarized version of the email body per
+ * campaign, sent to each member via Dialpad SMS from the Member Support
+ * line. Reports per-recipient results via callback.
  *
- * ── Required secrets (per-workflow, already set) ─────────────────────────────
- *   MN_DISPATCH_URL      GAS dispatcher /exec URL
+ * ── Required secrets (per-workflow / org) ────────────────────────────────────
+ *   MN_DISPATCH_URL      GAS dispatcher /exec URL (member.support@)
  *   MN_DISPATCH_SECRET   shared secret (DISPATCH_SECRET script property)
+ *   DIALPAD_API_KEY      Dialpad write key — SMS sends
+ *   AI_GATEWAY_TOKEN     org-level global — Cloudflare AI Gateway
+ *   LANDING_API_GRAPHQL_KEY  org-level global — opt-out lookup (users)
  *
  * ── Trigger payload ──────────────────────────────────────────────────────────
  *   {
- *     campaign_id: string,
- *     app_run_id:  string,             // app D1 runs.id for audit correlation
- *     kind: "send" | "dryrun" | "test",
+ *     campaign_id, app_run_id, callback_url, callback_token,
+ *     kind: "send" | "dryrun" | "test" | "sms_preview" | "sms_test" | "sms_only",
  *     config: {
- *       subjectTemplate: string,       // {{tokens}} intact
- *       bodyTemplate:    string,       // composed HTML, {{tokens}} intact
- *       senderName:      string,
- *       replyTo:         string,
- *       cc:              string,       // manager_email + cc_extra, comma-joined
- *       includeUnitLine: boolean,
- *       globalTokens:    { property_name, event_name, date_range, today,
- *                          manager_email, manager_name },
- *       configAttachmentIds: string[], // campaign-level Drive IDs
+ *       subjectTemplate, bodyTemplate,        // {{tokens}} intact
+ *       senderName, replyTo, cc, includeUnitLine,
+ *       globalTokens, configAttachmentIds,
  *     },
- *     recipients: [ { id, email, name, unit, attachmentIds: string[] } ],
- *     callback_url, callback_token
+ *     recipients: [ { id, email, name, unit, attachmentIds,
+ *                     phone_e164, segment_timezone } ],
+ *     sms: {                                   // required for send(+enabled)/sms_*
+ *       enabled: boolean,
+ *       from_number: "+14159804986",
+ *       quiet_start: 8, quiet_end: 21,         // local hours [start, end)
+ *       test_number: "+1..."                    // sms_test only
+ *     }
  *   }
  *
- *   kind semantics (legacy parity):
- *     send   → GmailApp send to each recipient
- *     dryrun → Gmail DRAFTS in the member.support@ mailbox, subject "[DRAFT] "
- *     test   → real send of ONE rendered sample to the operator (recipients[0]
- *              carries the operator's email), subject "TEST — "
+ *   Kind semantics:
+ *     send        → emails; then, if sms.enabled, SMS phase to the same targets
+ *     dryrun/test → email drafts / operator test (no SMS)
+ *     sms_preview → AI summary only; callback carries sms_text (nothing sent)
+ *     sms_test    → AI summary sent to sms.test_number only
+ *     sms_only    → SMS phase only (post-send retry / standalone)
  *
  * ── Callback body ────────────────────────────────────────────────────────────
  *   { run_id, callback_token, campaign_id, app_run_id, kind,
  *     status: "complete" | "error",
- *     results: [ { id, email, ok, error } ],
- *     quota_remaining: number | null,
- *     error: string | null }
+ *     results: [ { id, email, ok, error } ],            // email phase
+ *     sms_text: string | null,                          // the summary used
+ *     sms_truncated: boolean,                           // hard-truncate flag
+ *     sms_results: [ { id, state, error } ],            // sent|error|skipped_*
+ *     sms_warning: string | null,                       // e.g. opt-out lookup failed
+ *     quota_remaining, error }
  */
 
 import { WorkflowEntrypoint } from "cloudflare:workers";
 
 const BATCH_SIZE = 10; // dispatcher MAX_MESSAGES_PER_CALL
+const SMS_MAX_CHARS = 320;
+const AI_GATEWAY = "https://gateway.ai.cloudflare.com/v1/d094105625bec434114c0b80ecfa7238/sandy-workflows/compat/chat/completions";
+const AI_MODEL = "dynamic/sandy-workflows";
+const DIALPAD_SMS_URL = "https://dialpad.com/api/v2/sms";
+const LANDING_GRAPHQL_URL = "https://api.hellolanding.com/api/v1/graphql";
 
 // ── Token engine — KEEP IN SYNC with src/emailkit.ts (renderTokens etc.) ─────
 
@@ -88,7 +98,7 @@ function buildRecipientTokens(globals, r, includeUnitLine) {
   };
 }
 
-// ── Dispatcher client ────────────────────────────────────────────────────────
+// ── Email dispatcher client ──────────────────────────────────────────────────
 
 async function dispatch(mode, messages, secrets) {
   const url = secrets?.MN_DISPATCH_URL;
@@ -106,7 +116,142 @@ async function dispatch(mode, messages, secrets) {
   if (body.status === "error" && !Array.isArray(body.results)) {
     throw new Error(`Dispatcher error: ${body.message || JSON.stringify(body).slice(0, 300)}`);
   }
-  return body; // { status, quotaRemaining, results: [{to, ok, error?}] }
+  return body;
+}
+
+// ── SMS helpers ──────────────────────────────────────────────────────────────
+
+// Rough HTML → plain text for the summarizer input.
+function htmlToText(html) {
+  return String(html || "")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|tr|li|table)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"').replace(/&#39;/gi, "'")
+    .replace(/&#x([0-9a-fA-F]+);/g, (_m, h) => { try { return String.fromCodePoint(parseInt(h, 16)); } catch { return ""; } })
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s*\n\s*/g, "\n")
+    .trim();
+}
+
+async function aiSummarize(subject, bodyText, secrets, retryNote) {
+  const token = secrets?.AI_GATEWAY_TOKEN;
+  if (!token) throw new Error("AI_GATEWAY_TOKEN secret missing");
+  const system =
+    "You write SMS notifications for residents of Landing apartment properties. " +
+    "Summarize the given email into ONE plain-text SMS of AT MOST 300 characters. " +
+    "Rules: include the property name; state the key facts (what, when, what the " +
+    "resident should do); no invented facts; no links unless a URL appears in the " +
+    "email; no emojis; no greeting or sign-off; do not mention that this is a summary.";
+  const user = `Subject: ${subject}\n\nEmail body:\n${bodyText.slice(0, 6000)}` +
+    (retryNote ? `\n\nIMPORTANT: ${retryNote}` : "");
+  const res = await fetch(AI_GATEWAY, {
+    method: "POST",
+    // RAW token in cf-aig-authorization (NO "Bearer") — gateway convention.
+    headers: { "cf-aig-authorization": token, "content-type": "application/json" },
+    body: JSON.stringify({
+      model: AI_MODEL,
+      max_tokens: 300,
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    }),
+    signal: AbortSignal.timeout(120000),
+  });
+  if (!res.ok) throw new Error(`AI Gateway ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const data = await res.json();
+  return (data.choices?.[0]?.message?.content ?? "").trim();
+}
+
+// Summary with length guard: one strict retry, then sentence-boundary truncate.
+async function summarizeForSms(subject, bodyHtml, secrets) {
+  const text = htmlToText(bodyHtml);
+  let out = await aiSummarize(subject, text, secrets, null);
+  let truncated = false;
+  if (out.length > SMS_MAX_CHARS) {
+    out = await aiSummarize(subject, text, secrets,
+      `Your previous answer was ${out.length} characters — too long. Rewrite it under 280 characters.`);
+  }
+  if (out.length > SMS_MAX_CHARS) {
+    const cut = out.slice(0, SMS_MAX_CHARS - 1);
+    const lastStop = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
+    out = (lastStop > 80 ? cut.slice(0, lastStop + 1) : cut).trim() + "…";
+    truncated = true;
+  }
+  return { text: out, truncated };
+}
+
+// Rails-style tz names (warehouse MS_TIMEZONE) → IANA. Default Central.
+const RAILS_TZ = {
+  "Eastern Time (US & Canada)": "America/New_York",
+  "Central Time (US & Canada)": "America/Chicago",
+  "Mountain Time (US & Canada)": "America/Denver",
+  "Arizona": "America/Phoenix",
+  "Pacific Time (US & Canada)": "America/Los_Angeles",
+  "Alaska": "America/Anchorage",
+  "Hawaii": "Pacific/Honolulu",
+};
+
+function localHour(railsTz) {
+  const iana = RAILS_TZ[String(railsTz || "").trim()] || "America/Chicago";
+  try {
+    return parseInt(new Intl.DateTimeFormat("en-US", {
+      hour: "numeric", hour12: false, timeZone: iana,
+    }).format(new Date()), 10);
+  } catch {
+    return 12; // unknown tz — assume mid-day rather than blocking
+  }
+}
+
+// Opt-out lookup: User.text_notifications_enabled === false → skip.
+// Graceful: on any failure, return empty set + a warning (parity: the manual
+// Hub-Manager SMS process had no opt-out check at all).
+async function fetchOptOuts(emails, secrets) {
+  const key = secrets?.LANDING_API_GRAPHQL_KEY;
+  const optedOut = new Set();
+  if (!key || emails.length === 0) {
+    return { optedOut, warning: key ? null : "opt-out lookup skipped: LANDING_API_GRAPHQL_KEY missing" };
+  }
+  try {
+    for (let i = 0; i < emails.length; i += 100) {
+      const chunk = emails.slice(i, i + 100);
+      const q = `{ users(per_page: 100, filters: [{ field: "email", operator: "in", value: ${JSON.stringify(chunk)} }]) { data { email text_notifications_enabled } } }`;
+      const res = await fetch(LANDING_GRAPHQL_URL, {
+        method: "POST",
+        headers: { "X-API-TOKEN": key, "Content-Type": "application/json" },
+        body: JSON.stringify({ query: q }),
+        signal: AbortSignal.timeout(60000),
+      });
+      if (!res.ok) throw new Error(`GraphQL ${res.status}`);
+      const data = await res.json();
+      if (data.errors) throw new Error(JSON.stringify(data.errors).slice(0, 200));
+      for (const u of data.data?.users?.data ?? []) {
+        if (u.text_notifications_enabled === false) optedOut.add(String(u.email).toLowerCase());
+      }
+      await new Promise((r) => setTimeout(r, 1100)); // 60 req/min limit
+    }
+    return { optedOut, warning: null };
+  } catch (err) {
+    return { optedOut: new Set(), warning: `opt-out lookup failed (SMS proceeded): ${String(err?.message || err).slice(0, 150)}` };
+  }
+}
+
+async function dialpadSms(toNumber, text, fromNumber, secrets) {
+  const key = secrets?.DIALPAD_API_KEY;
+  if (!key) throw new Error("DIALPAD_API_KEY secret missing");
+  const res = await fetch(DIALPAD_SMS_URL, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ from_number: fromNumber, to_numbers: [toNumber], text }),
+    signal: AbortSignal.timeout(60000),
+  });
+  if (!res.ok) throw new Error(`Dialpad ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return true;
 }
 
 // ── Callback helper (standard Sandy pattern — do not modify) ─────────────────
@@ -134,61 +279,145 @@ async function sendCallback(callbackUrl, payload, sandySecrets) {
 
 // ── Workflow ─────────────────────────────────────────────────────────────────
 
+const KINDS = ["send", "dryrun", "test", "sms_preview", "sms_test", "sms_only"];
+
 export class TenantWorkflow extends WorkflowEntrypoint {
   async run(event, step) {
-    const { campaign_id, app_run_id, kind, config, recipients, callback_url, callback_token } = event.payload || {};
+    const { campaign_id, app_run_id, kind, config, recipients, sms, callback_url, callback_token } = event.payload || {};
     const secrets = event.payload?._sandySecrets || {};
 
     try {
       await step.do("validate-inputs", async () => {
-        if (!secrets.MN_DISPATCH_URL || !secrets.MN_DISPATCH_SECRET) {
+        if (!callback_url) throw new Error("callback_url is required");
+        if (!KINDS.includes(kind)) throw new Error(`bad kind: ${kind}`);
+        if (!config?.subjectTemplate || !config?.bodyTemplate) throw new Error("config templates missing");
+        const isEmailKind = ["send", "dryrun", "test"].includes(kind);
+        if (isEmailKind && (!secrets.MN_DISPATCH_URL || !secrets.MN_DISPATCH_SECRET)) {
           throw new Error("dispatcher secrets missing");
         }
-        if (!callback_url) throw new Error("callback_url is required");
-        if (!config?.subjectTemplate || !config?.bodyTemplate) throw new Error("config templates missing");
-        if (!Array.isArray(recipients) || recipients.length === 0) throw new Error("recipients[] is empty");
-        if (!["send", "dryrun", "test"].includes(kind)) throw new Error(`bad kind: ${kind}`);
-        return { ok: true, count: recipients.length };
+        if (isEmailKind || kind === "sms_only") {
+          if (!Array.isArray(recipients) || recipients.length === 0) throw new Error("recipients[] is empty");
+        }
+        if (kind === "sms_test" && !sms?.test_number) throw new Error("sms.test_number is required");
+        return { ok: true };
       });
 
-      const dispatcherMode = kind === "dryrun" ? "draft" : "send";
-      const subjectPrefix = kind === "dryrun" ? "[DRAFT] " : kind === "test" ? "TEST — " : "";
-
+      // ── Email phase ────────────────────────────────────────────────────────
       const results = [];
       let quotaRemaining = null;
+      if (["send", "dryrun", "test"].includes(kind)) {
+        const dispatcherMode = kind === "dryrun" ? "draft" : "send";
+        const subjectPrefix = kind === "dryrun" ? "[DRAFT] " : kind === "test" ? "TEST — " : "";
+        for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
+          const batch = recipients.slice(i, i + BATCH_SIZE);
+          const batchResult = await step.do(
+            `dispatch-batch-${Math.floor(i / BATCH_SIZE) + 1}`,
+            { retries: { limit: 1, delay: "30 seconds", backoff: "linear" } },
+            async () => {
+              const messages = batch.map((r) => {
+                const tokens = buildRecipientTokens(config.globalTokens || {}, r, !!config.includeUnitLine);
+                const attachmentFileIds = [
+                  ...(config.configAttachmentIds || []),
+                  ...(r.attachmentIds || []),
+                ];
+                return {
+                  to: r.email,
+                  cc: config.cc || "",
+                  replyTo: config.replyTo || "",
+                  senderName: config.senderName || "Landing Notifications",
+                  subject: subjectPrefix + renderTokens(config.subjectTemplate, tokens, false),
+                  htmlBody: renderTokens(config.bodyTemplate, tokens, true),
+                  plainText: "Please view this email in an HTML-capable client.",
+                  ...(attachmentFileIds.length ? { attachmentFileIds } : {}),
+                };
+              });
+              return dispatch(dispatcherMode, messages, secrets);
+            }
+          );
+          quotaRemaining = batchResult.quotaRemaining ?? quotaRemaining;
+          const brs = batchResult.results || [];
+          batch.forEach((r, j) => {
+            const br = brs[j] || { ok: false, error: "no dispatcher result" };
+            results.push({ id: r.id, email: r.email, ok: !!br.ok, error: br.error || null });
+          });
+        }
+      }
 
-      for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
-        const batch = recipients.slice(i, i + BATCH_SIZE);
-        const batchResult = await step.do(
-          `dispatch-batch-${Math.floor(i / BATCH_SIZE) + 1}`,
-          { retries: { limit: 1, delay: "30 seconds", backoff: "linear" } },
+      // ── SMS phase ──────────────────────────────────────────────────────────
+      let smsText = null;
+      let smsTruncated = false;
+      let smsWarning = null;
+      const smsResults = [];
+      const smsWanted =
+        kind === "sms_preview" || kind === "sms_test" || kind === "sms_only" ||
+        (kind === "send" && sms?.enabled);
+
+      if (smsWanted) {
+        const summary = await step.do(
+          "sms-summarize",
+          { retries: { limit: 2, delay: "15 seconds", backoff: "exponential" } },
           async () => {
-            const messages = batch.map((r) => {
-              const tokens = buildRecipientTokens(config.globalTokens || {}, r, !!config.includeUnitLine);
-              const attachmentFileIds = [
-                ...(config.configAttachmentIds || []),
-                ...(r.attachmentIds || []),
-              ];
-              return {
-                to: r.email,
-                cc: config.cc || "",
-                replyTo: config.replyTo || "",
-                senderName: config.senderName || "Landing Notifications",
-                subject: subjectPrefix + renderTokens(config.subjectTemplate, tokens, false),
-                htmlBody: renderTokens(config.bodyTemplate, tokens, true),
-                plainText: "Please view this email in an HTML-capable client.",
-                ...(attachmentFileIds.length ? { attachmentFileIds } : {}),
-              };
-            });
-            return dispatch(dispatcherMode, messages, secrets);
+            // Generic-recipient render: the summary is per-campaign, not per-member.
+            const tokens = buildRecipientTokens(config.globalTokens || {},
+              { email: "", name: "Resident", unit: "" }, false);
+            const subject = renderTokens(config.subjectTemplate, tokens, false);
+            const body = renderTokens(config.bodyTemplate, tokens, true);
+            return summarizeForSms(subject, body, secrets);
           }
         );
-        quotaRemaining = batchResult.quotaRemaining ?? quotaRemaining;
-        const brs = batchResult.results || [];
-        batch.forEach((r, j) => {
-          const br = brs[j] || { ok: false, error: "no dispatcher result" };
-          results.push({ id: r.id, email: r.email, ok: !!br.ok, error: br.error || null });
-        });
+        smsText = summary.text;
+        smsTruncated = summary.truncated;
+
+        if (kind === "sms_test") {
+          await step.do("sms-test-send", async () =>
+            dialpadSms(sms.test_number, `TEST — ${smsText}`, sms.from_number, secrets));
+          smsResults.push({ id: "sms_test", state: "sent", error: null });
+        } else if (kind === "sms_only" || (kind === "send" && sms?.enabled)) {
+          // For 'send', only recipients whose email actually went out get SMS.
+          const okIds = kind === "send" ? new Set(results.filter((r) => r.ok).map((r) => r.id)) : null;
+          const targets = recipients.filter((r) => (okIds ? okIds.has(r.id) : true));
+
+          const optOut = await step.do("sms-optout-lookup", async () =>
+            fetchOptOuts(targets.map((t) => String(t.email).toLowerCase()), secrets));
+          smsWarning = optOut.warning;
+          const optedOut = new Set(optOut.optedOut);
+
+          for (let i = 0; i < targets.length; i += BATCH_SIZE) {
+            const batch = targets.slice(i, i + BATCH_SIZE);
+            const batchOut = await step.do(
+              `sms-batch-${Math.floor(i / BATCH_SIZE) + 1}`,
+              { retries: { limit: 1, delay: "30 seconds", backoff: "linear" } },
+              async () => {
+                const out = [];
+                for (const r of batch) {
+                  if (!r.phone_e164) {
+                    out.push({ id: r.id, state: "skipped_no_phone", error: null });
+                    continue;
+                  }
+                  if (optedOut.has(String(r.email).toLowerCase())) {
+                    out.push({ id: r.id, state: "skipped_optout", error: null });
+                    continue;
+                  }
+                  const h = localHour(r.segment_timezone);
+                  const qs = sms?.quiet_start ?? 8, qe = sms?.quiet_end ?? 21;
+                  if (h < qs || h >= qe) {
+                    out.push({ id: r.id, state: "skipped_quiet_hours", error: null });
+                    continue;
+                  }
+                  try {
+                    await dialpadSms(r.phone_e164, smsText, sms.from_number, secrets);
+                    out.push({ id: r.id, state: "sent", error: null });
+                  } catch (err) {
+                    out.push({ id: r.id, state: "error", error: String(err?.message || err).slice(0, 200) });
+                  }
+                  await new Promise((res) => setTimeout(res, 150)); // pacing
+                }
+                return out;
+              }
+            );
+            smsResults.push(...batchOut);
+          }
+        }
       }
 
       await step.do(
@@ -196,28 +425,30 @@ export class TenantWorkflow extends WorkflowEntrypoint {
         { retries: { limit: 2, delay: "30 seconds", backoff: "linear" } },
         async () => sendCallback(callback_url, {
           run_id: event.instanceId,
-          callback_token,
-          campaign_id,
-          app_run_id,
-          kind,
+          callback_token, campaign_id, app_run_id, kind,
           status: "complete",
           results,
+          sms_text: smsText,
+          sms_truncated: smsTruncated,
+          sms_results: smsResults,
+          sms_warning: smsWarning,
           quota_remaining: quotaRemaining,
           error: null,
         }, secrets)
       );
 
-      return { ok: true, sent: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length };
+      return {
+        ok: true,
+        emails_ok: results.filter((r) => r.ok).length,
+        sms_sent: smsResults.filter((r) => r.state === "sent").length,
+      };
     } catch (err) {
       if (callback_url) {
         await step.do("send-error-callback", async () => sendCallback(callback_url, {
           run_id: event.instanceId,
-          callback_token,
-          campaign_id,
-          app_run_id,
-          kind,
+          callback_token, campaign_id, app_run_id, kind,
           status: "error",
-          results: [],
+          results: [], sms_text: null, sms_truncated: false, sms_results: [], sms_warning: null,
           quota_remaining: null,
           error: String(err?.message || err),
         }, secrets));

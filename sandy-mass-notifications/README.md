@@ -23,6 +23,17 @@ fetch workflow `ffaa18b1-92a6-4eef-8219-c85c950c9068`.
 
 ## Change Log
 
+> v0.8 : 2026-08-06
+- P3 SMS companion (OpsVP): dispatch workflow v0.2 adds an SMS phase — one
+  AI summary per campaign (AI Gateway, ≤320 chars, length-guarded, sentence
+  truncate + flag), Dialpad sends from +14159804986, quiet hours 08:00–21:00
+  local (MS_TIMEZONE Rails→IANA), GraphQL opt-out respect (graceful degrade).
+  New kinds: sms_preview / sms_test (to any number) / sms_only (post-send
+  retry). App: per-campaign SMS toggle, preview card with regenerate, test
+  input, retry button, per-recipient SMS states in the grid; migration 003
+  caches the preview on campaigns. SSE watcher upgraded to a change-signature
+  model covering SMS operations. E2E: preview verified (185-char summary).
+
 > v0.7 : 2026-08-06
 - Frontend polish (operator feedback): custom navy app header + slim footer
   (no stock marketing dead links), OG GAS WebApp background (#E7EFFB);

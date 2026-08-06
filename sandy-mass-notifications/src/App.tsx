@@ -17,6 +17,7 @@ export interface AssetRow {
 export interface CampaignRow {
   id: string; mode: string; property_name: string; event_name: string;
   status: string; fetch_stats_json: string | null;
+  sms_enabled: number; sms_preview_text: string | null; sms_preview_truncated: number;
   created_by: string; created_at: string;
 }
 
@@ -26,6 +27,7 @@ export interface RecipientRow {
   phone_e164: string | null; segment_timezone: string | null;
   agm_name: string | null; source: string; status: string; notes: string;
   email_state: string; email_sent_at: string | null;
+  sms_state: string; sms_error: string | null;
 }
 
 export interface RoleRow { email: string; role: string; created_at: string }
@@ -312,6 +314,16 @@ function RecipientsSection({ c, recipients }: { c: CampaignRow; recipients: Reci
                   <td className="body-sm" style={{ padding: "var(--space-2) var(--space-3)", wordBreak: "break-all" }}>{r.email}</td>
                   <td className="body-sm" style={{ padding: "var(--space-2) var(--space-3)", whiteSpace: "nowrap", color: r.phone_e164 ? "var(--text-primary)" : "var(--text-tertiary)" }}>
                     {r.phone_e164 ?? "—"}
+                    {r.sms_state !== "off" && (
+                      <span className="label-xs" style={{
+                        display: "block",
+                        color: r.sms_state === "sent" ? "var(--status-success-text)"
+                          : r.sms_state === "error" ? "var(--status-error-text)"
+                          : "var(--text-tertiary)",
+                      }}>
+                        SMS: {r.sms_state.replace(/_/g, " ")}
+                      </span>
+                    )}
                   </td>
                   <td style={{ padding: "var(--space-2) var(--space-3)" }}>
                     {["PENDING", "READY", "REVIEW", ""].includes(r.status) ? (
@@ -769,6 +781,103 @@ function EditorPage({ editorKind, editing, editorPreviewHtml, flash, error }: Ap
   );
 }
 
+function SmsSection({ c, recipients }: { c: CampaignRow; recipients: RecipientRow[] }) {
+  const withPhone = recipients.filter((r) => r.phone_e164).length;
+  const counts: Record<string, number> = {};
+  for (const r of recipients) counts[r.sms_state] = (counts[r.sms_state] ?? 0) + 1;
+  const pendingRetry = recipients.filter((r) =>
+    r.status === "SENT" && r.phone_e164 && !["sent", "skipped_optout"].includes(r.sms_state)).length;
+  const enabled = c.sms_enabled === 1;
+  const stateSummary = Object.entries(counts)
+    .filter(([k]) => k !== "off")
+    .map(([k, v]) => `${v} ${k.replace(/_/g, " ")}`)
+    .join(" · ");
+
+  return (
+    <SectionCard icon="phone" title="5 · SMS companion (Dialpad)">
+      <div className="flex items-center gap-3 flex-wrap" style={{ marginBottom: "var(--space-3)" }}>
+        <form method="POST" action={`/api/campaigns/${c.id}/sms-toggle`} className="flex items-center gap-2">
+          <label className="body-sm flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+            <input type="checkbox" name="sms_enabled" data-autosubmit defaultChecked={enabled} />
+            Text each member an AI summary after their email sends
+          </label>
+          <noscript><button type="submit" className="btn btn-tertiary btn-sm">Save</button></noscript>
+        </form>
+        <span className="flex-1" />
+        <span className="body-xs" style={{ color: "var(--text-tertiary)" }}>
+          {withPhone} of {recipients.length} recipients have an SMS-ready phone
+        </span>
+      </div>
+
+      {/* Preview of the AI summary */}
+      <div style={{
+        border: "1px solid var(--border-secondary)", borderRadius: "var(--radius-sm)",
+        padding: "var(--space-3) var(--space-4)", marginBottom: "var(--space-3)",
+        background: "var(--bg-secondary)",
+      }}>
+        <div className="flex items-center gap-2 flex-wrap" style={{ marginBottom: "var(--space-2)" }}>
+          <span className="label-xs" style={{ color: "var(--text-secondary)" }}>
+            SMS text (from +1 415 980-4986)
+          </span>
+          {c.sms_preview_truncated === 1 && (
+            <span className="label-xs" style={{ color: "var(--status-warning-text)" }}>
+              hard-truncated to fit — consider regenerating
+            </span>
+          )}
+          <span className="flex-1" />
+          <form method="POST" action={`/api/campaigns/${c.id}/dispatch`}>
+            <input type="hidden" name="kind" value="sms_preview" />
+            <button type="submit" className="btn btn-secondary btn-sm">
+              {c.sms_preview_text ? "Regenerate preview" : "Generate preview"}
+            </button>
+          </form>
+        </div>
+        {c.sms_preview_text ? (
+          <p className="body-sm" style={{
+            margin: 0, color: "var(--text-primary)",
+            fontFamily: "monospace", whiteSpace: "pre-wrap",
+          }}>
+            {c.sms_preview_text}
+            <span className="body-xs" style={{ color: "var(--text-tertiary)" }}> ({c.sms_preview_text.length} chars)</span>
+          </p>
+        ) : (
+          <p className="body-sm" style={{ margin: 0, color: "var(--text-tertiary)" }}>
+            No preview yet — generate one to see exactly what members would receive.
+            The same summary is regenerated fresh at send time.
+          </p>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <form method="POST" action={`/api/campaigns/${c.id}/dispatch`} className="flex items-center gap-2">
+          <input type="hidden" name="kind" value="sms_test" />
+          <input type="tel" name="test_number" placeholder="+15551234567" className="ds-input"
+            style={{ height: 32, width: 160, fontSize: "var(--label-xs)" }} />
+          <button type="submit" className="btn btn-secondary btn-sm">Test SMS to this number</button>
+        </form>
+        <span className="flex-1" />
+        <form method="POST" action={`/api/campaigns/${c.id}/dispatch`}>
+          <input type="hidden" name="kind" value="sms_only" />
+          <button type="submit" className="btn btn-primary btn-sm" disabled={pendingRetry === 0}>
+            Send SMS to {pendingRetry} emailed recipient{pendingRetry === 1 ? "" : "s"}
+          </button>
+        </form>
+      </div>
+
+      {stateSummary && (
+        <p className="body-xs" style={{ color: "var(--text-secondary)", margin: "var(--space-3) 0 0" }}>
+          SMS states: {stateSummary}
+        </p>
+      )}
+      <p className="body-xs" style={{ color: "var(--text-tertiary)", margin: "var(--space-2) 0 0" }}>
+        Quiet hours: texts only go out 08:00–21:00 in each member's local time (by market
+        segment); anyone outside the window is marked "skipped quiet hours" — re-send later
+        with the button above. Members who opted out of texts are always skipped.
+      </p>
+    </SectionCard>
+  );
+}
+
 function CampaignPage(props: AppProps) {
   const { campaigns, recipients, runs, config, flash, error, user } = props;
   const c = campaigns[0];
@@ -807,6 +916,7 @@ function CampaignPage(props: AppProps) {
           previewHtml={props.previewHtml} previewSubject={props.previewSubject}
           previewFor={props.previewFor} previewRecipientId={props.previewRecipientId} />}
         {config && <SendSection c={c} recipients={recipients} runs={runs} cfg={config} userEmail={user.email} />}
+        {config && <SmsSection c={c} recipients={recipients} />}
       </div>
     </main>
   );

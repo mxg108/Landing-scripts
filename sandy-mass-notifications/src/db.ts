@@ -16,6 +16,8 @@ export const campaigns = sqliteTable("campaigns", {
   status: text("status").notNull().default("draft"), // draft|fetching|ready|sending|complete|errored|undone
   config_json: text("config_json").notNull().default("{}"),
   sms_enabled: integer("sms_enabled").notNull().default(0),
+  sms_preview_text: text("sms_preview_text"),
+  sms_preview_truncated: integer("sms_preview_truncated").notNull().default(0),
   fetch_stats_json: text("fetch_stats_json"),
   created_by: text("created_by").notNull(),
   created_at: text("created_at").notNull(),
