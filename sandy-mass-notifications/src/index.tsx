@@ -103,9 +103,9 @@ export default {
             email_state: "pending",
             sms_state: "off",
           }));
-          // D1 bound-parameter budget: insert in chunks.
-          for (let i = 0; i < rows.length; i += 20) {
-            await db.insert(recipients).values(rows.slice(i, i + 20));
+          // D1 caps a query at 100 bound parameters; 16 columns/row → max 6 rows.
+          for (let i = 0; i < rows.length; i += 6) {
+            await db.insert(recipients).values(rows.slice(i, i + 6));
           }
           await db.update(campaigns)
             .set({ status: "ready", fetch_stats_json: JSON.stringify({ ...body.stats, fetched_at: now }) })

@@ -1,11 +1,11 @@
-# GAS Mail Dispatcher — deploy runbook (member-support@)
+# GAS Mail Dispatcher — deploy runbook (member.support@)
 
-One-time deployment, done **while logged in as `member-support@hellolanding.com`**
+One-time deployment, done **while logged in as `member.support@hellolanding.com`**
 (PRD D3 — this account is the sender identity and owns the quota).
 
 ## Steps (manual paste — simplest for a one-off under a different account)
 
-1. In a browser profile logged in as **member-support@hellolanding.com**, open
+1. In a browser profile logged in as **member.support@hellolanding.com**, open
    [script.google.com](https://script.google.com) → **New project**.
 2. Name it `Mass Notifications Dispatcher`.
 3. Replace the default `Code.gs` content with **`Dispatcher.gs`** from this folder.
@@ -32,7 +32,7 @@ One-time deployment, done **while logged in as `member-support@hellolanding.com`
    - `DISPATCH_SECRET` = a long random string. Generate one locally:
      `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`
 6. **Deploy → New deployment → Web app**:
-   - Execute as: **Me (member-support@hellolanding.com)**
+   - Execute as: **Me (member.support@hellolanding.com)**
    - Who has access: **Anyone**
    - Click Deploy, authorize the Gmail/Drive scopes, copy the `/exec` URL.
 7. Hand back to the build session:
@@ -43,11 +43,20 @@ One-time deployment, done **while logged in as `member-support@hellolanding.com`
 
 ## Verify
 
+Apps Script answers `/exec` with a **302 redirect** to `script.googleusercontent.com`
+— a plain `curl` shows a "Moved Temporarily" page. Follow redirects with `-L`
+(or use any redirect-following HTTP client):
+
 ```bash
-curl -s -X POST '<EXEC_URL>' -H 'Content-Type: application/json' \
+curl -sL -X POST '<EXEC_URL>' -H 'Content-Type: application/json' \
   -d '{"secret":"<SECRET>","mode":"health"}'
-# → {"status":"ok","account":"member-support@hellolanding.com","quotaRemaining":<N>,"version":"mn-dispatcher v1.0.0"}
+# → {"status":"ok","account":"member.support@hellolanding.com","quotaRemaining":<N>,"version":"mn-dispatcher v1.0.0"}
 ```
+
+If you get `{"status":"error","message":"unauthorized"}` the transport is fine —
+the `DISPATCH_SECRET` Script Property just doesn't match the secret you sent.
+Re-paste the property value (watch for truncation/whitespace); Script
+Properties are read at runtime, so **no redeploy is needed** after changing it.
 
 `quotaRemaining` is the live Workspace send budget (~1,500/day). The Sandy app
 surfaces it before every campaign.
@@ -56,7 +65,7 @@ surfaces it before every campaign.
 
 - Requests are JSON-POST only; bad secret → `{"status":"error","message":"unauthorized"}`
   (GAS always returns HTTP 200 — callers must check the body).
-- `mode: "draft"` creates Gmail drafts in the member-support@ mailbox — used by
+- `mode: "draft"` creates Gmail drafts in the member.support@ mailbox — used by
   the app's dry-run.
 - Attachment behavior preserves legacy parity: single folder ID expands to its
   direct children, Google-native files export as PDF, 20 MB cap, error strings

@@ -62,7 +62,7 @@ Plus: Move-In campaigns never archived to DB; personal Imgur URL as production h
 |---|---|
 | D1 | **Snowflake gateway is the recipient/data path, not Sigma's REST API.** Looker and Sigma sit on the same warehouse; go straight to the source. Sigma API credentials become a *later, optional* upgrade (workbook-parity guarantees) once the pilot exists as leverage. |
 | D2 | Property contacts: **warehouse-seeded** (see §5.2 — `DIMPROPERTY.PROPERTY_CONTACT_*` discovered during validation), operator-curated in D1. The eng request to enable `Contact.name/email/phone_number` in GraphQL is escalated but **not a dependency**. |
-| D3 | Email sender identity: **member-support@hellolanding.com** (Member Support general inbox). Max holds credentials; the GAS dispatcher deploys under it. No dependence on a personal account. |
+| D3 | Email sender identity: **member.support@hellolanding.com** (Member Support general inbox). Max holds credentials; the GAS dispatcher deploys under it. No dependence on a personal account. |
 | D4 | SMS sends from Dialpad number **+1 (415) 980-4986** — verified Member Support Line; API send path already exercised by Max. |
 | D5 | **BCC mode retired.** Individual + dedupe covers it with better audit. Historical `SEND_BCC` runs remain readable in backfilled history. |
 | D6 | Slack intake: **prefill-link in v1**; a Sandy Agent listening in #ert-member-support is pinned as a post-v1 upgrade for robustness and company-wide accessibility. |
@@ -80,7 +80,7 @@ Plus: Move-In campaigns never archived to DB; personal Imgur URL as production h
 - G7: Retire the GAS WebApp + Sheet + Looker client after cutover.
 
 **Non-Goals**
-- No new email vendor: sending stays Gmail-based via the proven **GAS dispatcher (payload mode)** pattern (qa-scoring v0.22, live since #177), deployed as member-support@.
+- No new email vendor: sending stays Gmail-based via the proven **GAS dispatcher (payload mode)** pattern (qa-scoring v0.22, live since #177), deployed as member.support@.
 - No BCC mode (D5).
 - No member-facing surfaces; internal operators only.
 - No Sigma REST integration in v1 (D1); no dependency on eng enabling GraphQL `Contact` fields (D2).
@@ -104,7 +104,7 @@ Plus: Move-In campaigns never archived to DB; personal Imgur URL as production h
                   │  · Snowflake fetch      │    LANDING_API_GRAPHQL_KEY for the WF)
                   │  · AI Gateway (2 calls) │
                   │  · GAS mail dispatch ───┼──► GAS dispatcher (payload mode)
-                  │  · Dialpad SMS ─────────┼──►   as member-support@hellolanding.com
+                  │  · Dialpad SMS ─────────┼──►   as member.support@hellolanding.com
                   │  · D1 write-back        │    api.dialpad.com (from +14159804986)
                   └───────────┬─────────────┘
                               ▼
@@ -128,7 +128,7 @@ Plus: Move-In campaigns never archived to DB; personal Imgur URL as production h
 | Landing GraphQL (workflow) | Org secret `LANDING_API_GRAPHQL_KEY` | ✅ exists |
 | AI inference | Org secret `AI_GATEWAY_TOKEN` → Cloudflare AI Gateway `/compat/chat/completions` | ✅ exists, auto-injected in every WF |
 | Dialpad SMS (write) | Per-workflow secret `DIALPAD_API_KEY`; from-number +14159804986 (D4). The MCP-gateway Dialpad token is read-only — not usable for sends | ➕ add to new WF |
-| Gmail send | GAS dispatcher WebApp URL + shared secret, payload mode, deployed as member-support@ (D3) | ➕ new deployment of the proven qa-scoring pattern |
+| Gmail send | GAS dispatcher WebApp URL + shared secret, payload mode, deployed as member.support@ (D3) | ➕ new deployment of the proven qa-scoring pattern |
 | Admin MCP (dev/agents) | Org secret `LANDING_MCP_TOKEN`; URL-path auth `…/mcp/admin/{token}` (⚠ header auth with the .env token 401s — use path form) | ✅ exists |
 | Sigma REST API | Client ID/secret → element export with control values | ⏸ deferred (D1); request once pilot is live |
 | Everything else | Outbound rule "Allow Everywhere" `^https://.*` (no auth injection) | ✅ safety net |
@@ -194,7 +194,7 @@ Auto-fill sources per Move-In field:
 
 ### 6.3 Email dispatch — GAS payload-mode dispatcher as member-support@
 
-Same pattern as qa-scoring v0.22 (live, smoke-tested): a minimal Apps Script WebApp exposing `doPost` with a shared-secret header; the workflow POSTs `{to, cc, bcc, replyTo, senderName, subject, htmlBody, attachmentFileIds[], draftMode}` per message; GAS resolves Drive attachments natively (keeps folder-expansion + Google-file→PDF + 20MB behaviors) and sends via `GmailApp`. **Deployed under member-support@hellolanding.com (D3)** — the "from" line is the team inbox, replies land where members already write, and quota is the team account's, not a person's. Quota surfaced in the UI (counter vs Workspace ~1,500 recipients/day) instead of discovered by crash.
+Same pattern as qa-scoring v0.22 (live, smoke-tested): a minimal Apps Script WebApp exposing `doPost` with a shared-secret header; the workflow POSTs `{to, cc, bcc, replyTo, senderName, subject, htmlBody, attachmentFileIds[], draftMode}` per message; GAS resolves Drive attachments natively (keeps folder-expansion + Google-file→PDF + 20MB behaviors) and sends via `GmailApp`. **Deployed under member.support@hellolanding.com (D3)** — the "from" line is the team inbox, replies land where members already write, and quota is the team account's, not a person's. Quota surfaced in the UI (counter vs Workspace ~1,500 recipients/day) instead of discovered by crash.
 
 ### 6.4 Dialpad SMS
 
@@ -222,7 +222,7 @@ Wizard-ish single page, mirroring today's 4 sections but with server truth:
 1. **Recipients** — "Fetch active residents" (property autocomplete; Snowflake query §6.1 via workflow), CSV import, paste, manual add. Grid shows status chips (`PENDING`/`READY`/`REVIEW`/`SENT`/`DRAFT`), notes, per-row attachment IDs. Edits are **field-level PATCHes — never a whole-grid overwrite** (fixes defect 1).
 2. **Configure** — templates (7 seeded, D1-stored, editable in Admin), cards (6 resident cards; MOVE_IN excluded here), subject/greeting/intro/closing/disclaimer, branded wrapper, reply-to, CC extra, window start/end, per-campaign SMS toggle + preview of the SMS summary.
 3. **Preview** — server-rendered with the real pipeline against a chosen recipient (not just the first), sandboxed iframe, attachment manifest, **plus SMS preview** (via short workflow, cached per body-hash).
-4. **Send** — validation with real, blocking errors (empty subject, no eligible recipients, invalid emails by real regex, attachment failures — fixes defects 4/6); dry-run (Gmail drafts in the member-support@ mailbox via dispatcher draft mode), test-send-to-me, and Send. Progress polled from D1 as the workflow reports per-recipient results.
+4. **Send** — validation with real, blocking errors (empty subject, no eligible recipients, invalid emails by real regex, attachment failures — fixes defects 4/6); dry-run (Gmail drafts in the member.support@ mailbox via dispatcher draft mode), test-send-to-me, and Send. Progress polled from D1 as the workflow reports per-recipient results.
 
 ### 7.2 Move-In Flow mode (redesigned)
 
@@ -277,9 +277,9 @@ Historical Railway Postgres (`mass_notifications.campaigns/recipients`) stays re
 
 | Phase | Deliverable | Exit criteria |
 |---|---|---|
-| P0 | ~~Decisions~~ ✅ done 2026-08-05; deploy GAS dispatcher from member-support@ | Dispatcher answers a health-check payload |
+| P0 | ~~Decisions~~ ✅ done 2026-08-05; deploy GAS dispatcher from member.support@ | Dispatcher answers a health-check payload |
 | P1 | App scaffold (database template), D1 migrations, RBAC, Campaign mode UI with Snowflake fetch + manual/CSV | Fetch Woodhill → grid matches Sigma workbook |
-| P2 | Dispatch workflow: email send E2E (dry-run, test, send, undo), full audit | Parity campaign on a test property; drafts land in member-support@ Gmail |
+| P2 | Dispatch workflow: email send E2E (dry-run, test, send, undo), full audit | Parity campaign on a test property; drafts land in member.support@ Gmail |
 | P3 | SMS companion: summarize + Dialpad send + quiet hours + opt-out + E.164 normalization | OpsVP approves SMS copy on 3 real bodies; test SMS delivered from +14159804986 |
 | P4 | Move-In Flow mode (picker, auto-fill, warehouse-seeded contact book, email-mock UI) | One real move-in sent side-by-side with GAS output |
 | P5 | Slack intake prefill link; Admin surface | ERT issues one request end-to-end without touching the Sheet |

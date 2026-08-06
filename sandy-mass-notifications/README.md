@@ -9,7 +9,7 @@ redesigned Move-In Flow to property contacts.
 - **App:** `src/` — Sandy worker (SSR React, D1, Landing design system).
 - **Workflows:** `workflows/mass-notify-fetch.js` — Snowflake recipient fetch.
 - **Mail dispatcher:** `gas-dispatcher/` — GAS payload-mode sender, deployed
-  under member-support@hellolanding.com (see its README for the runbook).
+  under member.support@hellolanding.com (see its README for the runbook).
 - **Migrations:** `migrations/` — D1 schema, applied via `sandy.py db migrate`.
 
 App id `0b8bc7ad-9f12-40a2-9a73-44256d9d47ca` ·

@@ -1,7 +1,7 @@
 /**
  * Mass Notifications — GAS Mail Dispatcher (payload mode)
  *
- * Deployed under member-support@hellolanding.com (PRD D3). A dumb,
+ * Deployed under member.support@hellolanding.com (PRD D3). A dumb,
  * stateless mail arm for the Sandy app `mass-notifications`: the Sandy
  * dispatch workflow POSTs fully-rendered messages here; this script
  * resolves Drive attachments and sends via GmailApp. No sheets, no
