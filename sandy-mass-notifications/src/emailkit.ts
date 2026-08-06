@@ -195,50 +195,74 @@ function cardRow(label: string, value: string, valueColor?: string): string {
 </table>`.trim();
 }
 
-export const CARD_REGISTRY: Record<string, { label: string; render: () => string }> = {
-  FIRE_INSPECTION: {
-    label: "🔥 Fire Inspection",
-    render: () => cardShell(C.ACCENT_BLUE, "&#x1F525;", "Annual Fire Inspection", [
+// A card is DATA (editable in the app's /edit surface, persisted in D1
+// templates rows with kind='card'): the standard shell wraps an accent color,
+// icon entity, title, and inner body HTML. SEED_CARDS carries the six legacy
+// cards and seeds D1 on first run; after that, D1 is the registry of record.
+export interface CardDef {
+  key: string;      // SCREAMING_SNAKE config value (legacy parity)
+  label: string;    // chiclet label shown in Configure
+  accent: string;   // shell border/header color
+  icon: string;     // HTML hex entity (avoids Gmail emoji-encoding issues)
+  title: string;    // shell header text
+  body_html: string; // inner content ({{tokens}} allowed)
+}
+
+export function renderCard(def: CardDef): string {
+  return cardShell(def.accent, def.icon, def.title, def.body_html);
+}
+
+export { cardRow }; // exported for editor previews / future card tooling
+
+export const SEED_CARDS: CardDef[] = [
+  {
+    key: "FIRE_INSPECTION", label: "🔥 Fire Inspection",
+    accent: C.ACCENT_BLUE, icon: "&#x1F525;", title: "Annual Fire Inspection",
+    body_html: [
       cardRow("Property", "{{property_name}}"),
       cardRow("Dates", "{{date_range}}", C.ACCENT_BLUE),
       cardRow("Action required",
         "Inspectors will need <strong>access to your unit</strong>. " +
         "Please ensure your smoke detectors are unobstructed."),
-    ].join("")),
+    ].join(""),
   },
-  WATER_OUTAGE: {
-    label: "🚿 Water Outage",
-    render: () => cardShell(C.AMBER, "&#x1F6BF;", "Planned Water Outage", [
+  {
+    key: "WATER_OUTAGE", label: "🚿 Water Outage",
+    accent: C.AMBER, icon: "&#x1F6BF;", title: "Planned Water Outage",
+    body_html: [
       cardRow("Property", "{{property_name}}"),
       cardRow("Outage window", "{{date_range}}", C.AMBER),
       cardRow("What to expect",
         "Water service will be temporarily <strong>unavailable</strong> during this window. " +
         "We apologize for the inconvenience."),
-    ].join("")),
+    ].join(""),
   },
-  MAINTENANCE: {
-    label: "🔧 Maintenance",
-    render: () => cardShell(C.DARK_NAVY, "&#x1F527;", "Scheduled Maintenance", [
+  {
+    key: "MAINTENANCE", label: "🔧 Maintenance",
+    accent: C.DARK_NAVY, icon: "&#x1F527;", title: "Scheduled Maintenance",
+    body_html: [
       cardRow("Property", "{{property_name}}"),
       cardRow("Scheduled", "{{date_range}}", C.ACCENT_BLUE),
       cardRow("Details",
         "Our maintenance team will be on-site for <strong>{{event_name}}</strong>. " +
         "Some common areas may be temporarily unavailable."),
-    ].join("")),
+    ].join(""),
   },
-  WEATHER_ALERT: {
-    label: "⛈️ Weather Alert",
-    render: () => cardShell(C.RED, "&#x26C8;&#xFE0F;", "Weather Advisory", [
+  {
+    key: "WEATHER_ALERT", label: "⛈️ Weather Alert",
+    accent: C.RED, icon: "&#x26C8;&#xFE0F;", title: "Weather Advisory",
+    body_html: [
       cardRow("Property", "{{property_name}}"),
       cardRow("Period", "{{date_range}}", C.RED),
       cardRow("Advisory",
         "A <strong>weather advisory</strong> has been issued for your area. " +
         "Please take necessary precautions for your safety and secure any outdoor belongings."),
-    ].join("")),
+    ].join(""),
   },
-  POWER_OUTAGE: {
-    label: "⚡ Power Outage",
-    render: () => cardShell(C.ORANGE, "&#x26A1;", "Power Outage — Active", [
+  {
+    key: "POWER_OUTAGE", label: "⚡ Power Outage",
+    accent: C.ORANGE, icon: "&#x26A1;", title: "Power Outage — Active",
+    body_html: [
       cardRow("Property", "{{property_name}}"),
       cardRow("Reported", "{{today}}", C.ORANGE),
       cardRow("Status",
@@ -248,11 +272,12 @@ export const CARD_REGISTRY: Record<string, { label: string; render: () => string
         "Unplug sensitive electronics &nbsp;·&nbsp; " +
         "Keep fridge &amp; freezer closed &nbsp;·&nbsp; " +
         "Use flashlights, not candles"),
-    ].join("")),
+    ].join(""),
   },
-  WIFI_OUTAGE: {
-    label: "📶 WiFi Outage",
-    render: () => cardShell(C.AMBER, "&#x1F4F6;", "WiFi Service Disruption — Active", [
+  {
+    key: "WIFI_OUTAGE", label: "📶 WiFi Outage",
+    accent: C.AMBER, icon: "&#x1F4F6;", title: "WiFi Service Disruption — Active",
+    body_html: [
       cardRow("Property", "{{property_name}}"),
       cardRow("Reported", "{{today}}", C.AMBER),
       cardRow("Status",
@@ -261,9 +286,26 @@ export const CARD_REGISTRY: Record<string, { label: string; render: () => string
       cardRow("In the meantime",
         "Mobile data is available as a backup &nbsp;·&nbsp; " +
         "Disable WiFi on your device to switch automatically"),
-    ].join("")),
+    ].join(""),
   },
-};
+];
+
+export interface DisclaimerDef { name: string; html: string }
+
+export const SEED_DISCLAIMERS: DisclaimerDef[] = [
+  {
+    name: "Standard resident banner",
+    html: '<div style="text-align:center;background-color:#E7EFFB;border:2.5px solid #15192D;border-radius:6px;padding:10px;color:#15192D;font-style:italic;">This is a notification to all active residents at {{property_name}}. Please see the message below:</div>',
+  },
+  {
+    name: "Urgent resident banner",
+    html: '<div style="text-align:center;background-color:#E7EFFB;border:2.5px solid #15192D;border-radius:6px;padding:10px;color:#15192D;font-style:italic;">This is an urgent notification to all active residents at {{property_name}}. Please see the message below:</div>',
+  },
+  {
+    name: "Plain default",
+    html: "<p><em>This is an automated mass notification to all active residents.</em></p>",
+  },
+];
 
 // ── Body composer (legacy buildHtmlBody_) ────────────────────────────────────
 // Produces the COMPOSED body template with {{tokens}} intact. Per-recipient
@@ -272,15 +314,16 @@ export const CARD_REGISTRY: Record<string, { label: string; render: () => string
 const DEFAULT_DISCLAIMER =
   "<p><em>This is an automated mass notification to all active residents.</em></p>";
 
-export function composeBodyTemplate(cfg: CampaignConfig): string {
+export function composeBodyTemplate(cfg: CampaignConfig, cards?: Record<string, CardDef>): string {
+  const cardMap = cards ?? Object.fromEntries(SEED_CARDS.map((c) => [c.key, c]));
   if (cfg.body_full_html && cfg.body_full_html.trim()) {
     return wrapWithBranding(cfg, normalizeTelLinks(cfg.body_full_html + (cfg.signature_html || "")));
   }
   const parts: string[] = [];
   parts.push(cfg.greeting_template);
   if (cfg.include_disclaimer) parts.push(cfg.disclaimer_html || DEFAULT_DISCLAIMER);
-  if (cfg.notification_card && CARD_REGISTRY[cfg.notification_card]) {
-    parts.push(CARD_REGISTRY[cfg.notification_card].render());
+  if (cfg.notification_card && cardMap[cfg.notification_card]) {
+    parts.push(renderCard(cardMap[cfg.notification_card]));
   }
   parts.push(cfg.body_intro_html);
   if (cfg.include_unit_line) parts.push("{{html:unit_line}}");
@@ -489,8 +532,10 @@ export function applyTemplate(cfg: CampaignConfig, templateName: string): { cfg:
 // ── Validation (real, blocking — fixes audit defect 4) ───────────────────────
 
 export function validateForDispatch(
-  cfg: CampaignConfig, propertyName: string, eligibleCount: number, kind: string
+  cfg: CampaignConfig, propertyName: string, eligibleCount: number, kind: string,
+  cardKeys?: Set<string>
 ): string[] {
+  const known = cardKeys ?? new Set(SEED_CARDS.map((c) => c.key));
   const errors: string[] = [];
   if (!cfg.subject_template.trim()) errors.push("Subject template is empty.");
   const hasBody = cfg.body_full_html.trim() || cfg.greeting_template.trim() ||
@@ -498,7 +543,7 @@ export function validateForDispatch(
   if (!hasBody) errors.push("Email body is empty — set a template, card, or body text.");
   if (!propertyName.trim()) errors.push("Property name is empty.");
   if (kind !== "test" && eligibleCount === 0) errors.push("No eligible recipients (blank, PENDING, or READY).");
-  if (cfg.notification_card && !CARD_REGISTRY[cfg.notification_card]) {
+  if (cfg.notification_card && !known.has(cfg.notification_card)) {
     errors.push(`Unknown notification card: ${cfg.notification_card}`);
   }
   return errors;

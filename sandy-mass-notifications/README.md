@@ -23,6 +23,16 @@ fetch workflow `ffaa18b1-92a6-4eef-8219-c85c950c9068`.
 
 ## Change Log
 
+> v0.6 : 2026-08-06
+- Editable email assets: cards + disclaimers live in D1 (templates table,
+  seeded from emailkit SEED_* on first run), managed at **/edit** (list,
+  editor with sample-token preview, active toggle; new cards/disclaimers
+  become Configure chiclets). Card + disclaimer selection is now
+  **instant-apply chiclets** (fixes select-without-save doing nothing).
+  **SSE live status** (`/c/:id/events` + page watcher) replaces
+  refresh-to-see-results during fetching/sending. Migration 002 adds
+  templates.updated_by/updated_at.
+
 > v0.5 : 2026-08-06
 - P2 send pipeline: `emailkit.ts` (token engine with HTML-escape-by-default +
   {{html:}} escape hatch, body composer, 6 cards, 6 seeded templates — legacy

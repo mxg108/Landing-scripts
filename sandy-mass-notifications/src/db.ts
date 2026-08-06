@@ -89,13 +89,16 @@ export const runs = sqliteTable("runs", {
   error: text("error"),
 });
 
-// Seeded email templates / cards / prompts — editable in Admin, no redeploys.
+// Editable email assets — cards and disclaimers (kind='card'|'disclaimer'),
+// seeded from emailkit SEED_* on first run, curated at /edit. No redeploys.
 export const templates = sqliteTable("templates", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
-  kind: text("kind").notNull(), // email|card|prompt
+  kind: text("kind").notNull(), // card|disclaimer (email templates + prompts later)
   config_json: text("config_json").notNull().default("{}"),
   active: integer("active").notNull().default(1),
+  updated_by: text("updated_by"),
+  updated_at: text("updated_at"),
 });
 
 export const appConfig = sqliteTable("app_config", {

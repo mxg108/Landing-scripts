@@ -5,7 +5,14 @@
 import { Navbar } from "./brand/Navbar.js";
 import { Footer } from "./brand/Footer.js";
 import { Icon } from "./brand/Icon.js";
-import { CARD_REGISTRY, EMAIL_TEMPLATES, type CampaignConfig } from "./emailkit.js";
+import { EMAIL_TEMPLATES, type CampaignConfig } from "./emailkit.js";
+
+// A D1-backed editable email asset (templates table, kind='card'|'disclaimer').
+export interface AssetRow {
+  id: string; kind: string; name: string; active: boolean;
+  config: Record<string, string>;
+  updated_by: string | null; updated_at: string | null;
+}
 
 export interface CampaignRow {
   id: string; mode: string; property_name: string; event_name: string;
@@ -29,13 +36,18 @@ export interface RunRow {
 }
 
 export interface AppProps {
-  page: "access" | "home" | "campaign";
+  page: "access" | "home" | "campaign" | "edit" | "editor";
   user: { email: string; username: string };
   role: string | null;
   campaigns: CampaignRow[];
   recipients: RecipientRow[];
   roleRequests: RoleRow[];
   runs: RunRow[];
+  cards?: AssetRow[];
+  disclaimers?: AssetRow[];
+  editorKind?: "card" | "disclaimer";
+  editing?: AssetRow;
+  editorPreviewHtml?: string;
   config?: CampaignConfig;
   previewHtml?: string;
   previewSubject?: string;
@@ -159,6 +171,9 @@ function HomePage({ role, campaigns, roleRequests, flash, error }: AppProps) {
             Member Support · Property Notifications
           </span>
           <h1 className="display-sm" style={{ margin: 0 }}>Mass Notifications</h1>
+          <a href="/edit" className="label-xs" style={{ color: "var(--landing-bright-blue)", textDecoration: "none" }}>
+            ✎ Manage cards &amp; disclaimers
+          </a>
         </div>
 
         {flash && <Banner kind="success">{flash}</Banner>}
@@ -339,7 +354,11 @@ function RecipientsSection({ c, recipients }: { c: CampaignRow; recipients: Reci
   );
 }
 
-function ConfigureSection({ c, cfg }: { c: CampaignRow; cfg: CampaignConfig }) {
+function ConfigureSection({ c, cfg, cards, disclaimers }: {
+  c: CampaignRow; cfg: CampaignConfig; cards: AssetRow[]; disclaimers: AssetRow[];
+}) {
+  const activeCards = cards.filter((a) => a.active);
+  const activeDisclaimers = disclaimers.filter((a) => a.active);
   return (
     <SectionCard icon="pencil" title="2 · Configure">
       {/* Template chips */}
@@ -350,6 +369,51 @@ function ConfigureSection({ c, cfg }: { c: CampaignRow; cfg: CampaignConfig }) {
             <button type="submit" className="btn btn-secondary btn-sm">{name}</button>
           </form>
         ))}
+      </div>
+
+      {/* Notification card chiclets — instant apply, no Save needed */}
+      <div style={{ marginBottom: "var(--space-4)" }}>
+        <div className="flex items-baseline gap-2" style={{ marginBottom: "var(--space-2)" }}>
+          <span className="label-xs" style={{ color: "var(--text-secondary)" }}>Notification card</span>
+          <a href="/edit" className="label-xs" style={{ color: "var(--landing-bright-blue)", textDecoration: "none" }}>
+            ✎ Manage cards &amp; disclaimers
+          </a>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <form method="POST" action={`/api/campaigns/${c.id}/config-card`}>
+            <input type="hidden" name="card" value="" />
+            <button type="submit" className={`btn btn-sm ${cfg.notification_card === "" ? "btn-primary" : "btn-tertiary"}`}>
+              None
+            </button>
+          </form>
+          {activeCards.map((a) => (
+            <form key={a.id} method="POST" action={`/api/campaigns/${c.id}/config-card`}>
+              <input type="hidden" name="card" value={String(a.config.key)} />
+              <button type="submit"
+                className={`btn btn-sm ${cfg.notification_card === String(a.config.key) ? "btn-primary" : "btn-tertiary"}`}>
+                {a.config.label || a.config.key}
+              </button>
+            </form>
+          ))}
+        </div>
+      </div>
+
+      {/* Disclaimer chiclets — instant apply, fills the disclaimer field below */}
+      <div style={{ marginBottom: "var(--space-4)" }}>
+        <span className="label-xs" style={{ color: "var(--text-secondary)", display: "block", marginBottom: "var(--space-2)" }}>
+          Disclaimer presets
+        </span>
+        <div className="flex gap-2 flex-wrap">
+          {activeDisclaimers.map((a) => (
+            <form key={a.id} method="POST" action={`/api/campaigns/${c.id}/config-disclaimer`}>
+              <input type="hidden" name="template_id" value={a.id} />
+              <button type="submit"
+                className={`btn btn-sm ${cfg.disclaimer_html === String(a.config.html) ? "btn-primary" : "btn-tertiary"}`}>
+                {a.name}
+              </button>
+            </form>
+          ))}
+        </div>
       </div>
 
       <form method="POST" action={`/api/campaigns/${c.id}/config`} className="flex flex-col gap-3">
@@ -368,14 +432,6 @@ function ConfigureSection({ c, cfg }: { c: CampaignRow; cfg: CampaignConfig }) {
           <input type="text" name="subject_template" defaultValue={cfg.subject_template} className="ds-input" style={inputStyle} />
         </Field>
         <div className="flex gap-3 flex-wrap">
-          <Field label="Notification card">
-            <select name="notification_card" defaultValue={cfg.notification_card} className="ds-input" style={inputStyle}>
-              <option value="">— none —</option>
-              {Object.entries(CARD_REGISTRY).map(([key, card]) => (
-                <option key={key} value={key}>{card.label}</option>
-              ))}
-            </select>
-          </Field>
           <Field label="Sender display name">
             <input type="text" name="sender_display_name" defaultValue={cfg.sender_display_name} className="ds-input" style={inputStyle} />
           </Field>
@@ -551,6 +607,147 @@ function SendSection({ c, recipients, runs, cfg, userEmail }: {
   );
 }
 
+function EditListPage({ cards, disclaimers, flash, error }: AppProps) {
+  const list = (items: AssetRow[], kind: string, columns: (a: AssetRow) => string) => (
+    items.length === 0
+      ? <p className="body-sm" style={{ color: "var(--text-tertiary)", margin: 0 }}>None yet.</p>
+      : <ul style={{ listStyle: "none", margin: 0, padding: 0, border: "1px solid var(--border-secondary)", borderRadius: "var(--radius-sm)" }}>
+          {items.map((a, i) => (
+            <li key={a.id} style={{ borderTop: i === 0 ? "none" : "1px solid var(--border-secondary)" }}>
+              <a href={`/edit/${kind}/${a.id}`} className="flex items-center gap-3"
+                style={{ padding: "var(--space-2) var(--space-4)", textDecoration: "none" }}>
+                <span className="body-sm flex-1" style={{ color: a.active ? "var(--text-primary)" : "var(--text-tertiary)" }}>
+                  {columns(a)}
+                </span>
+                {!a.active && <span className="label-xs" style={{ color: "var(--text-tertiary)" }}>inactive</span>}
+                <span className="body-xs" style={{ color: "var(--text-tertiary)" }}>
+                  {a.updated_by === "seed" ? "built-in" : `${(a.updated_by ?? "").split("@")[0]} · ${(a.updated_at ?? "").slice(0, 10)}`}
+                </span>
+              </a>
+            </li>
+          ))}
+        </ul>
+  );
+  return (
+    <main className="ds-container flex-1">
+      <div className="ds-content w-full max-w-2xl mx-auto flex flex-col gap-6"
+        style={{ paddingTop: "var(--space-7)", paddingBottom: "var(--space-9)" }}>
+        <div className="flex items-center gap-3">
+          <a href="/" className="label-sm flex items-center gap-1" style={{ color: "var(--landing-bright-blue)", textDecoration: "none" }}>
+            <Icon name="arrow-short-left" size="sm" /> Campaigns
+          </a>
+          <span className="flex-1" />
+        </div>
+        <h1 className="header-lg" style={{ margin: 0 }}>Cards &amp; disclaimers</h1>
+        {flash && <Banner kind="success">{flash}</Banner>}
+        {error && <Banner kind="error">{error}</Banner>}
+
+        <SectionCard icon="pencil" title="Notification cards">
+          <div style={{ marginBottom: "var(--space-3)" }}>
+            <a href="/edit/card/new" className="btn btn-primary btn-sm" style={{ textDecoration: "none" }}>+ New card</a>
+          </div>
+          {list(cards ?? [], "card", (a) => `${a.config.label || a.config.key} — ${a.config.title}`)}
+          <p className="body-xs" style={{ color: "var(--text-tertiary)", margin: "var(--space-3) 0 0" }}>
+            Active cards appear as chiclets in every campaign's Configure section.
+          </p>
+        </SectionCard>
+
+        <SectionCard icon="more-info" title="Disclaimer presets">
+          <div style={{ marginBottom: "var(--space-3)" }}>
+            <a href="/edit/disclaimer/new" className="btn btn-primary btn-sm" style={{ textDecoration: "none" }}>+ New disclaimer</a>
+          </div>
+          {list(disclaimers ?? [], "disclaimer", (a) => a.name)}
+        </SectionCard>
+      </div>
+    </main>
+  );
+}
+
+function EditorPage({ editorKind, editing, editorPreviewHtml, flash, error }: AppProps) {
+  const isCard = editorKind === "card";
+  const cfg = editing?.config ?? {};
+  return (
+    <main className="ds-container flex-1">
+      <div className="ds-content w-full max-w-2xl mx-auto flex flex-col gap-5"
+        style={{ paddingTop: "var(--space-6)", paddingBottom: "var(--space-9)" }}>
+        <div className="flex items-center gap-3">
+          <a href="/edit" className="label-sm flex items-center gap-1" style={{ color: "var(--landing-bright-blue)", textDecoration: "none" }}>
+            <Icon name="arrow-short-left" size="sm" /> Cards &amp; disclaimers
+          </a>
+        </div>
+        <h1 className="header-lg" style={{ margin: 0 }}>
+          {editing ? `Edit ${isCard ? "card" : "disclaimer"}` : `New ${isCard ? "card" : "disclaimer"}`}
+        </h1>
+        {flash && <Banner kind="success">{flash}</Banner>}
+        {error && <Banner kind="error">{error}</Banner>}
+
+        <SectionCard icon="pencil" title={isCard ? "Card definition" : "Disclaimer definition"}>
+          <form method="POST" action={`/api/edit/${editorKind}`} className="flex flex-col gap-3">
+            {editing && <input type="hidden" name="id" value={editing.id} />}
+            {isCard ? (
+              <>
+                <div className="flex gap-3 flex-wrap">
+                  <Field label="Key (SCREAMING_SNAKE, stored in campaign config)">
+                    <input type="text" name="key" required defaultValue={cfg.key ?? ""} placeholder="POOL_CLOSURE" className="ds-input" style={inputStyle} />
+                  </Field>
+                  <Field label="Chiclet label">
+                    <input type="text" name="label" defaultValue={cfg.label ?? ""} placeholder="🏊 Pool Closure" className="ds-input" style={inputStyle} />
+                  </Field>
+                </div>
+                <div className="flex gap-3 flex-wrap">
+                  <Field label="Card title (header bar)">
+                    <input type="text" name="title" defaultValue={cfg.title ?? ""} className="ds-input" style={inputStyle} />
+                  </Field>
+                  <Field label="Accent color">
+                    <input type="text" name="accent" defaultValue={cfg.accent ?? "#1A61D9"} className="ds-input" style={inputStyle} />
+                  </Field>
+                  <Field label="Icon (HTML entity, e.g. &amp;#x1F525;)">
+                    <input type="text" name="icon" defaultValue={cfg.icon ?? ""} className="ds-input" style={inputStyle} />
+                  </Field>
+                </div>
+                <Field label="Body HTML ({{tokens}} supported; inline styles only — Gmail strips <style> blocks)">
+                  <textarea name="body_html" rows={10} defaultValue={cfg.body_html ?? ""} className="ds-input font-mono" style={{ fontSize: "var(--label-xs)" }} />
+                </Field>
+              </>
+            ) : (
+              <>
+                <Field label="Name (chiclet label)">
+                  <input type="text" name="name" required defaultValue={cfg.name ?? ""} className="ds-input" style={inputStyle} />
+                </Field>
+                <Field label="Disclaimer HTML ({{tokens}} supported)">
+                  <textarea name="html" rows={6} defaultValue={cfg.html ?? ""} className="ds-input font-mono" style={{ fontSize: "var(--label-xs)" }} />
+                </Field>
+              </>
+            )}
+            <div className="flex items-center gap-4">
+              <label className="body-sm flex items-center gap-2" style={{ color: "var(--text-secondary)" }}>
+                <input type="checkbox" name="active" defaultChecked={editing ? editing.active : true} />
+                Active (shown as a chiclet in Configure)
+              </label>
+              <span className="flex-1" />
+              <button type="submit" className="btn btn-primary btn-sm">Save</button>
+            </div>
+          </form>
+        </SectionCard>
+
+        {editing && (
+          <SectionCard icon="search" title="Preview (sample tokens)">
+            <iframe
+              srcDoc={editorPreviewHtml ?? ""}
+              sandbox=""
+              style={{ width: "100%", height: 320, border: "1px solid var(--border-secondary)", borderRadius: "var(--radius-sm)", background: "#fff" }}
+              title="Asset preview"
+            />
+            <p className="body-xs" style={{ color: "var(--text-tertiary)", margin: "var(--space-2) 0 0" }}>
+              Rendered with sample data (Woodhill / Jordan Sample / unit 101). Save, then refresh to update.
+            </p>
+          </SectionCard>
+        )}
+      </div>
+    </main>
+  );
+}
+
 function CampaignPage(props: AppProps) {
   const { campaigns, recipients, runs, config, flash, error, user } = props;
   const c = campaigns[0];
@@ -584,7 +781,7 @@ function CampaignPage(props: AppProps) {
         {c.status === "errored" && stats?.error ? <Banner kind="error">Last operation failed: {String(stats.error)}</Banner> : null}
 
         <RecipientsSection c={c} recipients={recipients} />
-        {config && <ConfigureSection c={c} cfg={config} />}
+        {config && <ConfigureSection c={c} cfg={config} cards={props.cards ?? []} disclaimers={props.disclaimers ?? []} />}
         {config && <PreviewSection c={c} recipients={recipients}
           previewHtml={props.previewHtml} previewSubject={props.previewSubject}
           previewFor={props.previewFor} previewRecipientId={props.previewRecipientId} />}
@@ -600,6 +797,8 @@ export default function App(props: AppProps) {
       <Navbar />
       {props.page === "access" ? <AccessPage user={props.user} role={props.role} />
         : props.page === "campaign" ? <CampaignPage {...props} />
+        : props.page === "edit" ? <EditListPage {...props} />
+        : props.page === "editor" ? <EditorPage {...props} />
         : <HomePage {...props} />}
       <Footer />
     </div>

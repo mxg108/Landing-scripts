@@ -7,8 +7,8 @@ import { renderToString } from "react-dom/server";
 import App, { type AppProps, type CampaignRow, type RecipientRow, type RoleRow, type RunRow } from "./App.js";
 // @ts-ignore — Vite resolves ?inline to a CSS string at build time
 import styles from "./styles.css?inline";
-import { createDb, campaigns, recipients, roles, runs, workflowRuns, appConfig } from "./db.js";
-import { desc, eq, and, asc, inArray } from "drizzle-orm";
+import { createDb, campaigns, recipients, roles, runs, workflowRuns, appConfig, templates } from "./db.js";
+import { desc, eq, and, asc } from "drizzle-orm";
 import { triggerWorkflowWithCallback } from "./workflow.js";
 // MCP server disabled in v0.1: the agents/mcp package pulls mimetext's node
 // build (`node:os`), which Sandy's deploy config rejects. Re-enable in P2 with
@@ -17,9 +17,11 @@ import { triggerWorkflowWithCallback } from "./workflow.js";
 import { serveFont } from "./design-system/fonts.js";
 import {
   parseConfig, composeBodyTemplate, buildGlobalTokens, buildRecipientTokens,
-  renderTokens, applyTemplate, validateForDispatch, CONFIG_DEFAULTS,
-  type CampaignConfig,
+  renderTokens, renderCard, applyTemplate, validateForDispatch, CONFIG_DEFAULTS,
+  SEED_CARDS, SEED_DISCLAIMERS, formatToday,
+  type CampaignConfig, type CardDef,
 } from "./emailkit.js";
+import type { AssetRow } from "./App.js";
 
 export interface Env {
   DB: D1Database;
@@ -53,6 +55,47 @@ function parseIdList(s: string): string[] {
   return String(s || "").split(/[\s,]+/).map((x) => x.trim()).filter(Boolean)
     .filter((v, i, a) => a.indexOf(v) === i);
 }
+
+// Cards + disclaimers live in D1 (templates: kind='card'|'disclaimer'), seeded
+// once from emailkit SEED_* and curated at /edit thereafter.
+async function loadAssets(db: ReturnType<typeof createDb>) {
+  let rows = await db.select().from(templates);
+  if (!rows.some((r) => r.kind === "card")) {
+    const now = new Date().toISOString();
+    for (const c of SEED_CARDS) {
+      await db.insert(templates).values({
+        id: crypto.randomUUID(), name: c.key, kind: "card",
+        config_json: JSON.stringify(c), active: 1, updated_by: "seed", updated_at: now,
+      });
+    }
+    for (const d of SEED_DISCLAIMERS) {
+      await db.insert(templates).values({
+        id: crypto.randomUUID(), name: d.name, kind: "disclaimer",
+        config_json: JSON.stringify(d), active: 1, updated_by: "seed", updated_at: now,
+      });
+    }
+    rows = await db.select().from(templates);
+  }
+  const parse = (r: typeof rows[number]): AssetRow => {
+    let cfg: Record<string, string> = {};
+    try { cfg = JSON.parse(r.config_json); } catch { /* ignore */ }
+    return { id: r.id, kind: r.kind, name: r.name, active: r.active === 1, config: cfg,
+      updated_by: r.updated_by, updated_at: r.updated_at };
+  };
+  const cards = rows.filter((r) => r.kind === "card").map(parse);
+  const disclaimers = rows.filter((r) => r.kind === "disclaimer").map(parse);
+  const cardMap: Record<string, CardDef> = {};
+  for (const c of cards) if (c.active) cardMap[String(c.config.key)] = c.config as unknown as CardDef;
+  return { cards, disclaimers, cardMap };
+}
+
+const SAMPLE_TOKENS: Record<string, string> = {
+  property_name: "Woodhill", event_name: "Sample Event",
+  date_range: "Mon, Aug 10–Fri, Aug 14, 2026", today: "",
+  manager_name: "Alex Doe", manager_email: "alex.doe@hellolanding.com",
+  first_name: "Jordan", member_name: "Jordan Sample",
+  member_email: "jordan@example.com", unit: "101",
+};
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -315,6 +358,58 @@ export default {
       return back(`Template "${name}" applied — fill in manager, dates, and review before sending`);
     }
 
+    // ── Instant-apply chiclets: notification card / disclaimer ───────────────
+    if (campaign && action === "/config-card" && request.method === "POST") {
+      const form = await request.formData();
+      const key = form.get("card")?.toString() ?? "";
+      const { cardMap } = await loadAssets(db);
+      if (key && !cardMap[key]) return back(`Unknown card: ${key}`, true);
+      const cfg = parseConfig(campaign.config_json);
+      cfg.notification_card = key;
+      await db.update(campaigns).set({ config_json: JSON.stringify(cfg) }).where(eq(campaigns.id, cid!));
+      return back(key ? `Card set: ${key}` : "Card removed");
+    }
+    if (campaign && action === "/config-disclaimer" && request.method === "POST") {
+      const form = await request.formData();
+      const tid = form.get("template_id")?.toString() ?? "";
+      const { disclaimers } = await loadAssets(db);
+      const d = disclaimers.find((x) => x.id === tid && x.active);
+      if (!d) return back("Unknown disclaimer", true);
+      const cfg = parseConfig(campaign.config_json);
+      cfg.disclaimer_html = String(d.config.html ?? "");
+      cfg.include_disclaimer = true;
+      await db.update(campaigns).set({ config_json: JSON.stringify(cfg) }).where(eq(campaigns.id, cid!));
+      return back(`Disclaimer set: ${d.name}`);
+    }
+
+    // ── SSE: live campaign status (replaces refresh-to-see-results) ──────────
+    if (campaign && action === "/events" && request.method === "GET") {
+      const enc = new TextEncoder();
+      const stream = new ReadableStream({
+        async start(controller) {
+          const send = (obj: unknown) =>
+            controller.enqueue(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
+          try {
+            for (let i = 0; i < 25; i++) { // ~50s, then EventSource auto-reconnects
+              const row = (await db.select({ status: campaigns.status })
+                .from(campaigns).where(eq(campaigns.id, cid!)).limit(1))[0];
+              send({ status: row?.status ?? "gone" });
+              if (!row || !["fetching", "sending"].includes(row.status)) break;
+              await new Promise((r) => setTimeout(r, 2000));
+            }
+          } catch { /* client went away */ }
+          try { controller.close(); } catch { /* already closed */ }
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+        },
+      });
+    }
+
     // ── Dispatch: send / dryrun / test ───────────────────────────────────────
     if (campaign && action === "/dispatch" && request.method === "POST") {
       const form = await request.formData();
@@ -324,12 +419,14 @@ export default {
         return back("Check the confirmation box to send", true);
       }
       const cfg = parseConfig(campaign.config_json);
+      const { cardMap } = await loadAssets(db);
       const allRows = await db.select().from(recipients)
         .where(eq(recipients.campaign_id, cid!))
         .orderBy(asc(recipients.unit), asc(recipients.email));
       const eligibleRows = allRows.filter((r) => ELIGIBLE.includes(r.status));
 
-      const errors = validateForDispatch(cfg, campaign.property_name, eligibleRows.length, kind);
+      const errors = validateForDispatch(cfg, campaign.property_name, eligibleRows.length, kind,
+        new Set(Object.keys(cardMap)));
       if (errors.length) return back(errors.join(" "), true);
 
       const limit = kind === "dryrun" ? cfg.dry_run_limit : cfg.max_per_run;
@@ -363,7 +460,7 @@ export default {
           kind,
           config: {
             subjectTemplate: cfg.subject_template,
-            bodyTemplate: composeBodyTemplate(cfg),
+            bodyTemplate: composeBodyTemplate(cfg, cardMap),
             senderName: cfg.sender_display_name,
             replyTo: cfg.reply_to,
             cc: [cfg.manager_email, cfg.cc_extra].filter(Boolean).join(","),
@@ -388,7 +485,7 @@ export default {
         const label = kind === "send" ? `Sending to ${wfRecipients.length} recipients`
           : kind === "dryrun" ? `Creating ${wfRecipients.length} drafts in member.support@`
           : `Test email queued to ${user.email}`;
-        return back(`${label} — refresh for results`);
+        return back(`${label} — results will appear here automatically`);
       } catch (e: any) {
         return back(e?.message ?? String(e), true);
       }
@@ -434,6 +531,88 @@ export default {
       return back("Recipient added");
     }
 
+    // ── /edit — cards & disclaimers management ───────────────────────────────
+    if (url.pathname === "/edit" && request.method === "GET") {
+      const { cards, disclaimers } = await loadAssets(db);
+      return renderPage({
+        page: "edit", user, role,
+        campaigns: [], recipients: [], roleRequests: [], runs: [],
+        cards, disclaimers,
+        flash: url.searchParams.get("flash") ?? undefined,
+        error: url.searchParams.get("error") ?? undefined,
+      });
+    }
+    const editorMatch = url.pathname.match(/^\/edit\/(card|disclaimer)\/(new|[0-9a-f-]{36})$/);
+    if (editorMatch && request.method === "GET") {
+      const [, kind, idOrNew] = editorMatch;
+      const { cards, disclaimers } = await loadAssets(db);
+      const pool = kind === "card" ? cards : disclaimers;
+      const editing = idOrNew === "new" ? undefined : pool.find((a) => a.id === idOrNew);
+      if (idOrNew !== "new" && !editing) {
+        return Response.redirect(new URL("/edit?error=Not+found", request.url).toString(), 303);
+      }
+      // Editor preview: card rendered in its shell / disclaimer as-is, sample tokens.
+      const sample = { ...SAMPLE_TOKENS, today: formatToday("America/Mexico_City") };
+      let editorPreviewHtml = "";
+      if (editing) {
+        editorPreviewHtml = kind === "card"
+          ? renderTokens(renderCard(editing.config as unknown as CardDef), sample, true)
+          : renderTokens(String(editing.config.html ?? ""), sample, true);
+      }
+      return renderPage({
+        page: "editor", user, role,
+        campaigns: [], recipients: [], roleRequests: [], runs: [],
+        cards, disclaimers,
+        editorKind: kind as "card" | "disclaimer",
+        editing, editorPreviewHtml,
+        flash: url.searchParams.get("flash") ?? undefined,
+        error: url.searchParams.get("error") ?? undefined,
+      });
+    }
+    const editApiMatch = url.pathname.match(/^\/api\/edit\/(card|disclaimer)$/);
+    if (editApiMatch && request.method === "POST") {
+      const kind = editApiMatch[1];
+      const form = await request.formData();
+      const id = form.get("id")?.toString() || crypto.randomUUID();
+      const isNew = !form.get("id");
+      const active = form.get("active") === "on" ? 1 : 0;
+      const now = new Date().toISOString();
+      let name = "";
+      let config: Record<string, string> = {};
+      if (kind === "card") {
+        const key = (form.get("key")?.toString() ?? "").trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+        if (!key) return Response.redirect(new URL("/edit?error=Card+key+is+required", request.url).toString(), 303);
+        const { cards } = await loadAssets(db);
+        if (cards.some((c) => String(c.config.key) === key && c.id !== id)) {
+          return Response.redirect(new URL(`/edit?error=Card+key+${key}+already+exists`, request.url).toString(), 303);
+        }
+        name = key;
+        config = {
+          key,
+          label: form.get("label")?.toString().trim() || key,
+          accent: form.get("accent")?.toString().trim() || "#1A61D9",
+          icon: form.get("icon")?.toString().trim() || "",
+          title: form.get("title")?.toString().trim() || key,
+          body_html: form.get("body_html")?.toString() ?? "",
+        };
+      } else {
+        name = form.get("name")?.toString().trim() || "Untitled disclaimer";
+        config = { name, html: form.get("html")?.toString() ?? "" };
+      }
+      if (isNew) {
+        await db.insert(templates).values({
+          id, name, kind, config_json: JSON.stringify(config), active,
+          updated_by: user.email, updated_at: now,
+        });
+      } else {
+        await db.update(templates)
+          .set({ name, config_json: JSON.stringify(config), active, updated_by: user.email, updated_at: now })
+          .where(eq(templates.id, id));
+      }
+      return Response.redirect(
+        new URL(`/edit/${kind}/${id}?flash=Saved`, request.url).toString(), 303);
+    }
+
     // ── Recipient status update / delete (field-level) ───────────────────────
     const recEditMatch = url.pathname.match(/^\/api\/recipients\/([0-9a-f-]{36})$/);
     if (recEditMatch && request.method === "POST") {
@@ -463,6 +642,7 @@ export default {
       const runRows = await db.select().from(runs)
         .where(eq(runs.campaign_id, cid!))
         .orderBy(desc(runs.started_at)).limit(10);
+      const { cards, disclaimers, cardMap } = await loadAssets(db);
 
       // Server-rendered preview against a chosen (or first eligible) recipient.
       const cfg = parseConfig(campaign.config_json);
@@ -476,20 +656,39 @@ export default {
            : { email: "", name: "Resident", unit: "101" },
         cfg.include_unit_line
       );
-      const previewHtml = renderTokens(composeBodyTemplate(cfg), tokens, true);
+      const previewHtml = renderTokens(composeBodyTemplate(cfg, cardMap), tokens, true);
       const previewSubject = renderTokens(cfg.subject_template, tokens, false);
+
+      // Live status watcher: SSE while fetching/sending, reload on transition.
+      const watchScript = ["fetching", "sending"].includes(campaign.status) ? `
+(function(){
+  if (!window.EventSource) return;
+  var initial = ${JSON.stringify(campaign.status)};
+  function watch(){
+    var es = new EventSource(location.pathname.replace(/\\/$/, "") + "/events");
+    es.onmessage = function(ev){
+      try {
+        var d = JSON.parse(ev.data);
+        if (d.status && d.status !== initial) { es.close(); location.reload(); }
+      } catch(e){}
+    };
+    es.onerror = function(){ es.close(); setTimeout(watch, 3000); };
+  }
+  watch();
+})();` : undefined;
 
       return renderPage({
         page: "campaign", user, role,
         campaigns: [campaign as CampaignRow], recipients: recRows as RecipientRow[],
         roleRequests: [], runs: runRows as RunRow[],
+        cards, disclaimers,
         config: cfg,
         previewHtml, previewSubject,
         previewFor: pr ? pr.email : "generic (no recipients)",
         previewRecipientId: pr?.id,
         flash: url.searchParams.get("flash") ?? undefined,
         error: url.searchParams.get("error") ?? undefined,
-      });
+      }, watchScript);
     }
 
     // ── Home: campaign list ──────────────────────────────────────────────────
@@ -507,7 +706,7 @@ export default {
   },
 };
 
-function renderPage(props: AppProps): Response {
+function renderPage(props: AppProps, extraScript?: string): Response {
   const appHtml = renderToString(<App {...props} />);
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -518,7 +717,7 @@ function renderPage(props: AppProps): Response {
   <style>${styles}</style>
 </head>
 <body>
-  <div id="root">${appHtml}</div>
+  <div id="root">${appHtml}</div>${extraScript ? `\n  <script>${extraScript}</script>` : ""}
 </body>
 </html>`;
   return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
