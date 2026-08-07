@@ -1165,6 +1165,24 @@ function sectionRowsFromScorecard(config: TeamConfig, scorecard: any) {
   return rows;
 }
 
+// Port of eval_store.requires_analyst_review (backend/services/eval_store.py):
+// true when the team's rubric has manual sections (score_type manual|manual_yn)
+// whose formula section lacks na_default — the AI cannot legitimately fill
+// them, so the eval must hold for an analyst. Formula sections are keyed by
+// `key`, rubric sections by `id` (same namespace, Railway parity).
+function requiresAnalystReview(config: TeamConfig, formula: any): boolean {
+  const naDefaults = new Set(
+    (formula.sections ?? [])
+      .filter((s: any) => s?.na_default)
+      .map((s: any) => s.key)
+  );
+  return config.sections_by_number.some(
+    (s) =>
+      (s.score_type === "manual" || s.score_type === "manual_yn") &&
+      !naDefaults.has(s.id)
+  );
+}
+
 function answersFromSectionRows(rows: any[]): Record<string, number | string> {
   const answers: Record<string, number | string> = {};
   for (const r of rows) {
@@ -1206,8 +1224,19 @@ export async function scoringCallback(
   const result = evaluateFormula(formula, answers);
   const overallScore = quantizeScore(result.final_score);
 
-  // §3.14 human-review gate
-  let flagged = false;
+  // §3.14 human-review gate — two conditions, matching Railway
+  // routes/scoring.py (`human_review_trigger_fired(...) OR
+  // requires_analyst_review(config)`):
+  //   1. score-threshold triggers from formula_json.human_review_triggers;
+  //   2. requiresAnalystReview — a team whose rubric has MANUAL sections
+  //      lacking a formula na_default can NEVER auto-finalize: those scores
+  //      must come from an analyst. This is what makes every SALES eval
+  //      flag (manual potential_booking/notes_mc, no na_default anywhere in
+  //      sales_v2 — Railway production find 2026-07-06, when NA drafts rode
+  //      into full credit). MS is unaffected: its human_review_required
+  //      section declares na_default=true. Condition 2 was dropped in the
+  //      original port — restored 2026-08-06 (parity fix).
+  let flagged = requiresAnalystReview(config, formula);
   for (const trig of formula.human_review_triggers ?? []) {
     const a = answers[trig.section_id];
     if (typeof a === "number" && a <= trig.max_score_to_trigger) {
