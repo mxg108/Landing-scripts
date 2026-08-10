@@ -26,9 +26,9 @@ import {
 } from "../lib/scoringPrompts.js";
 import { evaluateFormula, quantizeScore } from "../lib/ruleEngine.js";
 import { fetchSopContext } from "../lib/sopRetrieval.js";
+import { getProvider } from "../lib/providers/index.js";
 
 const WORKFLOW_NAME = "qa-scoring-pipeline";
-const DP = "https://dialpad.com/api/v2";
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -36,96 +36,9 @@ const json = (data: unknown, status = 200) =>
     headers: { "Content-Type": "application/json" },
   });
 
-// ── Dialpad prefetch (ports of get_transcript / get_call_details) ───────────
-
-function mmssFrom(callStart: number | null, tsRaw: string): string {
-  if (!tsRaw || callStart === null) return "";
-  const t = Date.parse(tsRaw);
-  if (Number.isNaN(t)) return "";
-  const elapsed = Math.trunc((t - callStart) / 1000);
-  return `${Math.trunc(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
-}
-
-async function getTranscript(key: string, callId: string) {
-  const empty = { transcript_text: "", transcript_display: [] as any[], moments_display: [] as any[] };
-  try {
-    const r = await fetch(`${DP}/transcripts/${encodeURIComponent(callId)}`, {
-      headers: { authorization: `Bearer ${key}` },
-    });
-    if (!r.ok) return empty;
-    const data = (await r.json()) as any;
-    const transcriptLines: string[] = [];
-    const transcriptDisplay: any[] = [];
-    const momentsDisplay: any[] = [];
-    let callStart: number | null = null;
-    for (const line of data.lines ?? []) {
-      const tsRaw = line.time ?? "";
-      if (line.type === "transcript") {
-        const name = line.name ?? "Unknown";
-        const content = (line.content ?? "").trim();
-        if (!content) continue;
-        if (tsRaw && callStart === null) {
-          const t = Date.parse(tsRaw);
-          if (!Number.isNaN(t)) callStart = t;
-        }
-        transcriptLines.push(`${name}: ${content}`);
-        transcriptDisplay.push({
-          timestamp: mmssFrom(callStart, tsRaw),
-          speaker: name,
-          text: content,
-        });
-      } else if (["moment", "real_time_moment", "custom_moment"].includes(line.type)) {
-        const momentType = line.moment_type || (line.content ?? "").trim();
-        if (!momentType) continue;
-        momentsDisplay.push({
-          timestamp: mmssFrom(callStart, tsRaw),
-          time: tsRaw,
-          type: momentType,
-          agent: line.name ?? "",
-        });
-      }
-    }
-    return {
-      transcript_text: transcriptLines.join("\n"),
-      transcript_display: transcriptDisplay,
-      moments_display: momentsDisplay,
-    };
-  } catch {
-    return empty;
-  }
-}
-
-async function getCallDetails(key: string, callId: string) {
-  try {
-    const r = await fetch(`${DP}/call/${encodeURIComponent(callId)}`, {
-      headers: { authorization: `Bearer ${key}` },
-    });
-    if (!r.ok) return {} as any;
-    const raw = (await r.json()) as any;
-    const contact = raw.contact ?? {};
-    return {
-      caller_name: contact.name ?? "",
-      caller_phone: contact.phone ?? "",
-      caller_email: contact.email ?? "",
-      date_connected: raw.date_connected ?? "",
-      date_ended: raw.date_ended ?? "",
-      total_duration: raw.total_duration ?? raw.duration ?? 0,
-      entry_point_call_id: String(raw.entry_point_call_id ?? ""),
-      master_call_id: String(raw.master_call_id ?? ""),
-      was_recorded: !!raw.recording_details,
-      raw,
-    } as any;
-  } catch {
-    return {} as any;
-  }
-}
-
-const epochToIso = (v: any): string | null => {
-  const n = Number(v);
-  return v && Number.isFinite(n) ? new Date(n).toISOString() : null;
-};
-
 // ── trigger ────────────────────────────────────────────────────────────────
+// Call prefetch lives behind the provider seam now — lib/providers/dialpad.ts
+// is the verbatim extract of the get_transcript/get_call_details ports.
 
 export async function scoreTrigger(
   request: Request,
@@ -215,16 +128,15 @@ async function scoreTriggerInternal(
   }
 
   const config = await loadTeamConfig(db, teamId);
-  const [transcript, details] = await Promise.all([
-    getTranscript(env.DIALPAD_API_KEY, callId),
-    getCallDetails(env.DIALPAD_API_KEY, callId),
-  ]);
+  // R1: every team is dialpad; R2 selects from teams.provider (migration 0005).
+  const provider = getProvider("dialpad", env);
+  const call = await provider.fetchCall(callId);
 
   // CC grounding — mode 'on' for the Sandy pipeline (DispositionDesign §5)
   const ccCtx = await fetchCallContext(db, teamId, {
-    entry_point: details.entry_point_call_id ?? "",
+    entry_point: call.entry_point_call_id ?? "",
     call_id: callId,
-    master: details.master_call_id ?? "",
+    master: call.master_call_id ?? "",
   });
   const callContextText = buildCallContextBlock(ccCtx);
 
@@ -236,10 +148,10 @@ async function scoreTriggerInternal(
     pulpoToken: env.PULPO_MCP_TOKEN,
     dispositionCategory: ccCtx?.disposition_category ?? null,
     disposition: ccCtx?.disposition ?? null,
-    transcriptText: transcript.transcript_text,
+    transcriptText: call.transcript_text,
   });
 
-  const durationMs = Number(details.total_duration ?? 0);
+  const durationMs = call.duration_ms;
   const extraNotes = buildLongCallNote(config.prompt_config, durationMs);
   const teamLabel = teamId === "sales" ? "Sales" : "Member Support";
   const teamLine = teamId === "sales" ? "sales line" : "member support line";
@@ -260,10 +172,12 @@ async function scoreTriggerInternal(
     call_id: callId,
     team_id: teamId,
     pipeline: "two_stage",
+    // Inert on workflow v0.2 (ignored); v0.3 branches its audio leg on it.
+    audio: call.audio,
     annotator: {
       model: "gemini-2.5-flash",
       system: ANNOTATOR_SYSTEM,
-      prompt: buildAnnotatorPrompt(transcript.transcript_text, transcript.moments_display),
+      prompt: buildAnnotatorPrompt(call.transcript_text, call.moments_display, provider.markers_header),
       response_schema: ANNOTATOR_RESPONSE_SCHEMA,
       thinking_budget: 4096,
       max_output_tokens: 65536,
@@ -278,7 +192,7 @@ async function scoreTriggerInternal(
     single_stage: {
       model: "gemini-2.5-flash",
       system: buildSystemPrompt(config.prompt_config),
-      prompt: buildScoringPrompt(config.prompt_config, transcript.transcript_text, promptExtras),
+      prompt: buildScoringPrompt(config.prompt_config, call.transcript_text, promptExtras),
       temperature: 0.2,
       max_output_tokens: 65536,
     },
@@ -288,13 +202,14 @@ async function scoreTriggerInternal(
       agent_name: agentName,
       agent_email: agentEmail,
       manager_email: managerEmail,
-      caller_name: details.caller_name ?? "",
-      caller_phone: details.caller_phone ?? "",
-      call_connected_at: epochToIso(details.date_connected),
-      call_ended_at: epochToIso(details.date_ended),
+      caller_name: call.caller_name,
+      caller_phone: call.caller_phone,
+      call_connected_at: call.connected_at,
+      call_ended_at: call.ended_at,
       call_duration_ms: durationMs || null,
-      dialpad_entry_point_call_id: details.entry_point_call_id || null,
-      dialpad_master_call_id: details.master_call_id || null,
+      dialpad_entry_point_call_id: call.entry_point_call_id,
+      dialpad_master_call_id: call.master_call_id,
+      review_link: call.review_link,
       cc_stamps: ccCtx
         ? {
             disposition_category: ccCtx.disposition_category,
@@ -303,8 +218,8 @@ async function scoreTriggerInternal(
             cc_call_id: ccCtx.cc_call_id,
           }
         : null,
-      transcript_display: transcript.transcript_display,
-      moments_display: transcript.moments_display,
+      transcript_display: call.transcript_display,
+      moments_display: call.moments_display,
       flagged_long_call: durationMs > 25 * 60 * 1000,
       // PulpoConnection §4.2 step 6 — provenance stamped in shadow AND on
       sop_used: sop.sop_title || null,
@@ -1310,7 +1225,10 @@ export async function scoringCallback(
       persist.call_connected_at, persist.call_ended_at, persist.call_duration_ms,
       p.annotation?.language_detected ?? null,
       p.call_id, persist.dialpad_entry_point_call_id, persist.dialpad_master_call_id,
-      `https://dialpad.com/callhistory/callreview/${persist.dialpad_entry_point_call_id || p.call_id}`,
+      // review_link rides the payload since the provider seam; the fallback
+      // covers jobs queued before it existed.
+      persist.review_link ||
+        `https://dialpad.com/callhistory/callreview/${persist.dialpad_entry_point_call_id || p.call_id}`,
       persist.caller_name || null, persist.caller_phone || null,
       scorecard.call_summary ?? null,
       p.annotation ? JSON.stringify(p.annotation) : null,
@@ -1367,7 +1285,9 @@ export async function scoringCallback(
           summary: (scorecard.call_summary ?? "").slice(0, 280),
           strengths: (scorecard.key_strengths ?? "").slice(0, 280),
           opportunities: (scorecard.opportunities ?? "").slice(0, 280),
-          dialpad_link: `https://dialpad.com/callhistory/callreview/${persist.dialpad_entry_point_call_id || p.call_id}`,
+          dialpad_link:
+            persist.review_link ||
+            `https://dialpad.com/callhistory/callreview/${persist.dialpad_entry_point_call_id || p.call_id}`,
           timestamp: now,
         })
       )

@@ -17,12 +17,18 @@ const MAX_HISTORY = 5; // CONFIG.EMAIL.MAX_HISTORY in the GAS Branding.js
 
 export type EmailDispatchResult = { status: string; message: string };
 
+// Explicit per-team map — a team with no GAS webapp (sofia, any future team)
+// must resolve to undefined → 'skipped', never fall into another team's
+// inbox (the old sales-else-MS ternary would have emailed Sofia scorecards
+// to the Member Support webapp).
 export function gasUrlForTeam(
   gasUrls: { member_support?: string; sales?: string } | undefined,
   teamId: string
 ): string | undefined {
   if (!gasUrls) return undefined;
-  return teamId === "sales" ? gasUrls.sales : gasUrls.member_support;
+  if (teamId === "sales") return gasUrls.sales;
+  if (teamId === "member_support") return gasUrls.member_support;
+  return undefined;
 }
 
 // Mirrors sheets_projection._render_disposition — "Category — Sub".
@@ -129,11 +135,20 @@ export async function dispatchScorecardEmail(
   gasUrl: string | undefined,
   disclaimer?: string | null
 ): Promise<EmailDispatchResult> {
-  if (!gasUrl)
+  if (!gasUrl) {
+    const secretName =
+      teamId === "sales"
+        ? "GAS_WEBAPP_URL_SALES"
+        : teamId === "member_support"
+          ? "GAS_WEBAPP_URL_MS"
+          : null;
     return {
       status: "skipped",
-      message: `GAS_WEBAPP_URL_${teamId === "sales" ? "SALES" : "MS"} app secret not configured`,
+      message: secretName
+        ? `${secretName} app secret not configured`
+        : `no GAS webapp for team ${teamId} — email not applicable`,
     };
+  }
   try {
     const ev = await db
       .prepare("SELECT * FROM qa_evaluations WHERE id = ?")
