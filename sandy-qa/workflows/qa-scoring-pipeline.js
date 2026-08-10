@@ -27,6 +27,9 @@
  * {
  *   call_id, team_id,
  *   pipeline: "two_stage" | "single",
+ *   audio?: { source: "dialpad" }                      // default — Dialpad meta+download
+ *         | { source: "url", url, mime },              // pre-signed URL (Retell WAV,
+ *                                                      //   fetched fresh app-side; v0.3)
  *   annotator: { model, system, prompt, response_schema, thinking_budget,
  *                max_output_tokens },
  *   judge: { provider: "anthropic"|"gemini", model, system,
@@ -192,27 +195,42 @@ export class TenantWorkflow extends WorkflowEntrypoint {
 
     let audioLeg = null;
     try {
-      if (!p.call_id || !dpKey || !gmKey)
-        throw new Error("missing call_id or DIALPAD/GEMINI secrets");
+      const audioSpec = p.audio ?? { source: "dialpad" };
+      if (!p.call_id || !gmKey)
+        throw new Error("missing call_id or GEMINI secret");
+      if (audioSpec.source === "dialpad" && !dpKey)
+        throw new Error("missing DIALPAD secret");
 
       // ── audio leg: download + upload + Stage-A annotate (ONE step) ────────
       audioLeg = await step.do("audio-leg", RETRY, async () => {
         const out = { timings: {} };
         let t = Date.now();
-        const metaRes = await fetch(
-          `https://dialpad.com/api/v2/call/${encodeURIComponent(p.call_id)}`,
-          { headers: { authorization: `Bearer ${dpKey}` } });
-        if (!metaRes.ok)
-          throw new Error(`dialpad-meta HTTP ${metaRes.status}`);
-        const meta = await metaRes.json();
-        const rec = (meta.recording_details ?? [])[0] ?? {};
-        if (!rec.url) throw new Error("no recording_details url");
-        const recUrl = new URL(rec.url);
-        recUrl.searchParams.set("apikey", dpKey);
-        const audioRes = await fetch(recUrl.toString(), { redirect: "follow" });
-        if (!audioRes.ok) throw new Error(`dialpad-audio HTTP ${audioRes.status}`);
-        const audioBuf = await audioRes.arrayBuffer();
-        const mime = (audioRes.headers.get("content-type") ?? "audio/mp3").split(";")[0].trim();
+        let audioBuf, mime;
+        if (audioSpec.source === "url") {
+          // v0.3: pre-signed recording URL (Retell WAV) fetched fresh by the
+          // app at trigger time — no provider secret needed workflow-side.
+          const audioRes = await fetch(audioSpec.url, {
+            redirect: "follow", signal: AbortSignal.timeout(120000) });
+          if (!audioRes.ok) throw new Error(`audio-url HTTP ${audioRes.status}`);
+          audioBuf = await audioRes.arrayBuffer();
+          mime = audioSpec.mime ||
+            (audioRes.headers.get("content-type") ?? "audio/wav").split(";")[0].trim();
+        } else {
+          const metaRes = await fetch(
+            `https://dialpad.com/api/v2/call/${encodeURIComponent(p.call_id)}`,
+            { headers: { authorization: `Bearer ${dpKey}` } });
+          if (!metaRes.ok)
+            throw new Error(`dialpad-meta HTTP ${metaRes.status}`);
+          const meta = await metaRes.json();
+          const rec = (meta.recording_details ?? [])[0] ?? {};
+          if (!rec.url) throw new Error("no recording_details url");
+          const recUrl = new URL(rec.url);
+          recUrl.searchParams.set("apikey", dpKey);
+          const audioRes = await fetch(recUrl.toString(), { redirect: "follow" });
+          if (!audioRes.ok) throw new Error(`dialpad-audio HTTP ${audioRes.status}`);
+          audioBuf = await audioRes.arrayBuffer();
+          mime = (audioRes.headers.get("content-type") ?? "audio/mp3").split(";")[0].trim();
+        }
         out.audio_bytes = audioBuf.byteLength;
         out.timings.download = Date.now() - t;
 

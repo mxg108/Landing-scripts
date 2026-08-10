@@ -23,6 +23,8 @@ import datapointHtml from "../../pages/datapoint.html?raw";
 // @ts-ignore vite ?raw
 import lookupHtml from "../../pages/lookup.html?raw";
 // @ts-ignore vite ?raw
+import lookupRetellHtml from "../../pages/lookup_retell.html?raw";
+// @ts-ignore vite ?raw
 import onepagerShellHtml from "../../pages/onepager.html?raw";
 // @ts-ignore vite ?raw
 import scorecardHtml from "../../pages/scorecard.html?raw";
@@ -37,7 +39,7 @@ import headerJs from "../../pages/static/header.js?raw";
 import { accessEmail, resolveAccess, type Access } from "../lib/rbac.js";
 
 const RAILWAY_BASE = "https://hellolanding-qa.up.railway.app";
-const KNOWN_TEAMS = new Set(["member_support", "sales"]);
+const KNOWN_TEAMS = new Set(["member_support", "sales", "sofia"]);
 
 const GREETING_PAGE = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -84,9 +86,10 @@ h1,h2,h3{font-family:'Fraunces',serif}
       <span class="badge">Live</span><h2>Sales</h2>
       <span class="note">Team dashboard, agent analytics, month drill-downs</span>
       <span class="go">Open dashboard &rsaquo;</span></a>
-    <div class="team-card soon">
-      <span class="badge soon-b">Coming soon</span><h2>Sofia AI</h2>
-      <span class="note">QA for our voice AI agent — calls on Retell.ai</span></div>
+    <a class="team-card" href="/dashboard/sofia">
+      <span class="badge">Live</span><h2>Sofia AI</h2>
+      <span class="note">QA for our voice AI agent — calls on Retell.ai</span>
+      <span class="go">Open dashboard &rsaquo;</span></a>
   </div>
   <div class="card"><h3>Finding your way around</h3><ul class="how">
     <li><b>Team dashboard</b> — <span class="path">/dashboard/&lt;team&gt;</span>: live KPIs, SPC + score
@@ -94,8 +97,8 @@ h1,h2,h3{font-family:'Fraunces',serif}
     <li><b>Month drill-down</b> — click the Last/Current Month chiclets for every evaluation in that month.</li>
     <li><b>Agent view</b> — click any agent name for their history and section trends.</li>
     <li><b>Datapoint</b> — every score links to the full scorecard: section scores, confidence, reasoning.</li>
-    <li><b>Call lookup</b> — <span class="path">/lookup/&lt;team&gt;</span>: Dialpad call history + recordings.
-      <b>Restricted</b> to authorized QA staff.</li>
+    <li><b>Call lookup</b> — <span class="path">/lookup/&lt;team&gt;</span>: call history + recordings
+      (Dialpad; Sofia&rsquo;s is Retell-backed with one-click scoring). <b>Restricted</b> to authorized QA staff.</li>
     <li><b>Scoring console</b> — <span class="path">/score/&lt;team&gt;</span>: batch-score calls by
       Dialpad ID + the human-review queue. <b>Restricted</b> to authorized QA staff.</li>
   </ul></div>
@@ -183,7 +186,8 @@ export async function handleTeamRoutes(
   dialpadKey?: string,
   lookupAllow?: string,
   pulpo?: { url?: string; token?: string },
-  gasUrls?: { member_support?: string; sales?: string }
+  gasUrls?: { member_support?: string; sales?: string },
+  retellKey?: string
 ): Promise<Response | null> {
   const path = url.pathname;
 
@@ -235,8 +239,11 @@ export async function handleTeamRoutes(
   if (m && KNOWN_TEAMS.has(m[1])) return html(scorecardHtml);
   m = path.match(/^\/lookup\/([^/]+)$/);
   if (m && KNOWN_TEAMS.has(m[1])) {
+    // sofia's lookup is Retell-backed (list-calls v3 — SofiaRetellSpec §8 R3,
+    // the discovery surface: Retell call ids aren't knowable a priori).
     const access = await resolveAccess(request, db, lookupAllow);
-    return access.privileged ? html(lookupHtml) : deniedPage("lookup", m[1]);
+    if (!access.privileged) return deniedPage("lookup", m[1]);
+    return html(m[1] === "sofia" ? lookupRetellHtml : lookupHtml);
   }
 
   // Scoring console (index.html port) — batch score-by-call-ID + the §0.3
@@ -379,6 +386,7 @@ export async function handleTeamRoutes(
     const { scoreTrigger } = await import("./scoring.js");
     return scoreTrigger(request, db, m[1], {
       DIALPAD_API_KEY: dialpadKey,
+      RETELL_API_KEY: retellKey,
       PULPO_MCP_URL: pulpo?.url,
       PULPO_MCP_TOKEN: pulpo?.token,
     });
@@ -390,6 +398,7 @@ export async function handleTeamRoutes(
     const { rescoreEvaluation } = await import("./scoring.js");
     return rescoreEvaluation(request, db, m[1], decodeURIComponent(m[2]), {
       DIALPAD_API_KEY: dialpadKey,
+      RETELL_API_KEY: retellKey,
       PULPO_MCP_URL: pulpo?.url,
       PULPO_MCP_TOKEN: pulpo?.token,
     });
@@ -485,8 +494,64 @@ export async function handleTeamRoutes(
     });
   }
 
-  // ── lookup APIs (Dialpad-backed; needs the DIALPAD_API_KEY app secret) ───
+  // ── lookup APIs (dialpad teams: Dialpad-backed; sofia: Retell v3 list) ───
   m = path.match(/^\/api\/([^/]+)\/lookup(\/calls|\/recording-link|\/scoring-permission)?$/);
+  if (m && m[1] === "sofia") {
+    if (m[2] !== "/calls")
+      return json(
+        { detail: "not applicable for Retell — recordings and permissions ride the scoring pipeline" },
+        404
+      );
+    const deny = await requirePrivileged();
+    if (deny) return deny;
+    if (!retellKey)
+      return json(
+        { detail: "RETELL_API_KEY app secret not configured — add it in the Sandy Dashboard (Edit Secrets)." },
+        503
+      );
+    const config = await loadTeamConfig(db, "sofia");
+    const { listRetellCalls } = await import("../lib/providers/retell.js");
+    const page = await listRetellCalls(retellKey, {
+      agentIds: config.provider_config?.agent_ids ?? [],
+      limit: 50,
+      paginationKey: url.searchParams.get("pagination_key") ?? undefined,
+    });
+    // D1 joins: scored evals + in-flight queue jobs, keyed by call id.
+    const ids = page.items.map((i: any) => i.call_id).filter(Boolean);
+    const scored = new Map<string, any>();
+    if (ids.length) {
+      const rows = (
+        await db
+          .prepare(
+            `SELECT id, dialpad_call_id, state, scoring_status, overall_score
+             FROM qa_evaluations WHERE team_id = 'sofia'
+             AND dialpad_call_id IN (${ids.map(() => "?").join(",")})`
+          )
+          .bind(...ids)
+          .all<any>()
+      ).results;
+      for (const r of rows) scored.set(r.dialpad_call_id, r);
+    }
+    const queued = new Map<string, string>(
+      (
+        await db
+          .prepare(
+            "SELECT call_id, status FROM qa_score_queue WHERE team_id = 'sofia' AND status IN ('queued','triggering','running')"
+          )
+          .all<any>()
+      ).results.map((r: any) => [r.call_id, r.status])
+    );
+    return json({
+      items: page.items.map((i: any) => ({
+        ...i,
+        evaluation: scored.get(i.call_id) ?? null,
+        queue_status: queued.get(i.call_id) ?? null,
+      })),
+      pagination_key: page.pagination_key,
+      has_more: page.has_more,
+      filtered_app_side: page.filtered_app_side,
+    });
+  }
   if (m && KNOWN_TEAMS.has(m[1])) {
     const deny = await requirePrivileged();
     if (deny) return deny;

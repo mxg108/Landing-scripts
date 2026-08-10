@@ -263,10 +263,15 @@ changes.
   `RETELL_API_KEY` (Dashboard) + applies migration. Gate: score 1 real
   Sofia call → parks in review queue → editor renders → approve → NO email
   (receipt `skipped`).
-- **R3 — rubric hardening with owner:** section defs, weights, review-gate
-  relaxation, per-build (`agent_version`) dashboard cut.
-- **R4 — auto-pull:** list-calls v3 hourly sweep on the existing "7 * * * *"
-  cron + voicemail/short-call skip list + (maybe) a Retell lookup variant.
+- **R3 — Retell lookup variant** *(pulled forward 2026-08-10: call ids are
+  not knowable a priori — discovery gates the whole pipeline)*: `/lookup/sofia`
+  lists ended Sofia calls via list-calls v3 (agent-whitelisted, newest-first,
+  paginated) with scored/queued status joins and one-click Score (reviewer =
+  viewer's Access email). Plus rubric hardening with owner: section defs,
+  weights, review-gate relaxation, per-build (`agent_version`) dashboard cut.
+- **R4 — auto-pull + digest:** list-calls v3 hourly sweep on the existing
+  "7 * * * *" cron + voicemail/short-call skip list; owner digest email
+  (pushed from R3 — wants real data first, §9.5).
 
 ## 9. Open questions (owner/Max)
 
