@@ -45,6 +45,19 @@ export interface NormalizedCall {
   agent_version: string | null; // retell only — Sofia build stamp
 }
 
+// Thrown by providers whose failures carry a user-actionable reason (Retell:
+// not found / not ended / voicemail / no recording). The scoring trigger maps
+// `status` onto the HTTP response. Dialpad keeps its empty-on-fail contract.
+export class ProviderCallError extends Error {
+  constructor(
+    message: string,
+    public status: number = 422
+  ) {
+    super(message);
+    this.name = "ProviderCallError";
+  }
+}
+
 export interface CallProvider {
   id: "dialpad" | "retell";
   // Header for the annotator's machine-detected markers block. The dialpad

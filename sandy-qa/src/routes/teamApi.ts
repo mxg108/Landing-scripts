@@ -37,7 +37,7 @@ import headerJs from "../../pages/static/header.js?raw";
 import { accessEmail, resolveAccess, type Access } from "../lib/rbac.js";
 
 const RAILWAY_BASE = "https://hellolanding-qa.up.railway.app";
-const KNOWN_TEAMS = new Set(["member_support", "sales"]);
+const KNOWN_TEAMS = new Set(["member_support", "sales", "sofia"]);
 
 const GREETING_PAGE = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -84,9 +84,10 @@ h1,h2,h3{font-family:'Fraunces',serif}
       <span class="badge">Live</span><h2>Sales</h2>
       <span class="note">Team dashboard, agent analytics, month drill-downs</span>
       <span class="go">Open dashboard &rsaquo;</span></a>
-    <div class="team-card soon">
-      <span class="badge soon-b">Coming soon</span><h2>Sofia AI</h2>
-      <span class="note">QA for our voice AI agent — calls on Retell.ai</span></div>
+    <a class="team-card" href="/dashboard/sofia">
+      <span class="badge">Live</span><h2>Sofia AI</h2>
+      <span class="note">QA for our voice AI agent — calls on Retell.ai</span>
+      <span class="go">Open dashboard &rsaquo;</span></a>
   </div>
   <div class="card"><h3>Finding your way around</h3><ul class="how">
     <li><b>Team dashboard</b> — <span class="path">/dashboard/&lt;team&gt;</span>: live KPIs, SPC + score
@@ -183,7 +184,8 @@ export async function handleTeamRoutes(
   dialpadKey?: string,
   lookupAllow?: string,
   pulpo?: { url?: string; token?: string },
-  gasUrls?: { member_support?: string; sales?: string }
+  gasUrls?: { member_support?: string; sales?: string },
+  retellKey?: string
 ): Promise<Response | null> {
   const path = url.pathname;
 
@@ -234,6 +236,21 @@ export async function handleTeamRoutes(
   m = path.match(/^\/scorecard\/([^/]+)\/([^/]+)$/);
   if (m && KNOWN_TEAMS.has(m[1])) return html(scorecardHtml);
   m = path.match(/^\/lookup\/([^/]+)$/);
+  if (m && m[1] === "sofia") {
+    // Lookup is Dialpad-backed; Sofia's calls live on Retell (console-first
+    // per SofiaRetellSpec §8 — a Retell lookup variant is the R4 slice).
+    return html(
+      `<!DOCTYPE html><html><head><title>Sofia — lookup</title></head>
+<body style="font-family:monospace;background:#E7EFFB;color:#15192D;display:grid;place-items:center;min-height:100vh;margin:0">
+<div style="background:#fff;border:1px solid #c9d5e8;border-radius:12px;padding:32px;max-width:520px">
+<h2 style="margin-top:0">Sofia calls live on Retell</h2>
+<p>The Lookup page is Dialpad-backed. To score Sofia, paste Retell call IDs
+(<code>call_…</code>) straight into the scoring console — recordings are
+fetched from Retell automatically.</p>
+<p><a href="/score/sofia" style="color:#1A61D9">Open the Sofia scoring console &rsaquo;</a></p>
+</div></body></html>`
+    );
+  }
   if (m && KNOWN_TEAMS.has(m[1])) {
     const access = await resolveAccess(request, db, lookupAllow);
     return access.privileged ? html(lookupHtml) : deniedPage("lookup", m[1]);
@@ -379,6 +396,7 @@ export async function handleTeamRoutes(
     const { scoreTrigger } = await import("./scoring.js");
     return scoreTrigger(request, db, m[1], {
       DIALPAD_API_KEY: dialpadKey,
+      RETELL_API_KEY: retellKey,
       PULPO_MCP_URL: pulpo?.url,
       PULPO_MCP_TOKEN: pulpo?.token,
     });
@@ -390,6 +408,7 @@ export async function handleTeamRoutes(
     const { rescoreEvaluation } = await import("./scoring.js");
     return rescoreEvaluation(request, db, m[1], decodeURIComponent(m[2]), {
       DIALPAD_API_KEY: dialpadKey,
+      RETELL_API_KEY: retellKey,
       PULPO_MCP_URL: pulpo?.url,
       PULPO_MCP_TOKEN: pulpo?.token,
     });
@@ -487,6 +506,11 @@ export async function handleTeamRoutes(
 
   // ── lookup APIs (Dialpad-backed; needs the DIALPAD_API_KEY app secret) ───
   m = path.match(/^\/api\/([^/]+)\/lookup(\/calls|\/recording-link|\/scoring-permission)?$/);
+  if (m && m[1] === "sofia")
+    return json(
+      { detail: "lookup is Dialpad-backed — Sofia's calls live on Retell; use the scoring console" },
+      404
+    );
   if (m && KNOWN_TEAMS.has(m[1])) {
     const deny = await requirePrivileged();
     if (deny) return deny;

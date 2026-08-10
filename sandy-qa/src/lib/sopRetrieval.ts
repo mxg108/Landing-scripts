@@ -161,11 +161,17 @@ function mapDoc(raw: any) {
 export function buildSopQuery(
   dispositionCategory: string | null,
   disposition: string | null,
-  transcriptText: string
+  transcriptText: string,
+  // Provider-supplied summary (retell call_analysis.call_summary) — better
+  // retrieval material than the raw transcript head when no disposition
+  // exists (SofiaRetellSpec §4.3).
+  summaryQuery?: string | null
 ): string | null {
   if (dispositionCategory) {
     return disposition ? `${dispositionCategory} — ${disposition}` : dispositionCategory;
   }
+  const summary = (summaryQuery ?? "").trim();
+  if (summary) return summary;
   const head = (transcriptText ?? "").trim().slice(0, 600);
   return head || null;
 }
@@ -209,8 +215,14 @@ export async function fetchSopContext(opts: {
   dispositionCategory: string | null;
   disposition: string | null;
   transcriptText: string;
+  summaryQuery?: string | null;
 }): Promise<SopContext> {
-  const query = buildSopQuery(opts.dispositionCategory, opts.disposition, opts.transcriptText);
+  const query = buildSopQuery(
+    opts.dispositionCategory,
+    opts.disposition,
+    opts.transcriptText,
+    opts.summaryQuery
+  );
   if (query === null) return empty("", "no_query_material");
   if (!opts.pulpoUrl || !opts.pulpoToken) return empty(query, "no_provider");
 

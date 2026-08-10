@@ -301,14 +301,14 @@
 
       <div style="margin-top: 1.25rem;">
         <label for="call-id-input" style="display:block; margin-bottom: 0.5rem;">
-          Dialpad Call IDs
+          <span id="call-id-heading">Dialpad Call IDs</span>
         </label>
         <div class="call-entry">
           <input type="text" id="call-id-input" inputmode="numeric"
             placeholder="Paste one or more call IDs (comma / space / newline separated)" />
           <button type="button" class="btn btn-secondary" id="add-call-btn">Add</button>
         </div>
-        <p class="entry-hint">Recordings and transcripts are fetched from Dialpad automatically —
+        <p class="entry-hint" id="entry-hint">Recordings and transcripts are fetched from Dialpad automatically —
           find call IDs on the <a id="lookup-hint-link" href="/lookup/member_support" style="color:var(--accent)">Lookup page</a>.</p>
         <div id="call-list"></div>
       </div>
@@ -339,6 +339,9 @@
   // Authorization header (the Access edge rejects foreign bearer tokens).
   const TEAM_ID = (location.pathname.match(/^\/score\/([^\/]+)/) || [, 'member_support'])[1];
   const API_BASE = `/api/${TEAM_ID}`;
+  // Retell-provider teams (sofia): call ids are `call_<hex>` pasted from the
+  // Retell dashboard; lookup is Dialpad-backed and doesn't apply.
+  const IS_RETELL_TEAM = TEAM_ID === 'sofia';
   document.addEventListener('DOMContentLoaded', () => {
     for (const [id, href] of [
       ['team-dashboard-link', `/dashboard/${TEAM_ID}`],
@@ -347,6 +350,12 @@
     ]) {
       const el = document.getElementById(id);
       if (el) el.href = href;
+    }
+    if (IS_RETELL_TEAM) {
+      document.getElementById('call-id-heading').textContent = 'Retell Call IDs';
+      document.getElementById('entry-hint').textContent =
+        'Recordings and transcripts are fetched from Retell automatically — paste call IDs (call_…) from the Retell dashboard.';
+      document.getElementById('call-id-input').removeAttribute('inputmode');
     }
   });
 
@@ -400,8 +409,10 @@
     // Accept pasted lists: split on commas, whitespace, newlines.
     const ids = raw.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
     for (const id of ids) {
-      if (!/^\d{5,}$/.test(id)) {
-        alert(`'${id}' doesn't look like a Dialpad call ID (digits only).`);
+      if (IS_RETELL_TEAM ? !/^call_[A-Za-z0-9]+$/.test(id) : !/^\d{5,}$/.test(id)) {
+        alert(IS_RETELL_TEAM
+          ? `'${id}' doesn't look like a Retell call ID (call_…).`
+          : `'${id}' doesn't look like a Dialpad call ID (digits only).`);
         continue;
       }
       if (!callIds.includes(id)) callIds.push(id);

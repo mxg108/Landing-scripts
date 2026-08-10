@@ -26,6 +26,8 @@ export interface StatsConfig {
 export interface TeamConfig {
   team_id: string;
   company: string;
+  provider: string; // 'dialpad' | 'retell' — call-provider seam (migration 0005)
+  provider_config: any; // e.g. retell {agent_ids: [...]}; null for dialpad teams
   // PromptConfig for the scoring prompt builders — raw rubric sections
   // (score_descriptions / na_applies_when / special_reasoning_instructions
   // included) + the rubric's scoring_prompt block.
@@ -57,9 +59,17 @@ function isNumeric(s: any): boolean {
 
 export async function loadTeamConfig(db: D1Database, teamId: string): Promise<TeamConfig> {
   const team = await db
-    .prepare("SELECT stats_config, excluded_test_agents, company FROM teams WHERE id = ?")
+    .prepare(
+      "SELECT stats_config, excluded_test_agents, company, provider, provider_config FROM teams WHERE id = ?"
+    )
     .bind(teamId)
-    .first<{ stats_config: string | null; excluded_test_agents: string; company: string | null }>();
+    .first<{
+      stats_config: string | null;
+      excluded_test_agents: string;
+      company: string | null;
+      provider: string | null;
+      provider_config: string | null;
+    }>();
   if (!team) throw new Error(`unknown team ${teamId}`);
 
   // Alias-map iteration order = insertion order (id ASC) — matches the
@@ -117,6 +127,8 @@ export async function loadTeamConfig(db: D1Database, teamId: string): Promise<Te
   return {
     team_id: teamId,
     company: team.company ?? "Landing Living LLC",
+    provider: team.provider ?? "dialpad",
+    provider_config: team.provider_config ? JSON.parse(team.provider_config) : null,
     prompt_config: {
       company: team.company ?? "Landing Living LLC",
       scoring_prompt: current.scoring_prompt ?? {},

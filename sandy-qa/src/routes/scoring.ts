@@ -26,7 +26,12 @@ import {
 } from "../lib/scoringPrompts.js";
 import { evaluateFormula, quantizeScore } from "../lib/ruleEngine.js";
 import { fetchSopContext } from "../lib/sopRetrieval.js";
-import { getProvider } from "../lib/providers/index.js";
+import {
+  getProvider,
+  ProviderCallError,
+  type CallProvider,
+  type NormalizedCall,
+} from "../lib/providers/index.js";
 
 const WORKFLOW_NAME = "qa-scoring-pipeline";
 
@@ -46,6 +51,7 @@ export async function scoreTrigger(
   teamId: string,
   env: {
     DIALPAD_API_KEY?: string;
+    RETELL_API_KEY?: string;
     PULPO_MCP_URL?: string;
     PULPO_MCP_TOKEN?: string;
   }
@@ -69,6 +75,7 @@ async function scoreTriggerInternal(
   teamId: string,
   env: {
     DIALPAD_API_KEY?: string;
+    RETELL_API_KEY?: string;
     PULPO_MCP_URL?: string;
     PULPO_MCP_TOKEN?: string;
   },
@@ -80,8 +87,6 @@ async function scoreTriggerInternal(
     rescoreSuppressEmail?: boolean;
   }
 ): Promise<Response> {
-  if (!env.DIALPAD_API_KEY)
-    return json({ detail: "DIALPAD_API_KEY app secret not configured" }, 503);
   const { callId, agentEmail, managerEmail } = opts;
   if (!callId || !agentEmail || !managerEmail)
     return json({ detail: "call_id, agent_email, manager_email required" }, 422);
@@ -128,17 +133,35 @@ async function scoreTriggerInternal(
   }
 
   const config = await loadTeamConfig(db, teamId);
-  // R1: every team is dialpad; R2 selects from teams.provider (migration 0005).
-  const provider = getProvider("dialpad", env);
-  const call = await provider.fetchCall(callId);
+  let provider: CallProvider;
+  try {
+    provider = getProvider(config.provider, env);
+  } catch (err) {
+    return json({ detail: String((err as any)?.message ?? err) }, 503);
+  }
+  let call: NormalizedCall;
+  try {
+    call = await provider.fetchCall(callId);
+  } catch (err) {
+    return json(
+      { detail: String((err as any)?.message ?? err) },
+      err instanceof ProviderCallError ? err.status : 502
+    );
+  }
 
-  // CC grounding — mode 'on' for the Sandy pipeline (DispositionDesign §5)
-  const ccCtx = await fetchCallContext(db, teamId, {
-    entry_point: call.entry_point_call_id ?? "",
-    call_id: callId,
-    master: call.master_call_id ?? "",
-  });
-  const callContextText = buildCallContextBlock(ccCtx);
+  // CC grounding — mode 'on' for the Sandy pipeline (DispositionDesign §5).
+  // Retell teams have no CC rows: the provider supplies the grounding block
+  // (call_analysis + latency + dynamic vars) instead.
+  const ccCtx = call.grounding
+    ? null
+    : await fetchCallContext(db, teamId, {
+        entry_point: call.entry_point_call_id ?? "",
+        call_id: callId,
+        master: call.master_call_id ?? "",
+      });
+  const callContextText = call.grounding
+    ? (call.grounding.context_block ?? "")
+    : buildCallContextBlock(ccCtx);
 
   // SOP retrieval (PulpoConnection §4.2, mode=on — v1-essential): the
   // verified disposition is the query; empty/sub-τ retrieval falls through
@@ -149,6 +172,9 @@ async function scoreTriggerInternal(
     dispositionCategory: ccCtx?.disposition_category ?? null,
     disposition: ccCtx?.disposition ?? null,
     transcriptText: call.transcript_text,
+    // No disposition on retell teams — call_analysis.call_summary is the
+    // retrieval query (better than the transcript-head fallback, §4.3).
+    summaryQuery: call.grounding?.sop_query ?? null,
   });
 
   const durationMs = call.duration_ms;
@@ -162,10 +188,16 @@ async function scoreTriggerInternal(
     extraNotes,
     callContextText,
     teamContext:
-      `TEAM CONTEXT: this call was answered by the ${teamLabel} team on the ` +
-      `${teamLine}. Evaluate against ${teamLabel} expectations; if any SOP ` +
-      `below belongs to a different team or product line, do not hold the ` +
-      `agent to it.`,
+      teamId === "sofia"
+        ? "TEAM CONTEXT: this call was answered by Sofia, Landing's AI voice " +
+          "agent, on the member support line. Evaluate against the Sofia " +
+          "rubric: SOP adherence and human-likeness. Sofia is not a human " +
+          "agent — do not excuse errors on that basis, and score " +
+          "conversational naturalness exactly as the rubric defines it."
+        : `TEAM CONTEXT: this call was answered by the ${teamLabel} team on the ` +
+          `${teamLine}. Evaluate against ${teamLabel} expectations; if any SOP ` +
+          `below belongs to a different team or product line, do not hold the ` +
+          `agent to it.`,
   };
 
   const payload = {
@@ -220,6 +252,9 @@ async function scoreTriggerInternal(
         : null,
       transcript_display: call.transcript_display,
       moments_display: call.moments_display,
+      // Provider stamps (retell: agent_version, latency, call_analysis…) —
+      // persisted into dialpad_call_metadata by the callback.
+      provider_stamps: call.grounding?.stamps ?? null,
       flagged_long_call: durationMs > 25 * 60 * 1000,
       // PulpoConnection §4.2 step 6 — provenance stamped in shadow AND on
       sop_used: sop.sop_title || null,
@@ -516,7 +551,12 @@ export async function rescoreEvaluation(
   db: D1Database,
   teamId: string,
   ref: string,
-  env: { DIALPAD_API_KEY?: string; PULPO_MCP_URL?: string; PULPO_MCP_TOKEN?: string }
+  env: {
+    DIALPAD_API_KEY?: string;
+    RETELL_API_KEY?: string;
+    PULPO_MCP_URL?: string;
+    PULPO_MCP_TOKEN?: string;
+  }
 ): Promise<Response> {
   let body: any = {};
   try {
@@ -1151,7 +1191,10 @@ export async function scoringCallback(
   //      into full credit). MS is unaffected: its human_review_required
   //      section declares na_default=true. Condition 2 was dropped in the
   //      original port — restored 2026-08-06 (parity fix).
-  let flagged = requiresAnalystReview(config, formula);
+  // always_human_review: explicit formula flag (sofia_v0 while Sofia is in
+  // testing, SofiaRetellSpec §7) — every eval parks for analyst review.
+  let flagged =
+    formula.always_human_review === true || requiresAnalystReview(config, formula);
   for (const trig of formula.human_review_triggers ?? []) {
     const a = answers[trig.section_id];
     if (typeof a === "number" && a <= trig.max_score_to_trigger) {
@@ -1194,6 +1237,7 @@ export async function scoringCallback(
     sop_used: persist.sop_used ?? null,
     pulpo_docs: persist.pulpo_docs ?? [],
     ...(persist.sop_skipped_reason ? { sop_skipped_reason: persist.sop_skipped_reason } : {}),
+    ...(persist.provider_stamps ? { provider_stamps: persist.provider_stamps } : {}),
     sandy_pipeline: {
       run_id: body.run_id,
       timings_ms: p.timings_ms,

@@ -1,10 +1,11 @@
-// Provider selection (SofiaRetellSpec §2). R1: every team is dialpad — the
-// teams.provider column, provider_config, and retell.ts arrive with
-// migration 0005 in R2.
+// Provider selection (SofiaRetellSpec §2), keyed off teams.provider
+// (migration 0005; absent/legacy rows default dialpad).
 
 import { makeDialpadProvider } from "./dialpad.js";
+import { makeRetellProvider } from "./retell.js";
 import type { CallProvider } from "./types.js";
 
+export { ProviderCallError } from "./types.js";
 export type {
   AudioSource,
   CallGrounding,
@@ -22,6 +23,11 @@ export function getProvider(
     if (!secrets.DIALPAD_API_KEY)
       throw new Error("DIALPAD_API_KEY app secret not configured");
     return makeDialpadProvider(secrets.DIALPAD_API_KEY);
+  }
+  if (id === "retell") {
+    if (!secrets.RETELL_API_KEY)
+      throw new Error("RETELL_API_KEY app secret not configured");
+    return makeRetellProvider(secrets.RETELL_API_KEY);
   }
   throw new Error(`unknown call provider ${id}`);
 }
