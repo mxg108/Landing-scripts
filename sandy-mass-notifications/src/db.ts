@@ -16,6 +16,8 @@ export const campaigns = sqliteTable("campaigns", {
   status: text("status").notNull().default("draft"), // draft|fetching|ready|sending|complete|errored|undone
   config_json: text("config_json").notNull().default("{}"),
   sms_enabled: integer("sms_enabled").notNull().default(0),
+  sms_preview_text: text("sms_preview_text"),
+  sms_preview_truncated: integer("sms_preview_truncated").notNull().default(0),
   fetch_stats_json: text("fetch_stats_json"),
   created_by: text("created_by").notNull(),
   created_at: text("created_at").notNull(),
@@ -89,13 +91,16 @@ export const runs = sqliteTable("runs", {
   error: text("error"),
 });
 
-// Seeded email templates / cards / prompts — editable in Admin, no redeploys.
+// Editable email assets — cards and disclaimers (kind='card'|'disclaimer'),
+// seeded from emailkit SEED_* on first run, curated at /edit. No redeploys.
 export const templates = sqliteTable("templates", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
-  kind: text("kind").notNull(), // email|card|prompt
+  kind: text("kind").notNull(), // card|disclaimer (email templates + prompts later)
   config_json: text("config_json").notNull().default("{}"),
   active: integer("active").notNull().default(1),
+  updated_by: text("updated_by"),
+  updated_at: text("updated_at"),
 });
 
 export const appConfig = sqliteTable("app_config", {

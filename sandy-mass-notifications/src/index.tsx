@@ -4,28 +4,39 @@
 
 import "./polyfills.js";
 import { renderToString } from "react-dom/server";
-import App, { type AppProps, type CampaignRow, type RecipientRow, type RoleRow } from "./App.js";
+import App, { type AppProps, type CampaignRow, type RecipientRow, type RoleRow, type RunRow } from "./App.js";
 // @ts-ignore — Vite resolves ?inline to a CSS string at build time
 import styles from "./styles.css?inline";
-import { createDb, campaigns, recipients, roles, workflowRuns, appConfig } from "./db.js";
-import { desc, eq, and, asc } from "drizzle-orm";
+import { createDb, campaigns, recipients, roles, runs, workflowRuns, appConfig, templates } from "./db.js";
+import { desc, eq, and, asc, inArray, isNull } from "drizzle-orm";
 import { triggerWorkflowWithCallback } from "./workflow.js";
 // MCP server disabled in v0.1: the agents/mcp package pulls mimetext's node
 // build (`node:os`), which Sandy's deploy config rejects. Re-enable in P2 with
 // a pinned agents version (qa-scoring runs one successfully).
 // import { mcpHandler } from "./mcp.js";
 import { serveFont } from "./design-system/fonts.js";
+import {
+  parseConfig, composeBodyTemplate, buildGlobalTokens, buildRecipientTokens,
+  renderTokens, renderCard, applyTemplate, validateForDispatch, CONFIG_DEFAULTS,
+  SEED_CARDS, SEED_DISCLAIMERS, formatToday, emojiToEntities,
+  type CampaignConfig, type CardDef,
+} from "./emailkit.js";
+import type { AssetRow } from "./App.js";
 
 export interface Env {
   DB: D1Database;
   SANDY_CRON_DISPATCH_SECRET?: string;
 }
 
-// mass-notify-fetch workflow (created 2026-08-05). Override at runtime via
-// app_config key 'fetch_workflow_id' — Sandy strips wrangler [vars], so the
-// constant lives in source.
+// Workflow IDs (created 2026-08-05). Overridable at runtime via app_config keys
+// 'fetch_workflow_id' / 'dispatch_workflow_id' — Sandy strips wrangler [vars],
+// so the constants live in source.
 const FETCH_WORKFLOW_ID = "ffaa18b1-92a6-4eef-8219-c85c950c9068";
 const FETCH_WORKFLOW_NAME = "mass-notify-fetch";
+const DISPATCH_WORKFLOW_ID = "1afe1706-2986-4ee9-9436-133820030f7b";
+const DISPATCH_WORKFLOW_NAME = "mass-notify-dispatch";
+// PRD D4 — verified Member Support Line. Override via app_config 'sms_from_number'.
+const SMS_FROM_NUMBER = "+14159804986";
 
 interface User { email: string; username: string }
 
@@ -40,7 +51,66 @@ function getUserFromRequest(request: Request): User {
   }
 }
 
-const ELIGIBLE_STATUSES = ["", "PENDING", "READY"];
+const ELIGIBLE = ["", "PENDING", "READY"];
+
+function parseIdList(s: string): string[] {
+  return String(s || "").split(/[\s,]+/).map((x) => x.trim()).filter(Boolean)
+    .filter((v, i, a) => a.indexOf(v) === i);
+}
+
+// Cards + disclaimers live in D1 (templates: kind='card'|'disclaimer'), seeded
+// once from emailkit SEED_* and curated at /edit thereafter.
+async function loadAssets(db: ReturnType<typeof createDb>) {
+  let rows = await db.select().from(templates);
+  if (!rows.some((r) => r.kind === "card")) {
+    const now = new Date().toISOString();
+    for (const c of SEED_CARDS) {
+      await db.insert(templates).values({
+        id: crypto.randomUUID(), name: c.key, kind: "card",
+        config_json: JSON.stringify(c), active: 1, updated_by: "seed", updated_at: now,
+      });
+    }
+    for (const d of SEED_DISCLAIMERS) {
+      await db.insert(templates).values({
+        id: crypto.randomUUID(), name: d.name, kind: "disclaimer",
+        config_json: JSON.stringify(d), active: 1, updated_by: "seed", updated_at: now,
+      });
+    }
+    rows = await db.select().from(templates);
+  }
+  const parse = (r: typeof rows[number]): AssetRow => {
+    let cfg: Record<string, string> = {};
+    try { cfg = JSON.parse(r.config_json); } catch { /* ignore */ }
+    return { id: r.id, kind: r.kind, name: r.name, active: r.active === 1, config: cfg,
+      updated_by: r.updated_by, updated_at: r.updated_at };
+  };
+  const cards = rows.filter((r) => r.kind === "card").map(parse);
+  const disclaimers = rows.filter((r) => r.kind === "disclaimer").map(parse);
+  const cardMap: Record<string, CardDef> = {};
+  for (const c of cards) if (c.active) cardMap[String(c.config.key)] = c.config as unknown as CardDef;
+  return { cards, disclaimers, cardMap };
+}
+
+// Change signature for the SSE watcher: campaign status + SMS preview length
+// + incomplete-run count. Any async completion shifts at least one component.
+async function campaignSig(db: ReturnType<typeof createDb>, cid: string): Promise<string> {
+  const row = (await db.select({
+    status: campaigns.status,
+    sms_preview_text: campaigns.sms_preview_text,
+  }).from(campaigns).where(eq(campaigns.id, cid)).limit(1))[0];
+  if (!row) return "gone";
+  const open = await db.select({ id: runs.id }).from(runs)
+    .where(and(eq(runs.campaign_id, cid), isNull(runs.completed_at)));
+  return `${row.status}|${row.sms_preview_text?.length ?? 0}|${open.length}`;
+}
+
+const SAMPLE_TOKENS: Record<string, string> = {
+  property_name: "Woodhill", event_name: "Sample Event",
+  date_range: "Mon, Aug 10–Fri, Aug 14, 2026", today: "",
+  manager_name: "Alex Doe", manager_email: "alex.doe@hellolanding.com",
+  first_name: "Jordan", member_name: "Jordan Sample",
+  member_email: "jordan@example.com", unit: "101",
+};
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -119,6 +189,110 @@ export default {
       return Response.json({ ok: true });
     }
 
+    // ── Workflow callback: dispatch results (send / dryrun / test) ───────────
+    if (url.pathname === `/api/v1/callbacks/${DISPATCH_WORKFLOW_NAME}` && request.method === "POST") {
+      if (request.headers.get("X-Sandy-Workflow-Callback") !== "verified") {
+        return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+      }
+      const body = await request.json() as {
+        run_id?: string; status?: string; campaign_id?: string; app_run_id?: string;
+        kind?: string; error?: string | null; quota_remaining?: number | null;
+        results?: Array<{ id: string; email: string; ok: boolean; error: string | null }>;
+        sms_text?: string | null; sms_truncated?: boolean; sms_warning?: string | null;
+        sms_results?: Array<{ id: string; state: string; error: string | null }>;
+      };
+      if (!body.run_id) return Response.json({ ok: false, error: "missing run_id" }, { status: 400 });
+
+      await db.update(workflowRuns)
+        .set({ status: body.status ?? "error", result: JSON.stringify({ ...body, results: undefined, sms_results: undefined }) })
+        .where(eq(workflowRuns.run_id, body.run_id));
+
+      const now = new Date().toISOString();
+
+      // Card generation: write the AI HTML into the card row and finish.
+      const cardBody = body as unknown as { kind?: string; card_id?: string; card_body_html?: string };
+      if (cardBody.kind === "card_gen" && cardBody.card_id) {
+        if (body.status === "complete" && cardBody.card_body_html) {
+          const row = (await db.select().from(templates).where(eq(templates.id, cardBody.card_id)).limit(1))[0];
+          if (row) {
+            let cfgJson: Record<string, string> = {};
+            try { cfgJson = JSON.parse(row.config_json); } catch { /* keep empty */ }
+            cfgJson.body_html = cardBody.card_body_html;
+            await db.update(templates)
+              .set({ config_json: JSON.stringify(cfgJson), updated_by: "ai-generate", updated_at: now })
+              .where(eq(templates.id, cardBody.card_id));
+          }
+        }
+        return Response.json({ ok: true });
+      }
+
+      const results = body.results ?? [];
+      const okCount = results.filter((r) => r.ok).length;
+
+      // Per-recipient email state updates (test uses a synthetic recipient — no rows match).
+      for (const r of results) {
+        if (!r.id || r.id === "test") continue;
+        if (r.ok) {
+          if (body.kind === "send") {
+            await db.update(recipients)
+              .set({ status: "SENT", email_state: "sent", email_sent_at: now })
+              .where(eq(recipients.id, r.id));
+          } else if (body.kind === "dryrun") {
+            await db.update(recipients)
+              .set({ status: "DRAFT" })
+              .where(eq(recipients.id, r.id));
+          }
+        } else {
+          await db.update(recipients)
+            .set({ email_state: "error", notes: r.error ?? "send failed" })
+            .where(eq(recipients.id, r.id));
+        }
+      }
+
+      // SMS: cache the summary on the campaign; apply per-recipient states.
+      if (body.campaign_id && body.sms_text) {
+        await db.update(campaigns)
+          .set({ sms_preview_text: body.sms_text, sms_preview_truncated: body.sms_truncated ? 1 : 0 })
+          .where(eq(campaigns.id, body.campaign_id));
+      }
+      for (const s of body.sms_results ?? []) {
+        if (!s.id || s.id === "sms_test") continue;
+        await db.update(recipients)
+          .set({
+            sms_state: s.state,
+            sms_error: s.error ?? null,
+            ...(s.state === "sent" ? { sms_sent_at: now, sms_body: body.sms_text ?? null } : {}),
+          })
+          .where(eq(recipients.id, s.id));
+      }
+
+      if (body.app_run_id) {
+        const smsSent = (body.sms_results ?? []).filter((s) => s.state === "sent").length;
+        const emailFailed = results.filter((r) => !r.ok).length;
+        const parts: string[] = [];
+        if (body.status === "error") parts.push(body.error ?? "unknown");
+        if (emailFailed) parts.push(`${emailFailed} email(s) failed`);
+        if (body.sms_warning) parts.push(`warning: ${body.sms_warning}`);
+        await db.update(runs)
+          .set({
+            count: body.kind === "sms_only" ? smsSent : okCount,
+            completed_at: now,
+            error: parts.length ? parts.join("; ") : null,
+          })
+          .where(eq(runs.id, body.app_run_id));
+      }
+
+      // Campaign status: email kinds drive it; SMS-only kinds leave it alone.
+      if (body.campaign_id && ["send", "dryrun", "test"].includes(body.kind ?? "")) {
+        const newStatus = body.status !== "complete" ? "errored"
+          : body.kind === "send" ? "complete" : "ready";
+        await db.update(campaigns)
+          .set(newStatus === "complete" ? { status: newStatus, completed_at: now } : { status: newStatus })
+          .where(eq(campaigns.id, body.campaign_id));
+      }
+      return Response.json({ ok: true });
+    }
+
     // ── RBAC gate (everything below is a human surface) ──────────────────────
     const user = getUserFromRequest(request);
     const roleRow = (await db.select().from(roles).where(eq(roles.email, user.email)).limit(1))[0];
@@ -138,7 +312,7 @@ export default {
     if (!isOperator) {
       return renderPage({
         page: "access", user, role,
-        campaigns: [], recipients: [], roleRequests: [],
+        campaigns: [], recipients: [], roleRequests: [], runs: [],
       });
     }
 
@@ -148,10 +322,8 @@ export default {
       const email = form.get("email")?.toString().trim().toLowerCase();
       const newRole = form.get("role")?.toString();
       if (email && newRole && ["admin", "operator", "denied"].includes(newRole)) {
-        if (newRole === "denied") {
-          await db.delete(roles).where(eq(roles.email, email));
-        } else {
-          await db.delete(roles).where(eq(roles.email, email));
+        await db.delete(roles).where(eq(roles.email, email));
+        if (newRole !== "denied") {
           await db.insert(roles).values({
             email, role: newRole, granted_by: user.email,
             created_at: new Date().toISOString(),
@@ -178,12 +350,20 @@ export default {
       return Response.redirect(new URL(`/c/${id}`, request.url).toString(), 303);
     }
 
+    const campaignRoute = url.pathname.match(/^\/(?:api\/campaigns|c)\/([0-9a-f-]{36})(\/[a-z-]+)?$/);
+    const cid = campaignRoute?.[1];
+    const action = campaignRoute?.[2];
+    const campaign = cid
+      ? (await db.select().from(campaigns).where(eq(campaigns.id, cid)).limit(1))[0]
+      : undefined;
+    if (cid && !campaign) {
+      return Response.redirect(new URL("/?error=Campaign+not+found", request.url).toString(), 303);
+    }
+    const back = (msg: string, isError = false) =>
+      Response.redirect(new URL(`/c/${cid}?${isError ? "error" : "flash"}=${encodeURIComponent(msg)}`, request.url).toString(), 303);
+
     // ── Trigger warehouse fetch ──────────────────────────────────────────────
-    const fetchMatch = url.pathname.match(/^\/api\/campaigns\/([0-9a-f-]{36})\/fetch$/);
-    if (fetchMatch && request.method === "POST") {
-      const cid = fetchMatch[1];
-      const campaign = (await db.select().from(campaigns).where(eq(campaigns.id, cid)).limit(1))[0];
-      if (!campaign) return Response.redirect(new URL("/?error=Campaign+not+found", request.url).toString(), 303);
+    if (campaign && action === "/fetch" && request.method === "POST") {
       const wfId = (await db.select().from(appConfig).where(eq(appConfig.key, "fetch_workflow_id")).limit(1))[0]?.value
         ?? FETCH_WORKFLOW_ID;
       try {
@@ -195,44 +375,427 @@ export default {
           run_id: run.id, workflow_name: FETCH_WORKFLOW_NAME,
           status: "pending", created_at: new Date().toISOString(),
         });
-        await db.update(campaigns).set({ status: "fetching" }).where(eq(campaigns.id, cid));
-        return Response.redirect(new URL(`/c/${cid}?flash=Fetch+queued`, request.url).toString(), 303);
+        await db.update(campaigns).set({ status: "fetching" }).where(eq(campaigns.id, cid!));
+        return back("Fetch queued");
       } catch (e: any) {
-        return Response.redirect(
-          new URL(`/c/${cid}?error=${encodeURIComponent(e?.message ?? String(e))}`, request.url).toString(), 303);
+        return back(e?.message ?? String(e), true);
       }
     }
 
+    // ── Save campaign config ─────────────────────────────────────────────────
+    if (campaign && action === "/config" && request.method === "POST") {
+      const form = await request.formData();
+      const cfg = parseConfig(campaign.config_json);
+      for (const key of Object.keys(CONFIG_DEFAULTS) as (keyof CampaignConfig)[]) {
+        if (typeof CONFIG_DEFAULTS[key] === "boolean") {
+          (cfg as any)[key] = form.get(key) === "on";
+        } else if (form.has(key)) {
+          const v = form.get(key)!.toString();
+          (cfg as any)[key] = typeof CONFIG_DEFAULTS[key] === "number" ? (Number(v) || CONFIG_DEFAULTS[key]) : v;
+        }
+      }
+      const eventName = form.get("event_name")?.toString().trim() ?? campaign.event_name;
+      await db.update(campaigns)
+        .set({ config_json: JSON.stringify(cfg), event_name: eventName })
+        .where(eq(campaigns.id, cid!));
+      return back("Configuration saved");
+    }
+
+    // ── Apply template ───────────────────────────────────────────────────────
+    if (campaign && action === "/template" && request.method === "POST") {
+      const form = await request.formData();
+      const name = form.get("name")?.toString() ?? "";
+      const applied = applyTemplate(parseConfig(campaign.config_json), name);
+      if (!applied) return back(`Unknown template: ${name}`, true);
+      await db.update(campaigns)
+        .set({
+          config_json: JSON.stringify(applied.cfg),
+          event_name: applied.event_name ?? campaign.event_name,
+        })
+        .where(eq(campaigns.id, cid!));
+      return back(`Template "${name}" applied — fill in manager, dates, and review before sending`);
+    }
+
+    // ── Instant-apply chiclets: notification card / disclaimer ───────────────
+    if (campaign && action === "/config-card" && request.method === "POST") {
+      const form = await request.formData();
+      const key = form.get("card")?.toString() ?? "";
+      const { cardMap } = await loadAssets(db);
+      if (key && !cardMap[key]) return back(`Unknown card: ${key}`, true);
+      const cfg = parseConfig(campaign.config_json);
+      cfg.notification_card = key;
+      await db.update(campaigns).set({ config_json: JSON.stringify(cfg) }).where(eq(campaigns.id, cid!));
+      return back(key ? `Card set: ${key}` : "Card removed");
+    }
+    if (campaign && action === "/config-disclaimer" && request.method === "POST") {
+      const form = await request.formData();
+      const tid = form.get("template_id")?.toString() ?? "";
+      const { disclaimers } = await loadAssets(db);
+      const d = disclaimers.find((x) => x.id === tid && x.active);
+      if (!d) return back("Unknown disclaimer", true);
+      const cfg = parseConfig(campaign.config_json);
+      cfg.disclaimer_html = String(d.config.html ?? "");
+      cfg.include_disclaimer = true;
+      await db.update(campaigns).set({ config_json: JSON.stringify(cfg) }).where(eq(campaigns.id, cid!));
+      return back(`Disclaimer set: ${d.name}`);
+    }
+
+    // ── SSE: live campaign change signal (replaces refresh-to-see-results) ───
+    // Emits a change signature covering status transitions, SMS preview
+    // arrival, and run completions; the page reloads when it differs from the
+    // signature it rendered with.
+    if (campaign && action === "/events" && request.method === "GET") {
+      const enc = new TextEncoder();
+      const stream = new ReadableStream({
+        async start(controller) {
+          const send = (obj: unknown) =>
+            controller.enqueue(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
+          try {
+            for (let i = 0; i < 25; i++) { // ~50s, then EventSource auto-reconnects
+              const sig = await campaignSig(db, cid!);
+              send({ sig });
+              await new Promise((r) => setTimeout(r, 2000));
+            }
+          } catch { /* client went away */ }
+          try { controller.close(); } catch { /* already closed */ }
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+        },
+      });
+    }
+
+    // ── SMS enable/disable toggle ────────────────────────────────────────────
+    if (campaign && action === "/sms-toggle" && request.method === "POST") {
+      const form = await request.formData();
+      const enabled = form.get("sms_enabled") === "on" ? 1 : 0;
+      await db.update(campaigns).set({ sms_enabled: enabled }).where(eq(campaigns.id, cid!));
+      return back(enabled ? "SMS companion enabled for this campaign" : "SMS companion disabled");
+    }
+
+    // ── Dispatch: send / dryrun / test / sms_preview / sms_test / sms_only ───
+    if (campaign && action === "/dispatch" && request.method === "POST") {
+      const form = await request.formData();
+      const kind = form.get("kind")?.toString() ?? "";
+      const KINDS = ["send", "dryrun", "test", "sms_preview", "sms_test", "sms_only"];
+      if (!KINDS.includes(kind)) return back("Bad dispatch kind", true);
+      if (kind === "send" && form.get("confirm") !== "on") {
+        return back("Check the confirmation box to send", true);
+      }
+      const cfg = parseConfig(campaign.config_json);
+      const { cardMap } = await loadAssets(db);
+      const allRows = await db.select().from(recipients)
+        .where(eq(recipients.campaign_id, cid!))
+        .orderBy(asc(recipients.unit), asc(recipients.email));
+      const eligibleRows = allRows.filter((r) => ELIGIBLE.includes(r.status));
+
+      // SMS kinds don't need eligible recipients (validate like "test").
+      const isSmsKind = kind.startsWith("sms_");
+      const errors = validateForDispatch(cfg, campaign.property_name, eligibleRows.length,
+        isSmsKind ? "test" : kind, new Set(Object.keys(cardMap)));
+      if (errors.length) return back(errors.join(" "), true);
+
+      let testNumber = "";
+      if (kind === "sms_test") {
+        testNumber = (form.get("test_number")?.toString() ?? "").replace(/[^\d+]/g, "");
+        if (!/^\+\d{8,15}$/.test(testNumber)) {
+          return back("Test SMS needs a number in E.164 form, e.g. +15551234567", true);
+        }
+      }
+
+      // Target selection per kind.
+      const limit = kind === "dryrun" ? cfg.dry_run_limit : cfg.max_per_run;
+      let targets: typeof allRows = [];
+      if (kind === "sms_only") {
+        targets = allRows.filter((r) =>
+          r.status === "SENT" && r.phone_e164 && !["sent", "skipped_optout"].includes(r.sms_state));
+        if (targets.length === 0) return back("No emailed recipients pending SMS", true);
+      } else if (!isSmsKind) {
+        targets = eligibleRows.slice(0, limit);
+      }
+
+      const globals = buildGlobalTokens(campaign.property_name, campaign.event_name, cfg);
+      const configAttachmentIds = parseIdList(cfg.attachment_file_ids);
+      const toWfRecipient = (r: typeof allRows[number]) => ({
+        id: r.id, email: r.email, name: r.name, unit: r.unit,
+        attachmentIds: parseIdList(r.attach_ids_json ?? ""),
+        phone_e164: r.phone_e164, segment_timezone: r.segment_timezone,
+      });
+      const wfRecipients = kind === "test"
+        ? [{
+            id: "test", email: user.email,
+            name: targets[0]?.name || "Resident Test",
+            unit: targets[0]?.unit || "101",
+            attachmentIds: [] as string[], phone_e164: null, segment_timezone: null,
+          }]
+        : targets.map(toWfRecipient);
+
+      const smsEnabled = campaign.sms_enabled === 1;
+      const smsFrom = (await db.select().from(appConfig).where(eq(appConfig.key, "sms_from_number")).limit(1))[0]?.value
+        ?? SMS_FROM_NUMBER;
+
+      const auditedKinds: Record<string, string> = { send: "send", dryrun: "dryrun", test: "test", sms_only: "sms" };
+      const appRunId = auditedKinds[kind] ? crypto.randomUUID() : null;
+      const rowStates = kind === "send"
+        ? targets.map((r) => ({ id: r.id, prevStatus: r.status }))
+        : null;
+
+      const wfId = (await db.select().from(appConfig).where(eq(appConfig.key, "dispatch_workflow_id")).limit(1))[0]?.value
+        ?? DISPATCH_WORKFLOW_ID;
+      try {
+        const run = await triggerWorkflowWithCallback(wfId, DISPATCH_WORKFLOW_NAME, request, {
+          campaign_id: cid,
+          app_run_id: appRunId,
+          kind,
+          config: {
+            subjectTemplate: cfg.subject_template,
+            bodyTemplate: composeBodyTemplate(cfg, cardMap),
+            senderName: cfg.sender_display_name,
+            replyTo: cfg.reply_to,
+            cc: [cfg.manager_email, cfg.cc_extra].filter(Boolean).join(","),
+            includeUnitLine: cfg.include_unit_line,
+            globalTokens: globals,
+            configAttachmentIds,
+          },
+          recipients: wfRecipients,
+          sms: {
+            enabled: smsEnabled,
+            from_number: smsFrom,
+            quiet_start: 8, quiet_end: 21,
+            ...(testNumber ? { test_number: testNumber } : {}),
+          },
+        });
+        if (appRunId) {
+          await db.insert(runs).values({
+            id: appRunId, campaign_id: cid!, kind: auditedKinds[kind], actor: user.email,
+            count: 0, row_states_json: rowStates ? JSON.stringify(rowStates) : null,
+            started_at: new Date().toISOString(),
+          });
+        }
+        await db.insert(workflowRuns).values({
+          run_id: run.id, workflow_name: DISPATCH_WORKFLOW_NAME,
+          status: "pending", created_at: new Date().toISOString(),
+        });
+        if (kind === "send") {
+          await db.update(campaigns).set({ status: "sending" }).where(eq(campaigns.id, cid!));
+          if (smsEnabled) {
+            // Live-feedback: mark targets with a phone as queued; callback finalizes.
+            const phoneIds = targets.filter((r) => r.phone_e164).map((r) => r.id);
+            for (let i = 0; i < phoneIds.length; i += 90) {
+              await db.update(recipients).set({ sms_state: "queued" })
+                .where(inArray(recipients.id, phoneIds.slice(i, i + 90)));
+            }
+          }
+        }
+        const label =
+          kind === "send" ? `Sending to ${wfRecipients.length} recipients${smsEnabled ? " (email + SMS)" : ""}`
+          : kind === "dryrun" ? `Creating ${wfRecipients.length} drafts in member.support@`
+          : kind === "test" ? `Test email queued to ${user.email}`
+          : kind === "sms_preview" ? "Generating SMS preview"
+          : kind === "sms_test" ? `Test SMS queued to ${testNumber}`
+          : `SMS queued for ${wfRecipients.length} recipients`;
+        return back(`${label} — results will appear here automatically`);
+      } catch (e: any) {
+        return back(e?.message ?? String(e), true);
+      }
+    }
+
+    // ── Undo the latest completed send ───────────────────────────────────────
+    if (campaign && action === "/undo" && request.method === "POST") {
+      const lastSend = (await db.select().from(runs)
+        .where(and(eq(runs.campaign_id, cid!), eq(runs.kind, "send")))
+        .orderBy(desc(runs.started_at)).limit(1))[0];
+      if (!lastSend || !lastSend.completed_at || !lastSend.row_states_json) {
+        return back("No completed send run to undo", true);
+      }
+      let states: Array<{ id: string; prevStatus: string }> = [];
+      try { states = JSON.parse(lastSend.row_states_json); } catch { /* noop */ }
+      for (const s of states) {
+        await db.update(recipients)
+          .set({ status: s.prevStatus ?? "", email_state: "pending", email_sent_at: null })
+          .where(eq(recipients.id, s.id));
+      }
+      const now = new Date().toISOString();
+      await db.insert(runs).values({
+        id: crypto.randomUUID(), campaign_id: cid!, kind: "undo", actor: user.email,
+        count: states.length, row_states_json: null,
+        started_at: now, completed_at: now,
+      });
+      await db.update(campaigns).set({ status: "ready", completed_at: null }).where(eq(campaigns.id, cid!));
+      return back(`Undo complete — ${states.length} recipients reverted (emails already sent are NOT recalled)`);
+    }
+
     // ── Manual recipient add ─────────────────────────────────────────────────
-    const recAddMatch = url.pathname.match(/^\/api\/campaigns\/([0-9a-f-]{36})\/recipients$/);
-    if (recAddMatch && request.method === "POST") {
-      const cid = recAddMatch[1];
+    if (campaign && action === "/recipients" && request.method === "POST") {
       const form = await request.formData();
       const email = form.get("email")?.toString().trim() ?? "";
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
-        return Response.redirect(new URL(`/c/${cid}?error=Invalid+email`, request.url).toString(), 303);
-      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return back("Invalid email", true);
       await db.insert(recipients).values({
-        id: crypto.randomUUID(), campaign_id: cid, email,
+        id: crypto.randomUUID(), campaign_id: cid!, email,
         name: form.get("name")?.toString().trim() ?? "",
         unit: form.get("unit")?.toString().trim() ?? "",
         source: "manual", status: "PENDING",
         email_state: "pending", sms_state: "off",
       });
-      return Response.redirect(new URL(`/c/${cid}`, request.url).toString(), 303);
+      return back("Recipient added");
     }
 
-    // ── Recipient status update / delete (field-level, never grid overwrite) ─
+    // ── /edit — cards & disclaimers management ───────────────────────────────
+    if (url.pathname === "/edit" && request.method === "GET") {
+      const { cards, disclaimers } = await loadAssets(db);
+      return renderPage({
+        page: "edit", user, role,
+        campaigns: [], recipients: [], roleRequests: [], runs: [],
+        cards, disclaimers,
+        flash: url.searchParams.get("flash") ?? undefined,
+        error: url.searchParams.get("error") ?? undefined,
+      });
+    }
+    const editorMatch = url.pathname.match(/^\/edit\/(card|disclaimer)\/(new|[0-9a-f-]{36})$/);
+    if (editorMatch && request.method === "GET") {
+      const [, kind, idOrNew] = editorMatch;
+      const { cards, disclaimers } = await loadAssets(db);
+      const pool = kind === "card" ? cards : disclaimers;
+      const editing = idOrNew === "new" ? undefined : pool.find((a) => a.id === idOrNew);
+      if (idOrNew !== "new" && !editing) {
+        return Response.redirect(new URL("/edit?error=Not+found", request.url).toString(), 303);
+      }
+      // Editor preview: card rendered in its shell / disclaimer as-is, sample tokens.
+      const sample = { ...SAMPLE_TOKENS, today: formatToday("America/Mexico_City") };
+      let editorPreviewHtml = "";
+      if (editing) {
+        editorPreviewHtml = kind === "card"
+          ? renderTokens(renderCard(editing.config as unknown as CardDef), sample, true)
+          : renderTokens(String(editing.config.html ?? ""), sample, true);
+      }
+      // While AI generation runs, poll the card's updated_at and reload when
+      // the workflow callback lands the new body_html.
+      const generating = url.searchParams.get("generating") === "1" && editing && kind === "card";
+      const genScript = generating ? `
+(function(){
+  var initial = ${JSON.stringify(editing!.updated_at ?? "")};
+  var tries = 0;
+  var timer = setInterval(function(){
+    if (++tries > 45) { clearInterval(timer); return; }
+    fetch("/api/edit/card/${editing!.id}/state").then(function(r){ return r.json(); }).then(function(d){
+      if (d.updated_at && d.updated_at !== initial) {
+        clearInterval(timer);
+        location.replace(location.pathname + "?flash=AI+draft+loaded+into+Body+HTML+—+review+and+Save");
+      }
+    }).catch(function(){});
+  }, 2000);
+})();` : undefined;
+      return renderPage({
+        page: "editor", user, role,
+        campaigns: [], recipients: [], roleRequests: [], runs: [],
+        cards, disclaimers,
+        editorKind: kind as "card" | "disclaimer",
+        editing, editorPreviewHtml,
+        generating: !!generating,
+        flash: url.searchParams.get("flash") ?? undefined,
+        error: url.searchParams.get("error") ?? undefined,
+      }, genScript);
+    }
+    // ── AI card generation: describe → Haiku → body_html on the saved card ───
+    const genMatch = url.pathname.match(/^\/api\/edit\/card\/([0-9a-f-]{36})\/generate$/);
+    if (genMatch && request.method === "POST") {
+      const cardId = genMatch[1];
+      const form = await request.formData();
+      const description = form.get("description")?.toString().trim() ?? "";
+      const row = (await db.select().from(templates).where(eq(templates.id, cardId)).limit(1))[0];
+      if (!row) return Response.redirect(new URL("/edit?error=Card+not+found", request.url).toString(), 303);
+      if (description.length < 10) {
+        return Response.redirect(new URL(`/edit/card/${cardId}?error=Describe+the+card+in+a+sentence+or+two`, request.url).toString(), 303);
+      }
+      let cardCfg: Record<string, string> = {};
+      try { cardCfg = JSON.parse(row.config_json); } catch { /* empty */ }
+      const wfId = (await db.select().from(appConfig).where(eq(appConfig.key, "dispatch_workflow_id")).limit(1))[0]?.value
+        ?? DISPATCH_WORKFLOW_ID;
+      try {
+        const run = await triggerWorkflowWithCallback(wfId, DISPATCH_WORKFLOW_NAME, request, {
+          kind: "card_gen",
+          card_gen: { card_id: cardId, title: cardCfg.title || row.name, description },
+        });
+        await db.insert(workflowRuns).values({
+          run_id: run.id, workflow_name: DISPATCH_WORKFLOW_NAME,
+          status: "pending", created_at: new Date().toISOString(),
+        });
+        return Response.redirect(
+          new URL(`/edit/card/${cardId}?generating=1&flash=Generating+card+HTML+with+AI…`, request.url).toString(), 303);
+      } catch (e: any) {
+        return Response.redirect(
+          new URL(`/edit/card/${cardId}?error=${encodeURIComponent(e?.message ?? String(e))}`, request.url).toString(), 303);
+      }
+    }
+
+    // Poll target for the editor while generation runs.
+    const stateMatch = url.pathname.match(/^\/api\/edit\/card\/([0-9a-f-]{36})\/state$/);
+    if (stateMatch && request.method === "GET") {
+      const row = (await db.select({ updated_at: templates.updated_at, updated_by: templates.updated_by })
+        .from(templates).where(eq(templates.id, stateMatch[1])).limit(1))[0];
+      return Response.json({ ok: true, updated_at: row?.updated_at ?? null, updated_by: row?.updated_by ?? null });
+    }
+
+    const editApiMatch = url.pathname.match(/^\/api\/edit\/(card|disclaimer)$/);
+    if (editApiMatch && request.method === "POST") {
+      const kind = editApiMatch[1];
+      const form = await request.formData();
+      const id = form.get("id")?.toString() || crypto.randomUUID();
+      const isNew = !form.get("id");
+      const active = form.get("active") === "on" ? 1 : 0;
+      const now = new Date().toISOString();
+      let name = "";
+      let config: Record<string, string> = {};
+      if (kind === "card") {
+        const key = (form.get("key")?.toString() ?? "").trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+        if (!key) return Response.redirect(new URL("/edit?error=Card+key+is+required", request.url).toString(), 303);
+        const { cards } = await loadAssets(db);
+        if (cards.some((c) => String(c.config.key) === key && c.id !== id)) {
+          return Response.redirect(new URL(`/edit?error=Card+key+${key}+already+exists`, request.url).toString(), 303);
+        }
+        name = key;
+        config = {
+          key,
+          label: form.get("label")?.toString().trim() || key,
+          accent: form.get("accent")?.toString().trim() || "#1A61D9",
+          // Operators paste a plain emoji; store as Gmail-safe hex entities.
+          icon: emojiToEntities(form.get("icon")?.toString() ?? ""),
+          title: form.get("title")?.toString().trim() || key,
+          body_html: form.get("body_html")?.toString() ?? "",
+        };
+      } else {
+        name = form.get("name")?.toString().trim() || "Untitled disclaimer";
+        config = { name, html: form.get("html")?.toString() ?? "" };
+      }
+      if (isNew) {
+        await db.insert(templates).values({
+          id, name, kind, config_json: JSON.stringify(config), active,
+          updated_by: user.email, updated_at: now,
+        });
+      } else {
+        await db.update(templates)
+          .set({ name, config_json: JSON.stringify(config), active, updated_by: user.email, updated_at: now })
+          .where(eq(templates.id, id));
+      }
+      return Response.redirect(
+        new URL(`/edit/${kind}/${id}?flash=Saved`, request.url).toString(), 303);
+    }
+
+    // ── Recipient status update / delete (field-level) ───────────────────────
     const recEditMatch = url.pathname.match(/^\/api\/recipients\/([0-9a-f-]{36})$/);
     if (recEditMatch && request.method === "POST") {
       const rid = recEditMatch[1];
       const form = await request.formData();
-      const action = form.get("action")?.toString();
+      const act = form.get("action")?.toString();
       const row = (await db.select().from(recipients).where(eq(recipients.id, rid)).limit(1))[0];
       if (row) {
-        if (action === "delete") {
+        if (act === "delete") {
           await db.delete(recipients).where(eq(recipients.id, rid));
-        } else if (action === "status") {
+        } else if (act === "status") {
           const status = form.get("status")?.toString() ?? "";
           if (["PENDING", "READY", "REVIEW"].includes(status)) {
             await db.update(recipients).set({ status }).where(eq(recipients.id, rid));
@@ -244,20 +807,62 @@ export default {
     }
 
     // ── Campaign detail page ─────────────────────────────────────────────────
-    const detailMatch = url.pathname.match(/^\/c\/([0-9a-f-]{36})$/);
-    if (detailMatch && request.method === "GET") {
-      const cid = detailMatch[1];
-      const campaign = (await db.select().from(campaigns).where(eq(campaigns.id, cid)).limit(1))[0];
-      if (!campaign) return Response.redirect(new URL("/?error=Campaign+not+found", request.url).toString(), 303);
+    if (campaign && !action && request.method === "GET") {
       const recRows = await db.select().from(recipients)
-        .where(eq(recipients.campaign_id, cid))
+        .where(eq(recipients.campaign_id, cid!))
         .orderBy(asc(recipients.unit), asc(recipients.email));
+      const runRows = await db.select().from(runs)
+        .where(eq(runs.campaign_id, cid!))
+        .orderBy(desc(runs.started_at)).limit(10);
+      const { cards, disclaimers, cardMap } = await loadAssets(db);
+
+      // Server-rendered preview against a chosen (or first eligible) recipient.
+      const cfg = parseConfig(campaign.config_json);
+      const previewId = url.searchParams.get("preview");
+      const eligibleRows = recRows.filter((r) => ELIGIBLE.includes(r.status));
+      const pr = (previewId && recRows.find((r) => r.id === previewId)) || eligibleRows[0];
+      const globals = buildGlobalTokens(campaign.property_name, campaign.event_name, cfg);
+      const tokens = buildRecipientTokens(
+        globals,
+        pr ? { email: pr.email, name: pr.name, unit: pr.unit }
+           : { email: "", name: "Resident", unit: "101" },
+        cfg.include_unit_line
+      );
+      const previewHtml = renderTokens(composeBodyTemplate(cfg, cardMap), tokens, true);
+      const previewSubject = renderTokens(cfg.subject_template, tokens, false);
+
+      // Live watcher: reload when the campaign's change signature moves
+      // (status transitions, SMS preview arrival, run completions).
+      const initialSig = await campaignSig(db, cid!);
+      const watchScript = `
+(function(){
+  if (!window.EventSource) return;
+  var initial = ${JSON.stringify(initialSig)};
+  function watch(){
+    var es = new EventSource(location.pathname.replace(/\\/$/, "") + "/events");
+    es.onmessage = function(ev){
+      try {
+        var d = JSON.parse(ev.data);
+        if (d.sig && d.sig !== initial) { es.close(); location.reload(); }
+      } catch(e){}
+    };
+    es.onerror = function(){ es.close(); setTimeout(watch, 3000); };
+  }
+  watch();
+})();`;
+
       return renderPage({
         page: "campaign", user, role,
-        campaigns: [campaign as CampaignRow], recipients: recRows as RecipientRow[], roleRequests: [],
+        campaigns: [campaign as CampaignRow], recipients: recRows as RecipientRow[],
+        roleRequests: [], runs: runRows as RunRow[],
+        cards, disclaimers,
+        config: cfg,
+        previewHtml, previewSubject,
+        previewFor: pr ? pr.email : "generic (no recipients)",
+        previewRecipientId: pr?.id,
         flash: url.searchParams.get("flash") ?? undefined,
         error: url.searchParams.get("error") ?? undefined,
-      });
+      }, watchScript);
     }
 
     // ── Home: campaign list ──────────────────────────────────────────────────
@@ -267,7 +872,7 @@ export default {
       : [];
     return renderPage({
       page: "home", user, role,
-      campaigns: campaignRows as CampaignRow[], recipients: [],
+      campaigns: campaignRows as CampaignRow[], recipients: [], runs: [],
       roleRequests: roleRequests as RoleRow[],
       flash: url.searchParams.get("flash") ?? undefined,
       error: url.searchParams.get("error") ?? undefined,
@@ -275,8 +880,36 @@ export default {
   },
 };
 
-function renderPage(props: AppProps): Response {
+// Injected on every page:
+//  - strips flash/error params after render so banners can't go stale on
+//    refresh or SSE-triggered reloads (keeps other params like ?preview)
+//  - binds data-autosubmit selects (recipient status pills) to save on change
+const BASE_SCRIPT = `
+(function(){
+  try {
+    var u = new URL(location.href);
+    if (u.searchParams.has("flash") || u.searchParams.has("error")) {
+      u.searchParams.delete("flash"); u.searchParams.delete("error");
+      var q = u.searchParams.toString();
+      history.replaceState(null, "", u.pathname + (q ? "?" + q : ""));
+    }
+  } catch(e){}
+  var sels = document.querySelectorAll("[data-autosubmit]");
+  for (var i = 0; i < sels.length; i++) {
+    (function(s){ s.addEventListener("change", function(){ if (s.form) s.form.submit(); }); })(sels[i]);
+  }
+  var swatches = document.querySelectorAll("[data-set-accent]");
+  for (var j = 0; j < swatches.length; j++) {
+    (function(b){ b.addEventListener("click", function(){
+      var input = document.querySelector("input[name=accent]");
+      if (input) input.value = b.getAttribute("data-set-accent");
+    }); })(swatches[j]);
+  }
+})();`;
+
+function renderPage(props: AppProps, extraScript?: string): Response {
   const appHtml = renderToString(<App {...props} />);
+  const script = BASE_SCRIPT + (extraScript ? `\n${extraScript}` : "");
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -287,6 +920,7 @@ function renderPage(props: AppProps): Response {
 </head>
 <body>
   <div id="root">${appHtml}</div>
+  <script>${script}</script>
 </body>
 </html>`;
   return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
