@@ -117,12 +117,15 @@ exact shape (schema_version "${SCHEMA_VERSION}"):
 
 export function buildAnnotatorPrompt(
   transcriptText: string,
-  momentsDisplay: any[] | null
+  momentsDisplay: any[] | null,
+  // Provider-labeled (CallProvider.markers_header); the default keeps the
+  // dialpad wording byte-identical.
+  markersHeader = "DIALPAD SIGNAL MARKERS (hints, machine-detected)"
 ): string {
   const parts = [ANNOTATOR_INSTRUCTIONS];
   if (momentsDisplay && momentsDisplay.length) {
     parts.push(
-      "=== DIALPAD SIGNAL MARKERS (hints, machine-detected) ===\n" +
+      `=== ${markersHeader} ===\n` +
         JSON.stringify(momentsDisplay, null, 2)
     );
   }
