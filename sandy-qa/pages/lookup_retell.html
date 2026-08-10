@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sofia — Retell Call Lookup</title>
+<style>
+  :root { --bg:#E7EFFB; --ink:#15192D; --muted:#5a6478; --accent:#1A61D9;
+          --card:#ffffff; --line:#c9d5e8; --ok:#0d7a3f; --warn:#a15c00; --bad:#a11a1a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  .wrap { max-width:1180px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:1.35rem; margin:0 0 2px; }
+  .sub { color:var(--muted); font-size:0.85rem; margin-bottom:18px; }
+  .nav a { color:var(--accent); text-decoration:none; margin-right:14px; font-size:0.85rem; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+          padding:16px; margin-top:16px; }
+  .controls { display:flex; gap:12px; align-items:end; flex-wrap:wrap; }
+  .controls label { display:block; font-size:0.72rem; color:var(--muted); margin-bottom:4px; }
+  .controls input { padding:7px 10px; border:1px solid var(--line); border-radius:8px;
+                    font-size:0.85rem; min-width:260px; }
+  button { border:0; border-radius:8px; padding:8px 14px; font-size:0.82rem;
+           cursor:pointer; background:var(--accent); color:#fff; }
+  button.secondary { background:#eef3fb; color:var(--accent); border:1px solid var(--line); }
+  button:disabled { opacity:0.45; cursor:not-allowed; }
+  table { width:100%; border-collapse:collapse; font-size:0.8rem; margin-top:12px; }
+  th { text-align:left; color:var(--muted); font-weight:600; font-size:0.7rem;
+       text-transform:uppercase; letter-spacing:0.04em; padding:6px 8px;
+       border-bottom:1px solid var(--line); }
+  td { padding:8px; border-bottom:1px solid #edf2fa; vertical-align:middle; }
+  tr:hover td { background:#f6f9fe; }
+  .mono { font-family:ui-monospace,Menlo,monospace; font-size:0.74rem; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:0.68rem;
+           font-weight:600; }
+  .b-scored { background:#e2f4e8; color:var(--ok); }
+  .b-flagged { background:#fdf1de; color:var(--warn); }
+  .b-queue { background:#e4ecfb; color:var(--accent); }
+  .b-vm { background:#f3e5e5; color:var(--bad); }
+  .sent-Positive { color:var(--ok); } .sent-Negative { color:var(--bad); }
+  .sent-Neutral, .sent-Unknown { color:var(--muted); }
+  .copy { cursor:pointer; color:var(--muted); font-size:0.7rem; margin-left:6px; }
+  .copy:hover { color:var(--accent); }
+  #status-line { font-size:0.78rem; color:var(--muted); margin-top:10px; }
+  .footer-row { display:flex; justify-content:space-between; align-items:center; margin-top:14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Sofia — Retell Call Lookup</h1>
+  <div class="sub">Ended calls taken by Sofia on Retell, newest first. Scoring fetches the
+    recording + transcript from Retell automatically; every Sofia eval parks for human review.</div>
+  <div class="nav">
+    <a href="/score/sofia">Scoring console &rsaquo;</a>
+    <a href="/dashboard/sofia">Team dashboard &rsaquo;</a>
+    <a href="/">All teams &rsaquo;</a>
+  </div>
+
+  <div class="card">
+    <div class="controls">
+      <div>
+        <label for="reviewer-email">Your email (reviewer on triggered scores)</label>
+        <input type="email" id="reviewer-email" placeholder="you@hellolanding.com">
+      </div>
+      <button class="secondary" id="refresh-btn">Refresh</button>
+    </div>
+
+    <table>
+      <thead><tr>
+        <th>When (LA)</th><th>Dur</th><th>Dir</th><th>Caller</th><th>Sentiment</th>
+        <th>Disconnection</th><th>Build</th><th>Status</th><th style="text-align:right">Actions</th>
+      </tr></thead>
+      <tbody id="rows"><tr><td colspan="9" style="color:var(--muted)">Loading…</td></tr></tbody>
+    </table>
+
+    <div class="footer-row">
+      <span id="status-line"></span>
+      <button class="secondary" id="more-btn" style="display:none">Load more</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const API = '/api/sofia';
+  const rowsEl = document.getElementById('rows');
+  const moreBtn = document.getElementById('more-btn');
+  const statusLine = document.getElementById('status-line');
+  const reviewerInput = document.getElementById('reviewer-email');
+  let paginationKey = null;
+  let sofiaEmail = null;   // roster row email, fetched once
+  const items = new Map(); // call_id -> item
+
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c =>
+      ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+  function mmss(ms) {
+    if (ms == null) return '—';
+    const t = Math.round(ms / 1000);
+    return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+  }
+  function laTime(iso) {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleString('en-US',
+      { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric',
+        hour: 'numeric', minute: '2-digit' });
+  }
+
+  // Reviewer email: whoami first, sticky localStorage after.
+  reviewerInput.value = localStorage.getItem('qa_manager_email') || '';
+  reviewerInput.addEventListener('change', () =>
+    localStorage.setItem('qa_manager_email', reviewerInput.value.trim()));
+  fetch(`${API}/whoami`).then(r => r.json()).then(w => {
+    if (!reviewerInput.value && w.email) {
+      reviewerInput.value = w.email;
+      localStorage.setItem('qa_manager_email', w.email);
+    }
+  }).catch(() => {});
+  fetch(`${API}/team/mails`).then(r => r.json()).then(mails => {
+    sofiaEmail = (mails.find(m => (m.email || '').trim()) || {}).email || null;
+  }).catch(() => {});
+
+  function statusCell(it) {
+    if (it.evaluation) {
+      const ev = it.evaluation;
+      const flagged = ev.scoring_status === 'flagged_human_review' || ev.state === 'draft';
+      return `<span class="badge ${flagged ? 'b-flagged' : 'b-scored'}">
+        ${flagged ? 'awaiting review' : 'scored ' + (ev.overall_score ?? '')}</span>`;
+    }
+    if (it.queue_status) return `<span class="badge b-queue">${esc(it.queue_status)}</span>`;
+    if (it.in_voicemail) return `<span class="badge b-vm">voicemail</span>`;
+    return '<span style="color:var(--muted)">—</span>';
+  }
+  function actionsCell(it) {
+    if (it.evaluation)
+      return `<a href="/scorecard/sofia/${encodeURIComponent(it.call_id)}"
+        style="color:var(--accent);font-size:0.78rem">Open scorecard</a>`;
+    if (it.queue_status) return '<span style="color:var(--muted);font-size:0.75rem">in pipeline</span>';
+    if (it.in_voicemail) return '<span style="color:var(--muted);font-size:0.75rem">not scoreable</span>';
+    return `<button data-score="${esc(it.call_id)}" style="padding:5px 12px">Score</button>`;
+  }
+  function render() {
+    if (!items.size) {
+      rowsEl.innerHTML = '<tr><td colspan="9" style="color:var(--muted)">No ended Sofia calls found.</td></tr>';
+      return;
+    }
+    rowsEl.innerHTML = [...items.values()].map(it => `
+      <tr>
+        <td>${laTime(it.start_iso)}<span class="copy" data-copy="${esc(it.call_id)}"
+            title="${esc(it.call_id)} — click to copy">⧉ id</span></td>
+        <td>${mmss(it.duration_ms)}</td>
+        <td>${esc(it.direction ?? '—')}</td>
+        <td class="mono">${esc(it.caller_phone || '—')}</td>
+        <td class="sent-${esc(it.user_sentiment ?? 'Unknown')}">${esc(it.user_sentiment ?? '—')}</td>
+        <td style="color:var(--muted)">${esc(it.disconnection_reason ?? '—')}</td>
+        <td class="mono">${it.agent_version != null ? 'v' + esc(it.agent_version) : '—'}</td>
+        <td>${statusCell(it)}</td>
+        <td style="text-align:right">${actionsCell(it)}</td>
+      </tr>`).join('');
+  }
+
+  async function load(reset) {
+    if (reset) { items.clear(); paginationKey = null; }
+    statusLine.textContent = 'Loading…';
+    try {
+      const qs = paginationKey ? `?pagination_key=${encodeURIComponent(paginationKey)}` : '';
+      const res = await fetch(`${API}/lookup/calls${qs}`, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      for (const it of data.items) items.set(it.call_id, it);
+      paginationKey = data.pagination_key;
+      moreBtn.style.display = data.has_more && paginationKey ? '' : 'none';
+      statusLine.textContent = `${items.size} calls` +
+        (data.filtered_app_side ? ' (agent filter applied app-side)' : '');
+      render();
+    } catch (e) {
+      statusLine.textContent = '';
+      rowsEl.innerHTML = `<tr><td colspan="9" style="color:var(--bad)">${esc(e.message)}</td></tr>`;
+    }
+  }
+
+  async function scoreCall(callId, btn) {
+    const reviewer = reviewerInput.value.trim();
+    if (!reviewer) { alert('Enter your email first — you become the reviewer on this score.'); return; }
+    if (!sofiaEmail) { alert('Sofia roster not loaded yet — try again in a second.'); return; }
+    if (!confirm(`Score call ${callId}?\nIt will run the AI pipeline and park in the review queue.`)) return;
+    btn.disabled = true;
+    try {
+      const fd = new FormData();
+      fd.append('call_id', callId);
+      fd.append('agent_email', sofiaEmail);
+      fd.append('manager_email', reviewer);
+      const res = await fetch(`${API}/score`, { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      const it = items.get(callId);
+      if (it) { it.queue_status = data.status || 'queued'; render(); }
+      statusLine.textContent =
+        `Call ${callId} → ${data.status}. Track progress on the scoring console; it will land in the review queue.`;
+    } catch (e) {
+      btn.disabled = false;
+      alert(`Scoring failed: ${e.message}`);
+    }
+  }
+
+  document.addEventListener('click', e => {
+    const scoreId = e.target?.dataset?.score;
+    if (scoreId) return scoreCall(scoreId, e.target);
+    const copyId = e.target?.dataset?.copy;
+    if (copyId) {
+      navigator.clipboard?.writeText(copyId);
+      statusLine.textContent = `Copied ${copyId}`;
+    }
+  });
+  document.getElementById('refresh-btn').addEventListener('click', () => load(true));
+  moreBtn.addEventListener('click', () => load(false));
+  load(true);
+</script>
+</body>
+</html>

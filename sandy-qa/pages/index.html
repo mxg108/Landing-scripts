@@ -353,8 +353,9 @@
     }
     if (IS_RETELL_TEAM) {
       document.getElementById('call-id-heading').textContent = 'Retell Call IDs';
-      document.getElementById('entry-hint').textContent =
-        'Recordings and transcripts are fetched from Retell automatically — paste call IDs (call_…) from the Retell dashboard.';
+      document.getElementById('entry-hint').innerHTML =
+        'Recordings and transcripts are fetched from Retell automatically — find and score calls on the ' +
+        '<a href="/lookup/sofia" style="color:var(--accent)">Sofia Lookup page</a>, or paste call IDs (call_…) here.';
       document.getElementById('call-id-input').removeAttribute('inputmode');
     }
   });

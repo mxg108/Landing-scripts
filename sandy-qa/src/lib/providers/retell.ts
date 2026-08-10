@@ -150,6 +150,79 @@ function buildContextBlock(raw: any, markers: any[]): string {
   return lines.join("\n");
 }
 
+// list-calls v3 for the Sofia lookup page (RetellAPI.md §1) — discovery
+// only: v3 items OMIT transcript/recording_url, so scoring always follows
+// with get-call. Newest-first. Filter shapes vary across Retell doc
+// revisions, so a 4xx on the filtered body retries unfiltered and applies
+// the agent/status filter app-side (flagged in the response).
+export async function listRetellCalls(
+  key: string,
+  opts: { agentIds?: string[]; limit?: number; paginationKey?: string }
+): Promise<{
+  items: any[];
+  pagination_key: string | null;
+  has_more: boolean;
+  filtered_app_side: boolean;
+}> {
+  const post = async (body: Record<string, unknown>) =>
+    fetch(`${RETELL}/v3/list-calls`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  const base: Record<string, unknown> = {
+    limit: opts.limit ?? 50,
+    sort_order: "descending",
+    ...(opts.paginationKey ? { pagination_key: opts.paginationKey } : {}),
+  };
+  const agentIds = (opts.agentIds ?? []).filter(Boolean);
+
+  let filteredAppSide = false;
+  let res = await post({
+    ...base,
+    filter_criteria: {
+      ...(agentIds.length ? { agent_id: agentIds } : {}),
+      call_status: ["ended"],
+    },
+  });
+  if (res.status >= 400 && res.status < 500 && res.status !== 401) {
+    filteredAppSide = true;
+    res = await post(base);
+  }
+  if (res.status === 401)
+    throw new ProviderCallError("Retell auth failed — check the RETELL_API_KEY app secret", 503);
+  if (!res.ok) throw new ProviderCallError(`Retell list-calls HTTP ${res.status}`, 502);
+  const data = (await res.json()) as any;
+
+  let items: any[] = data.items ?? [];
+  if (filteredAppSide)
+    items = items.filter(
+      (c) =>
+        c.call_status === "ended" &&
+        (!agentIds.length || agentIds.includes(c.agent_id))
+    );
+
+  return {
+    items: items.map((c) => ({
+      call_id: c.call_id,
+      start_iso: c.start_timestamp ? new Date(c.start_timestamp).toISOString() : null,
+      duration_ms: c.duration_ms ?? null,
+      direction: c.direction ?? null,
+      caller_phone: c.direction === "outbound" ? (c.to_number ?? "") : (c.from_number ?? ""),
+      disconnection_reason: c.disconnection_reason ?? null,
+      user_sentiment: c.call_analysis?.user_sentiment ?? null,
+      call_successful: c.call_analysis?.call_successful ?? null,
+      in_voicemail: c.call_analysis?.in_voicemail ?? null,
+      agent_id: c.agent_id ?? null,
+      agent_version: c.agent_version ?? null,
+    })),
+    pagination_key: data.pagination_key ?? null,
+    has_more: !!data.has_more,
+    filtered_app_side: filteredAppSide,
+  };
+}
+
 export function makeRetellProvider(key: string): CallProvider {
   return {
     id: "retell",
