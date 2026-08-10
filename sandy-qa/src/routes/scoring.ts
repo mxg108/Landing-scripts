@@ -32,6 +32,7 @@ import {
   type CallProvider,
   type NormalizedCall,
 } from "../lib/providers/index.js";
+import { accessEmail } from "../lib/rbac.js";
 
 const WORKFLOW_NAME = "qa-scoring-pipeline";
 
@@ -175,6 +176,10 @@ async function scoreTriggerInternal(
     // No disposition on retell teams — call_analysis.call_summary is the
     // retrieval query (better than the transcript-head fallback, §4.3).
     summaryQuery: call.grounding?.sop_query ?? null,
+    // Per-team tag scoping (teams.retrieval_config, migration 0006):
+    // sofia retrieves ONLY Sofia-tagged docs; null = unscoped (MS/Sales).
+    tags: config.retrieval_config?.tags ?? null,
+    tagMatch: config.retrieval_config?.match ?? "any",
   });
 
   const durationMs = call.duration_ms;
@@ -562,7 +567,12 @@ export async function rescoreEvaluation(
   try {
     body = await request.json();
   } catch {}
-  const evaluatorEmail = (body.evaluator_email ?? "").trim().toLowerCase();
+  // The page sends its remembered evaluator email; when absent (fresh
+  // browser, review-queue path on flagged rows) fall back to the caller's
+  // CF-Access-asserted identity — the person who actually clicked.
+  const evaluatorEmail =
+    (body.evaluator_email ?? "").trim().toLowerCase() ||
+    accessEmail(request).trim().toLowerCase();
   if (!evaluatorEmail) return json({ detail: "evaluator_email required" }, 422);
   const ev = await resolveEval(db, teamId, ref);
   if (!ev) return json({ detail: "No evaluation matches this call id" }, 404);
@@ -794,7 +804,12 @@ export async function approveEvaluation(
 ): Promise<Response> {
   let body: any = {};
   try { body = await request.json(); } catch { return json({ detail: "JSON body required" }, 422); }
-  const evaluatorEmail = (body.evaluator_email ?? "").trim().toLowerCase();
+  // The page sends its remembered evaluator email; when absent (fresh
+  // browser, review-queue path on flagged rows) fall back to the caller's
+  // CF-Access-asserted identity — the person who actually clicked.
+  const evaluatorEmail =
+    (body.evaluator_email ?? "").trim().toLowerCase() ||
+    accessEmail(request).trim().toLowerCase();
   if (!evaluatorEmail) return json({ detail: "evaluator_email required" }, 422);
 
   const fullByRef = (r: string) =>
@@ -997,7 +1012,12 @@ export async function overrideEvaluation(
 ): Promise<Response> {
   let body: any = {};
   try { body = await request.json(); } catch { return json({ detail: "JSON body required" }, 422); }
-  const evaluatorEmail = (body.evaluator_email ?? "").trim().toLowerCase();
+  // The page sends its remembered evaluator email; when absent (fresh
+  // browser, review-queue path on flagged rows) fall back to the caller's
+  // CF-Access-asserted identity — the person who actually clicked.
+  const evaluatorEmail =
+    (body.evaluator_email ?? "").trim().toLowerCase() ||
+    accessEmail(request).trim().toLowerCase();
   if (!evaluatorEmail) return json({ detail: "evaluator_email required" }, 422);
   if (body.acknowledged !== true)
     return json({ detail: "acknowledged=true required for an override" }, 422);

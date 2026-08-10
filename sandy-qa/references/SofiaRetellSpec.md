@@ -180,6 +180,17 @@ gains an optional `summaryQuery` used when disposition is absent (better
 than the current 600-char transcript-head fallback; sub-τ still falls into
 the existing conservative `sop_context_missing` path).
 
+**Tag scoping (added 2026-08-10, owner ask):** Sofia retrieves ONLY docs
+tagged `Sofia`. `teams.retrieval_config` (migration 0006) carries a
+provider-agnostic `{tags, match}` scope; Pulpo's `search_knowledge_base`
+has no tag parameter, so the scope is enforced by filtering search hits
+against the `list_documents_by_tag` id set (cached 1 h, case-insensitive,
+≤50 docs). **Fail-closed**: unresolved scope ⇒ retrieval skipped
+(`tag_scope_unavailable`), never a leak of other teams' docs. ⚠ At ship
+time ZERO docs carried the `Sofia` tag — Sofia scoring runs the
+conservative no-SOP path until docs are tagged in Pulpo. Future per-team
+scoping (MS/Sales, non-Pulpo providers) = set the same config shape.
+
 ### 4.4 The rest
 
 - `public_log_url` → review link on console/datapoint/editor (LLM req/resp +

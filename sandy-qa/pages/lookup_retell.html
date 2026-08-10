@@ -43,6 +43,14 @@
   .copy:hover { color:var(--accent); }
   #status-line { font-size:0.78rem; color:var(--muted); margin-top:10px; }
   .footer-row { display:flex; justify-content:space-between; align-items:center; margin-top:14px; }
+  #player-bar { position:fixed; left:0; right:0; bottom:0; background:var(--card);
+    border-top:1px solid var(--line); padding:10px 16px; display:none;
+    align-items:center; gap:14px; box-shadow:0 -4px 14px rgba(21,25,45,0.08); }
+  #player-bar.on { display:flex; }
+  #player-label { font-size:0.78rem; color:var(--muted); white-space:nowrap; }
+  #player-bar audio { flex:1; height:34px; }
+  .play-btn { background:#eef3fb; color:var(--accent); border:1px solid var(--line);
+    padding:4px 10px; margin-right:6px; }
 </style>
 </head>
 <body>
@@ -78,6 +86,12 @@
       <button class="secondary" id="more-btn" style="display:none">Load more</button>
     </div>
   </div>
+</div>
+
+<div id="player-bar">
+  <span id="player-label"></span>
+  <audio id="player" controls preload="none"></audio>
+  <button class="secondary" id="player-close" style="padding:4px 10px">✕</button>
 </div>
 
 <script>
@@ -132,12 +146,39 @@
     return '<span style="color:var(--muted)">—</span>';
   }
   function actionsCell(it) {
+    const play = `<button class="play-btn" data-play="${esc(it.call_id)}" title="Listen">▶</button>`;
     if (it.evaluation)
-      return `<a href="/scorecard/sofia/${encodeURIComponent(it.call_id)}"
+      return `${play}<a href="/scorecard/sofia/${encodeURIComponent(it.call_id)}"
         style="color:var(--accent);font-size:0.78rem">Open scorecard</a>`;
-    if (it.queue_status) return '<span style="color:var(--muted);font-size:0.75rem">in pipeline</span>';
-    if (it.in_voicemail) return '<span style="color:var(--muted);font-size:0.75rem">not scoreable</span>';
-    return `<button data-score="${esc(it.call_id)}" style="padding:5px 12px">Score</button>`;
+    if (it.queue_status) return `${play}<span style="color:var(--muted);font-size:0.75rem">in pipeline</span>`;
+    if (it.in_voicemail) return `${play}<span style="color:var(--muted);font-size:0.75rem">not scoreable</span>`;
+    return `${play}<button data-score="${esc(it.call_id)}" style="padding:5px 12px">Score</button>`;
+  }
+
+  // Mini player — each play fetches a FRESH signed WAV URL (Retell links
+  // expire in 24 h; there is no persistent streaming endpoint).
+  const playerBar = document.getElementById('player-bar');
+  const player = document.getElementById('player');
+  const playerLabel = document.getElementById('player-label');
+  document.getElementById('player-close').addEventListener('click', () => {
+    player.pause(); player.removeAttribute('src'); playerBar.classList.remove('on');
+  });
+  async function playCall(callId, btn) {
+    btn.disabled = true;
+    try {
+      const res = await fetch(`${API}/lookup/recording-link?call_id=${encodeURIComponent(callId)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      const it = items.get(callId);
+      playerLabel.textContent = `${laTime(it?.start_iso)} · ${mmss(it?.duration_ms)} · ${callId.slice(0, 18)}…`;
+      player.src = data.url;
+      playerBar.classList.add('on');
+      player.play().catch(() => {});
+    } catch (e) {
+      alert(`Couldn't load recording: ${e.message}`);
+    } finally {
+      btn.disabled = false;
+    }
   }
   function render() {
     if (!items.size) {
@@ -204,6 +245,8 @@
   }
 
   document.addEventListener('click', e => {
+    const playId = e.target?.dataset?.play;
+    if (playId) return playCall(playId, e.target);
     const scoreId = e.target?.dataset?.score;
     if (scoreId) return scoreCall(scoreId, e.target);
     const copyId = e.target?.dataset?.copy;

@@ -37,6 +37,7 @@ const empty = (query = "", reason = ""): SopContext => ({
 // finite disposition label space makes even short-lived caches pay off).
 const searchCache = new Map<string, { exp: number; hits: any[] }>();
 const docCache = new Map<string, { exp: number; doc: any | null }>();
+const tagScopeCache = new Map<string, { exp: number; ids: Set<string> }>();
 const CACHE_TTL_MS = 3600_000;
 
 class PulpoClient {
@@ -208,6 +209,38 @@ function cacheGet<T>(cache: Map<string, { exp: number } & any>, key: string): T 
   return null;
 }
 
+// Per-team tag scoping (teams.retrieval_config): search_knowledge_base has
+// no tag parameter, so the scope is enforced by filtering hits against the
+// tag-allowed doc-id set from list_documents_by_tag ({results: [...]}, max
+// 50, case-insensitive match). FAIL-CLOSED: if the scope can't be resolved,
+// retrieval is skipped rather than leaking other teams' docs. The shape is
+// deliberately provider-agnostic — a future non-Pulpo RAG provider scopes
+// off the same {tags, match} config.
+async function allowedDocIds(
+  client: PulpoClient,
+  tags: string[],
+  match: string
+): Promise<Set<string> | null> {
+  const key = `${match}|${tags.join(",")}`;
+  const cached = cacheGet<{ ids: Set<string> }>(tagScopeCache, key);
+  if (cached) return cached.ids;
+  try {
+    const payload = await client.toolCall("list_documents_by_tag", {
+      tags,
+      match,
+      limit: 50,
+    });
+    const docs: any[] = Array.isArray(payload)
+      ? payload
+      : (payload?.results ?? payload?.documents ?? payload?.items ?? []);
+    const ids = new Set<string>(docs.map((d: any) => String(d.id ?? "")).filter(Boolean));
+    tagScopeCache.set(key, { exp: Date.now() + CACHE_TTL_MS, ids });
+    return ids;
+  } catch {
+    return null; // fail-closed at the caller
+  }
+}
+
 export async function fetchSopContext(opts: {
   pulpoUrl?: string;
   pulpoToken?: string;
@@ -216,6 +249,8 @@ export async function fetchSopContext(opts: {
   disposition: string | null;
   transcriptText: string;
   summaryQuery?: string | null;
+  tags?: string[] | null;
+  tagMatch?: string;
 }): Promise<SopContext> {
   const query = buildSopQuery(
     opts.dispositionCategory,
@@ -244,6 +279,16 @@ export async function fetchSopContext(opts: {
       const batch = batches.find((b: any) => b.query === sent) ?? batches[0] ?? {};
       hits = (batch.results ?? []).map(mapHit);
       searchCache.set(sent, { exp: Date.now() + CACHE_TTL_MS, hits });
+    }
+
+    // Tag scope filter — applied post-cache so the search cache stays
+    // scope-agnostic. Fail-closed: unresolved scope skips retrieval.
+    if (opts.tags?.length) {
+      const allowed = await allowedDocIds(client, opts.tags, opts.tagMatch ?? "any");
+      if (allowed === null) return empty(query, "tag_scope_unavailable");
+      if (!allowed.size) return empty(query, "no_docs_carry_team_tags");
+      hits = hits.filter((h) => allowed.has(h.id));
+      if (!hits.length) return empty(query, "no_tagged_match");
     }
 
     const tau = opts.threshold ?? DEFAULT_THRESHOLD;
