@@ -66,7 +66,13 @@ function recordFromRows(config: TeamConfig, ev: any, sectionRows: any[]): any {
     manager_email: ev.evaluator_email ?? "",
     overall_score: ev.overall_score !== null ? Number(ev.overall_score) : 0.0,
     sections,
-    eval_id: extractEvalId(link ?? ""),
+    // Dialpad teams: the link's trailing segment (Sheets-era truth, however
+    // odd on legacy rows — parity). Retell teams: the link is public_log_url
+    // and would parse to a shared "public.log" — use the provider call id.
+    eval_id:
+      config.provider === "retell"
+        ? ev.dialpad_call_id || extractEvalId(link ?? "")
+        : extractEvalId(link ?? ""),
     dialpad_link: link,
     key_strengths: ev.key_strengths || null,
     improvements: ev.opportunities || null,

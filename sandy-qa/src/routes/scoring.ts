@@ -998,7 +998,14 @@ export async function approveEvaluation(
   }
 
   return json({
-    ok: true, evaluation_id: ev.id, overall_score: overall, state: "finalized",
+    ok: true, evaluation_id: ev.id, overall_score: overall,
+    // pre-edit score for the page's "engine score X → Y" message (null on
+    // flagged first-approvals, which had no score yet)
+    old_score:
+      ev.overall_score !== null && ev.overall_score !== undefined
+        ? Number(ev.overall_score)
+        : null,
+    state: "finalized",
     edited, coaching_id: coachingId, email_dispatch: emailDispatch,
   });
 }

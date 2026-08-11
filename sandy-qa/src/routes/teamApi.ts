@@ -661,9 +661,10 @@ function recordFromFrameRow(r: import("../lib/historyFrame.js").FrameRow) {
     overall_score: r.overall_score,
     sections: {},
     eval_id: r.eval_id || null,
-    dialpad_link: r.eval_id
-      ? `https://dialpad.com/callhistory/callreview/${r.eval_id}`
-      : null,
+    // r.dialpad_link is set only on retell rows (public_log_url).
+    dialpad_link:
+      r.dialpad_link ||
+      (r.eval_id ? `https://dialpad.com/callhistory/callreview/${r.eval_id}` : null),
     caller_name: r.caller_name || null,
     source: "ai",
   };

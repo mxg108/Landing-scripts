@@ -1044,7 +1044,7 @@ async function reapproveFinalized() {
          : ' Agent notified via the disclaimer email.')
       : '';
     statusEl.textContent =
-      `Re-approved — engine score ${data.old_score} → ${data.overall_score}.${duty}`;
+      `Re-approved — engine score ${data.old_score ?? '—'} → ${data.overall_score}.${duty}`;
     panel.querySelectorAll('select, textarea').forEach(el => el.disabled = true);
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}. You can retry.`;
