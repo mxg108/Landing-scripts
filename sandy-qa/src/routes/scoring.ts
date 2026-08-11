@@ -741,6 +741,23 @@ export async function scorecardPayload(
         flags: [],
       };
     });
+  // Persisted manual-section values for restored-scorecard prefill — kept
+  // OUT of `sections` (Railway AI-only shape; duplicated ids once shadowed
+  // manual inputs, the #175 422) and delivered under their own key. Without
+  // this the editor re-rendered saved manual scores as "—" + empty
+  // reasoning even though D1 held them.
+  const manualSections = config.prompt_config.sections
+    .filter((s: any) => ["manual", "manual_yn"].includes(s.score_type))
+    .map((s: any) => {
+      const row: any = byId.get(s.id) ?? {};
+      return {
+        id: s.id,
+        score: row.numeric_score ?? null,
+        yn_value: row.binary_value ?? null,
+        reasoning: row.reasoning ?? null,
+        score_source: row.score_source ?? null,
+      };
+    });
   let model: string | null = null;
   try { model = JSON.parse(ev.models_used ?? "{}")?.text?.model ?? null; } catch {}
   return json({
@@ -756,6 +773,7 @@ export async function scorecardPayload(
     sandy_born: ev.id >= SANDY_BASE,
     scorecard: {
       sections,
+      manual_sections: manualSections,
       manager_email: ev.evaluator_email ?? "",
       dialpad_link: ev.dialpad_link,
       call_summary: ev.call_summary ?? "",
