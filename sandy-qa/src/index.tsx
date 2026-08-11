@@ -230,16 +230,16 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
       // qa-scoring-pipeline: persist the evaluation (draft/finalize + toast)
       if (workflowName === "qa-scoring-pipeline") {
         const { scoringCallback, drainScoreQueue } = await import("./routes/scoring.js");
+        const jobId = (body as any).persist
+          ? `score-${(body as any).team_id}-${(body as any).call_id}-${String((body as any).persist.agent_name ?? "")
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")}`
+          : null;
         try {
           const outcome = await scoringCallback(body, env.DB, {
             member_support: env.GAS_WEBAPP_URL_MS,
             sales: env.GAS_WEBAPP_URL_SALES,
           });
-          const jobId = (body as any).persist
-            ? `score-${(body as any).team_id}-${(body as any).call_id}-${String((body as any).persist.agent_name ?? "")
-                .toLowerCase()
-                .replace(/[^a-z0-9]+/g, "-")}`
-            : null;
           if (jobId) {
             await env.DB.prepare(
               "UPDATE workflow_runs SET status = ?, result = ? WHERE run_id = ?"
@@ -259,7 +259,25 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
           }
           console.log(`[scoring] ${outcome.ok ? "OK" : "FAIL"}: ${outcome.note}`);
         } catch (err) {
-          console.log(`[scoring] persist threw: ${String(err).slice(0, 300)}`);
+          // A thrown persist must still terminalize the job — otherwise the
+          // queue row sits 'running' until the 25-min stale rescue mislabels
+          // it "no callback" (observed: coached-eval rescore FK throw).
+          const msg = `persist threw: ${String(err).slice(0, 300)}`;
+          console.log(`[scoring] ${msg}`);
+          if (jobId) {
+            try {
+              await env.DB.prepare(
+                "UPDATE workflow_runs SET status = 'error', result = ? WHERE run_id = ?"
+              )
+                .bind(JSON.stringify({ ok: false, note: msg }), jobId)
+                .run();
+              await env.DB.prepare(
+                "UPDATE qa_score_queue SET status = 'error', last_error = ?, finished_at = ? WHERE job_id = ?"
+              )
+                .bind(msg, new Date().toISOString(), jobId)
+                .run();
+            } catch {}
+          }
         }
         // A finished run frees the single workflow slot — start the next
         // queued job even when persist failed or the job id was missing.

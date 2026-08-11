@@ -620,6 +620,12 @@ export async function deleteEvaluation(
       409
     );
   await db.prepare("DELETE FROM qa_evaluation_sections WHERE evaluation_id = ?").bind(ev.id).run();
+  // Unlink coaching receipts first (FK, no ON DELETE): the coaching rows +
+  // audit trail survive; only the join to the destroyed eval goes.
+  await db
+    .prepare("DELETE FROM qa_coaching_evaluations WHERE evaluation_id = ?")
+    .bind(ev.id)
+    .run();
   await db.prepare("DELETE FROM qa_evaluations WHERE id = ?").bind(ev.id).run();
   // CC orphan latch (§3.9/§4.2): scored stays monotonic, orphaned flips on
   const now = new Date().toISOString();
@@ -1241,7 +1247,10 @@ export async function scoringCallback(
       .prepare("DELETE FROM qa_evaluation_sections WHERE evaluation_id = ?")
       .bind(newEvalId)
       .run();
-    await db.prepare("DELETE FROM qa_evaluations WHERE id = ?").bind(newEvalId).run();
+    // The eval row itself is UPDATEd in place below — deleting it throws
+    // FOREIGN KEY constraint failed when qa_coaching_evaluations holds a
+    // receipt link (S7 edit / §4.3 override), which is exactly what wedged
+    // the first coached-eval rescore.
   } else {
     const idRow = await db
       .prepare(
@@ -1272,54 +1281,65 @@ export async function scoringCallback(
     },
   };
 
-  const evalInsert = await db
-    .prepare(
-      `INSERT INTO qa_evaluations (
-        id, team_id, agent_id, agent_name_raw, agent_email, evaluator_email,
-        state, source, call_connected_at, call_ended_at, call_duration_ms,
-        language, dialpad_call_id, dialpad_entry_point_call_id,
-        dialpad_master_call_id, dialpad_link, caller_name, caller_phone,
-        call_summary, annotated_transcript, key_strengths, opportunities,
-        overall_score, formula_version, rubric_version, models_used,
-        ai_provider_primary, sampling_status, scoring_status,
-        human_review_required_at,
-        created_at, approved_at, finalized_at,
-        dialpad_disposition_category, dialpad_disposition, ai_csat,
-        command_center_call_id, dialpad_call_metadata
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    )
-    .bind(
-      newEvalId,
-      teamId, persist.agent_id, persist.agent_name, persist.agent_email,
-      flagged ? null : persist.manager_email,
-      flagged ? "draft" : "finalized", "ai",
-      persist.call_connected_at, persist.call_ended_at, persist.call_duration_ms,
-      p.annotation?.language_detected ?? null,
-      p.call_id, persist.dialpad_entry_point_call_id, persist.dialpad_master_call_id,
-      // review_link rides the payload since the provider seam; the fallback
-      // covers jobs queued before it existed.
-      persist.review_link ||
-        `https://dialpad.com/callhistory/callreview/${persist.dialpad_entry_point_call_id || p.call_id}`,
-      persist.caller_name || null, persist.caller_phone || null,
-      scorecard.call_summary ?? null,
-      p.annotation ? JSON.stringify(p.annotation) : null,
-      scorecard.key_strengths ?? null, scorecard.opportunities ?? null,
-      flagged ? null : overallScore,
-      fvRow.formula_version, config.rubric_version,
-      JSON.stringify(modelsUsed), "gemini",
-      "not_sampled",
-      flagged ? "flagged_human_review" : "complete",
-      // §0.3 queue entry: flagged rows carry the marker until a human
-      // resolution (approve/override) stamps completed_at.
-      flagged ? now : null,
-      now, flagged ? null : now, flagged ? null : now,
-      persist.cc_stamps?.disposition_category ?? null,
-      persist.cc_stamps?.disposition ?? null,
-      persist.cc_stamps?.ai_csat ?? null,
-      persist.cc_stamps?.cc_call_id ?? null,
-      JSON.stringify(meta)
-    )
-    .run();
+  const EVAL_COLS = [
+    "team_id", "agent_id", "agent_name_raw", "agent_email", "evaluator_email",
+    "state", "source", "call_connected_at", "call_ended_at", "call_duration_ms",
+    "language", "dialpad_call_id", "dialpad_entry_point_call_id",
+    "dialpad_master_call_id", "dialpad_link", "caller_name", "caller_phone",
+    "call_summary", "annotated_transcript", "key_strengths", "opportunities",
+    "overall_score", "formula_version", "rubric_version", "models_used",
+    "ai_provider_primary", "sampling_status", "scoring_status",
+    "human_review_required_at", "created_at", "approved_at", "finalized_at",
+    "dialpad_disposition_category", "dialpad_disposition", "ai_csat",
+    "command_center_call_id", "dialpad_call_metadata",
+  ];
+  const evalVals = [
+    teamId, persist.agent_id, persist.agent_name, persist.agent_email,
+    flagged ? null : persist.manager_email,
+    flagged ? "draft" : "finalized", "ai",
+    persist.call_connected_at, persist.call_ended_at, persist.call_duration_ms,
+    p.annotation?.language_detected ?? null,
+    p.call_id, persist.dialpad_entry_point_call_id, persist.dialpad_master_call_id,
+    // review_link rides the payload since the provider seam; the fallback
+    // covers jobs queued before it existed.
+    persist.review_link ||
+      `https://dialpad.com/callhistory/callreview/${persist.dialpad_entry_point_call_id || p.call_id}`,
+    persist.caller_name || null, persist.caller_phone || null,
+    scorecard.call_summary ?? null,
+    p.annotation ? JSON.stringify(p.annotation) : null,
+    scorecard.key_strengths ?? null, scorecard.opportunities ?? null,
+    flagged ? null : overallScore,
+    fvRow.formula_version, config.rubric_version,
+    JSON.stringify(modelsUsed), "gemini",
+    "not_sampled",
+    flagged ? "flagged_human_review" : "complete",
+    // §0.3 queue entry: flagged rows carry the marker until a human
+    // resolution (approve/override) stamps completed_at.
+    flagged ? now : null,
+    now, flagged ? null : now, flagged ? null : now,
+    persist.cc_stamps?.disposition_category ?? null,
+    persist.cc_stamps?.disposition ?? null,
+    persist.cc_stamps?.ai_csat ?? null,
+    persist.cc_stamps?.cc_call_id ?? null,
+    JSON.stringify(meta),
+  ];
+  if (persist.rescore_of) {
+    // §4.2 REPLACE-on-same-id via UPDATE — coaching-receipt FKs stay valid.
+    await db
+      .prepare(
+        `UPDATE qa_evaluations SET ${EVAL_COLS.map((c) => `${c}=?`).join(", ")} WHERE id=?`
+      )
+      .bind(...evalVals, newEvalId)
+      .run();
+  } else {
+    await db
+      .prepare(
+        `INSERT INTO qa_evaluations (id, ${EVAL_COLS.join(", ")})
+         VALUES (?${",?".repeat(EVAL_COLS.length)})`
+      )
+      .bind(newEvalId, ...evalVals)
+      .run();
+  }
   const evalId = newEvalId;
 
   for (const r of sectionRows) {
