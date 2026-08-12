@@ -823,7 +823,7 @@ export async function approveEvaluation(
   ref: string,
   opts: {
     editOfFinalized: boolean;
-    gasUrls?: { member_support?: string; sales?: string };
+    gasUrls?: { member_support?: string; sales?: string; sofia?: string };
   }
 ): Promise<Response> {
   let body: any = {};
@@ -1039,7 +1039,7 @@ export async function overrideEvaluation(
   db: D1Database,
   teamId: string,
   ref: string,
-  gasUrls?: { member_support?: string; sales?: string }
+  gasUrls?: { member_support?: string; sales?: string; sofia?: string }
 ): Promise<Response> {
   let body: any = {};
   try { body = await request.json(); } catch { return json({ detail: "JSON body required" }, 422); }
@@ -1201,7 +1201,7 @@ function answersFromSectionRows(rows: any[]): Record<string, number | string> {
 export async function scoringCallback(
   body: any,
   db: D1Database,
-  gasUrls?: { member_support?: string; sales?: string }
+  gasUrls?: { member_support?: string; sales?: string; sofia?: string }
 ): Promise<{ ok: boolean; note: string }> {
   const jobStatus = body.status === "complete" ? "complete" : "error";
   const p = body; // workflow result payload

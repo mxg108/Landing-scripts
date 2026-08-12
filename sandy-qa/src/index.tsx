@@ -21,6 +21,9 @@ export interface Env {
   // Dashboard-set app secret: Retell.ai (Sofia AI's call provider). Absent →
   // scoring sofia returns 503 with instructions; dialpad teams unaffected.
   RETELL_API_KEY?: string;
+  // Dashboard-set app secret: Sofia's GAS webapp (scorecard emails deliver
+  // to Jackson via the overlay's EMAIL.TO_OVERRIDE — Sofia has no inbox).
+  GAS_WEBAPP_URL_SOFIA?: string;
   // Dashboard-set app secret: comma-separated emails allowed on /lookup
   // (interim deny-by-default compliance lock until per-team RBAC lands).
   LOOKUP_ALLOW?: string;
@@ -63,7 +66,11 @@ export default {
       const teamRes = await handleTeamRoutes(
         request, env.DB, url, env.DIALPAD_API_KEY, env.LOOKUP_ALLOW,
         { url: env.PULPO_MCP_URL, token: env.PULPO_MCP_TOKEN },
-        { member_support: env.GAS_WEBAPP_URL_MS, sales: env.GAS_WEBAPP_URL_SALES },
+        {
+          member_support: env.GAS_WEBAPP_URL_MS,
+          sales: env.GAS_WEBAPP_URL_SALES,
+          sofia: env.GAS_WEBAPP_URL_SOFIA,
+        },
         env.RETELL_API_KEY
       );
       if (teamRes) return teamRes;
@@ -239,6 +246,7 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
           const outcome = await scoringCallback(body, env.DB, {
             member_support: env.GAS_WEBAPP_URL_MS,
             sales: env.GAS_WEBAPP_URL_SALES,
+            sofia: env.GAS_WEBAPP_URL_SOFIA,
           });
           if (jobId) {
             await env.DB.prepare(

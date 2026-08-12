@@ -1,0 +1,5 @@
+# Non-script sources staged alongside the overlay — generator input + docs.
+# Without this, clasp would try to push team_config.json as a script file.
+team_config.json
+README.md
+.claspignore

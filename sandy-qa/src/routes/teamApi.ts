@@ -186,7 +186,7 @@ export async function handleTeamRoutes(
   dialpadKey?: string,
   lookupAllow?: string,
   pulpo?: { url?: string; token?: string },
-  gasUrls?: { member_support?: string; sales?: string },
+  gasUrls?: { member_support?: string; sales?: string; sofia?: string },
   retellKey?: string
 ): Promise<Response | null> {
   const path = url.pathname;

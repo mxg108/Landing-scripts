@@ -22,24 +22,39 @@ class EmailSender {
     this._validate();
 
     var subject = this._buildSubject();
+    var recipients = this._recipients();
 
     GmailApp.sendEmail(
-      this.entry.agentEmail,      // To: the analyst
+      recipients.to,
       subject,
       this._plainTextFallback(),  // plain-text fallback for clients that don't render HTML
       {
         htmlBody: htmlBody,
-        cc:       this.entry.managerEmail,
+        cc:       recipients.cc,
         name:     'Landing QA System',
       }
     );
 
     Logger.log(
       'QA email sent → To: %s | CC: %s | Subject: %s',
-      this.entry.agentEmail,
-      this.entry.managerEmail,
+      recipients.to,
+      recipients.cc,
       subject
     );
+  }
+
+  /**
+   * Delivery addresses. Default: To = agent, CC = manager. Teams whose
+   * "agent" has no inbox (Sofia AI) set CONFIG.EMAIL.TO_OVERRIDE in their
+   * Branding.js — the override becomes To, and a CC that duplicates it is
+   * dropped. Teams without the key are byte-identical to the old behavior.
+   */
+  _recipients() {
+    var override = (CONFIG.EMAIL && CONFIG.EMAIL.TO_OVERRIDE) || '';
+    var to = override || this.entry.agentEmail;
+    var cc = this.entry.managerEmail || '';
+    if (cc && cc.toLowerCase() === to.toLowerCase()) cc = '';
+    return { to: to, cc: cc };
   }
 
   /**
@@ -52,19 +67,20 @@ class EmailSender {
     this._validate();
 
     var subject = this._buildSubject();
+    var recipients = this._recipients();
 
     var draft = GmailApp.createDraft(
-      this.entry.agentEmail,
+      recipients.to,
       subject,
       this._plainTextFallback(),
       {
         htmlBody: htmlBody,
-        cc:       this.entry.managerEmail,
+        cc:       recipients.cc,
         name:     'Landing QA System',
       }
     );
 
-    Logger.log('QA draft created → To: %s | Subject: %s', this.entry.agentEmail, subject);
+    Logger.log('QA draft created → To: %s | Subject: %s', recipients.to, subject);
     return draft;
   }
 

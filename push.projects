@@ -14,4 +14,5 @@
 mass-notifications	mass-notifications/src	no	Mass Notifications
 qa-member-support	qa-automation/teams/member_support	yes	QA Automation — Member Support
 qa-sales	qa-automation/teams/sales	no	QA Automation — Sales (staging until cutover)
+qa-sofia	qa-automation/teams/sofia	yes	QA Automation — Sofia AI (emails deliver to Jackson)
 hr-bonus	qa-automation/hr-bonus	no	HR Bonus Sheet — monthly export renderer (MS)

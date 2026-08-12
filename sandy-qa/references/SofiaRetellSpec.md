@@ -236,8 +236,16 @@ download fails loudly and a console re-score rebuilds a fresh URL.
    null for retell.
 5. `emailDispatch.resolveGasUrl` → explicit map
    `{member_support: MS, sales: SALES}`; `sofia` (and any future team) →
-   `undefined` → existing `'skipped'` receipt. **Email suppressed for Sofia
-   by construction** (no inbox; owner digest is a later decision).
+   `undefined` → existing `'skipped'` receipt. ~~Email suppressed for Sofia
+   by construction~~ **Superseded 2026-08-12 (owner):** Sofia has her own
+   GAS deployment (secret `GAS_WEBAPP_URL_SOFIA`, exactly 20 chars; script
+   `12vGwhCNK1…`); scorecard emails deliver to **Jackson** via the shared
+   sender's optional `CONFIG.EMAIL.TO_OVERRIDE` (set in
+   `qa-automation/teams/sofia/Branding.js` — no-op for MS/Sales; CC dropped
+   when it duplicates To). Sofia's `Config.js` regenerates from
+   `qa-automation/teams/sofia/team_config.json` via `build_config.py sofia
+   --config …` — NOT from `backend/config/teams/` (Railway glob-loads that
+   dir and must not learn about sofia).
 
 ## 7. Sofia rubric/formula v0 (draft — owner design pass required)
 
