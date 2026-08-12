@@ -59,6 +59,29 @@ function doPost(e) {
     var disclaimer = (typeof payload.disclaimer === 'string')
       ? payload.disclaimer : '';
 
+    // ── Digest mode (Sandy daily cron) — summary email, no entry ───
+    if (payload.digest && typeof payload.digest === 'object') {
+      var d = payload.digest;
+      var digestTo = (CONFIG.EMAIL && CONFIG.EMAIL.TO_OVERRIDE) || d.recipient || '';
+      if (!digestTo) {
+        return _jsonResponse({
+          status: 'error',
+          message: 'digest: no recipient (set EMAIL.TO_OVERRIDE in Branding.js)',
+        });
+      }
+      GmailApp.sendEmail(
+        digestTo,
+        'Sofia AI QA Daily Digest — ' + (d.date || ''),
+        'Sofia AI QA digest for ' + (d.date || '') + ' — open in an HTML client.',
+        { htmlBody: _renderDigestHtml(d), name: 'Landing QA System' }
+      );
+      Logger.log('[doPost] digest mode → To: %s (%s)', digestTo, d.date);
+      return _jsonResponse({
+        status: 'ok',
+        message: 'digest dispatched to ' + digestTo,
+      });
+    }
+
     // ── Payload mode (Sandy) — self-contained, no sheet reads ──────
     if (payload.entry && typeof payload.entry === 'object') {
       var pEntry = QAEntry.fromPayload(payload.entry);
@@ -72,9 +95,12 @@ function doPost(e) {
       Logger.log('[doPost] payload mode: agent=%s, history=%s entries',
                  pEntry.agentName, history.length);
       _processEntry(pEntry, history, disclaimer);
+      // Delivery may be overridden team-side (EmailSender._recipients) —
+      // the receipt should name where the mail actually went.
+      var deliveredTo = (CONFIG.EMAIL && CONFIG.EMAIL.TO_OVERRIDE) || pEntry.agentEmail;
       return _jsonResponse({
         status: 'ok',
-        message: 'payload-mode email dispatched to ' + pEntry.agentEmail,
+        message: 'payload-mode email dispatched to ' + deliveredTo,
       });
     }
 
@@ -171,6 +197,43 @@ function _processEntry(entry, pastEntries, disclaimer) {
   var sender = new EmailSender(entry);
   sender.send(renderer.renderEmail());
   Logger.log('[_processEntry] DONE — email sent to %s', entry.agentEmail);
+}
+
+/**
+ * Minimal branded HTML for the daily digest ({digest} payload mode).
+ * Deliberately lean — the scorecards themselves carry the detail; this is
+ * the "did anything happen yesterday" pulse with a jump into the console.
+ */
+function _renderDigestHtml(d) {
+  var c = CONFIG.COLORS;
+  function row(label, value) {
+    return '<tr>' +
+      '<td style="padding:8px 14px;color:' + c.TEXT_GRAY + ';font-size:14px;">' + label + '</td>' +
+      '<td style="padding:8px 14px;font-size:15px;font-weight:600;color:' + c.DARK_NAVY + ';text-align:right;">' + value + '</td>' +
+      '</tr>';
+  }
+  var avg = (d.avg_approved === null || d.avg_approved === undefined) ? '—' : d.avg_approved;
+  return '' +
+    '<div style="font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:0 auto;">' +
+      '<div style="background:' + c.DARK_NAVY + ';color:#fff;padding:18px 22px;border-radius:8px 8px 0 0;">' +
+        '<div style="font-size:18px;font-weight:700;">Sofia AI — QA Daily Digest</div>' +
+        '<div style="font-size:12px;opacity:.75;margin-top:2px;">' + (d.date || '') + ' · last 24 hours</div>' +
+      '</div>' +
+      '<table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #e2e8f4;border-top:0;">' +
+        row('Calls scored', d.scored_24h) +
+        row('Reviews approved', d.approved_24h) +
+        row('Avg approved score', avg) +
+        row('Awaiting human review (total)', d.backlog_pending) +
+        (d.queue_errors_24h
+          ? row('<span style="color:' + c.RED + ';">Pipeline errors</span>',
+                '<span style="color:' + c.RED + ';">' + d.queue_errors_24h + '</span>')
+          : '') +
+      '</table>' +
+      '<div style="background:' + c.LIGHT_BLUE + ';padding:14px 22px;border-radius:0 0 8px 8px;border:1px solid #e2e8f4;border-top:0;">' +
+        '<a href="' + (d.console_url || '#') + '" style="color:' + c.ACCENT_BLUE + ';font-size:14px;text-decoration:none;font-weight:600;">' +
+          'Open the review console &rsaquo;</a>' +
+      '</div>' +
+    '</div>';
 }
 
 function _jsonResponse(obj) {

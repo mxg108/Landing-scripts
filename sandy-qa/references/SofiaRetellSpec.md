@@ -288,9 +288,16 @@ changes.
   paginated) with scored/queued status joins and one-click Score (reviewer =
   viewer's Access email). Plus rubric hardening with owner: section defs,
   weights, review-gate relaxation, per-build (`agent_version`) dashboard cut.
-- **R4 — auto-pull + digest:** list-calls v3 hourly sweep on the existing
-  "7 * * * *" cron + voicemail/short-call skip list; owner digest email
-  (pushed from R3 — wants real data first, §9.5).
+- **R4 — auto-pull + digest** *(SHIPPED 2026-08-12, v0.36 + GAS @6)*:
+  hourly sweep rides the "7 * * * *" pump (2-cron cap): list-calls v3
+  newest-50 → trailing 26h window → skip voicemail + calls <30s →
+  ≤10 enqueues/tick; stateless (idempotency = existing eval / ANY prior
+  queue row — one automatic attempt per call, failures wait for a human
+  re-score). Reviewer on auto-scored evals = roster supervisor (Jackson).
+  Daily digest rides "37 9 * * *": app POSTs `{digest}` to the sofia GAS
+  webapp (only when the 24h had activity) → `_renderDigestHtml` →
+  delivers to `EMAIL.TO_OVERRIDE`. Sweep + digest receipts land in
+  cron_runs notes.
 
 ## 9. Open questions (owner/Max)
 

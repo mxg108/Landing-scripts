@@ -191,12 +191,19 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
       }
       const { cron } = await request.json() as { cron: string; timestamp: string };
       const { runHourlyPump, runDailyMaintenance } = await import("./lib/maintenance.js");
+      const cronEnv = {
+        RETELL_API_KEY: env.RETELL_API_KEY,
+        DIALPAD_API_KEY: env.DIALPAD_API_KEY,
+        PULPO_MCP_URL: env.PULPO_MCP_URL,
+        PULPO_MCP_TOKEN: env.PULPO_MCP_TOKEN,
+        GAS_WEBAPP_URL_SOFIA: env.GAS_WEBAPP_URL_SOFIA,
+      };
       let note: string;
       try {
         note =
           cron === "37 9 * * *"
-            ? await runDailyMaintenance(env.DB, request)
-            : await runHourlyPump(env.DB, request); // "7 * * * *" + default
+            ? await runDailyMaintenance(env.DB, request, cronEnv)
+            : await runHourlyPump(env.DB, request, cronEnv); // "7 * * * *" + default
       } catch (err) {
         note = JSON.stringify({ error: String((err as any)?.message ?? err).slice(0, 300) });
       }

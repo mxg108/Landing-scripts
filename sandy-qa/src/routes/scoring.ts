@@ -46,6 +46,25 @@ const json = (data: unknown, status = 200) =>
 // Call prefetch lives behind the provider seam now — lib/providers/dialpad.ts
 // is the verbatim extract of the get_transcript/get_call_details ports.
 
+// Auto-pull entry point (R4): the hourly Retell sweep triggers scoring
+// with roster-derived identities — same path as the console POST, minus
+// the form parsing and the route-level RBAC gate (the cron dispatcher is
+// platform-authenticated).
+export async function autoScoreTrigger(
+  request: Request,
+  db: D1Database,
+  teamId: string,
+  env: {
+    DIALPAD_API_KEY?: string;
+    RETELL_API_KEY?: string;
+    PULPO_MCP_URL?: string;
+    PULPO_MCP_TOKEN?: string;
+  },
+  opts: { callId: string; agentEmail: string; managerEmail: string }
+): Promise<Response> {
+  return scoreTriggerInternal(request, db, teamId, env, opts);
+}
+
 export async function scoreTrigger(
   request: Request,
   db: D1Database,

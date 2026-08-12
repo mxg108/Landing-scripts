@@ -16,10 +16,28 @@
 
 const nowMinus = (mod: string) => `strftime('%Y-%m-%dT%H:%M:%fZ','now','${mod}')`;
 
+export interface CronEnv {
+  RETELL_API_KEY?: string;
+  DIALPAD_API_KEY?: string;
+  PULPO_MCP_URL?: string;
+  PULPO_MCP_TOKEN?: string;
+  GAS_WEBAPP_URL_SOFIA?: string;
+}
+
 export async function runHourlyPump(
   db: D1Database,
-  request: Request
+  request: Request,
+  env: CronEnv = {}
 ): Promise<string> {
+  // R4: discover + enqueue new ended Sofia calls BEFORE pumping, so a
+  // fresh discovery can start on this same tick when the slot is free.
+  let sweep: any;
+  try {
+    const { sweepRetellCalls } = await import("./retellSweep.js");
+    sweep = await sweepRetellCalls(db, request, env);
+  } catch (err) {
+    sweep = { error: String((err as any)?.message ?? err).slice(0, 200) };
+  }
   const { drainScoreQueue } = await import("../routes/scoring.js");
   const started = await drainScoreQueue(db, request);
   const queued = await db
@@ -28,12 +46,69 @@ export async function runHourlyPump(
   return JSON.stringify({
     pumped: started ?? null,
     still_queued: queued?.n ?? 0,
+    sweep,
   });
+}
+
+// Daily Sofia digest (R4, owner answer §9.5) — a summary POST to the
+// sofia GAS webapp ({digest} payload branch), which delivers to Jackson
+// via EMAIL.TO_OVERRIDE. Sent only when the last 24h had activity.
+async function sofiaDigest(db: D1Database, gasUrl?: string): Promise<any> {
+  if (!gasUrl) return { status: "skipped", message: "GAS_WEBAPP_URL_SOFIA not configured" };
+  const one = async (sql: string) => (await db.prepare(sql).first<any>()) ?? {};
+  const scored = await one(
+    `SELECT COUNT(*) AS n FROM qa_evaluations
+     WHERE team_id='sofia' AND created_at >= ${nowMinus("-1 day")}`
+  );
+  const approved = await one(
+    `SELECT COUNT(*) AS n, ROUND(AVG(overall_score),1) AS avg FROM qa_evaluations
+     WHERE team_id='sofia' AND approved_at >= ${nowMinus("-1 day")} AND overall_score IS NOT NULL`
+  );
+  const backlog = await one(
+    `SELECT COUNT(*) AS n FROM qa_evaluations
+     WHERE team_id='sofia' AND scoring_status='flagged_human_review'
+       AND human_review_completed_at IS NULL`
+  );
+  const failures = await one(
+    `SELECT COUNT(*) AS n FROM qa_score_queue
+     WHERE team_id='sofia' AND status='error' AND finished_at >= ${nowMinus("-1 day")}`
+  );
+  const activity = (scored.n ?? 0) + (approved.n ?? 0) + (failures.n ?? 0);
+  if (!activity) return { status: "skipped", message: "no sofia activity in 24h" };
+  try {
+    const res = await fetch(gasUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        digest: {
+          team: "sofia",
+          date: new Date().toISOString().slice(0, 10),
+          scored_24h: scored.n ?? 0,
+          approved_24h: approved.n ?? 0,
+          avg_approved: approved.avg ?? null,
+          backlog_pending: backlog.n ?? 0,
+          queue_errors_24h: failures.n ?? 0,
+          console_url: "https://qa-scoring.sandy.hellolanding.tech/score/sofia",
+        },
+      }),
+      redirect: "follow",
+      signal: AbortSignal.timeout(60_000),
+    });
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { status: "error", message: `non-JSON (HTTP ${res.status}): ${text.slice(0, 120)}` };
+    }
+  } catch (err) {
+    return { status: "error", message: String((err as any)?.message ?? err).slice(0, 200) };
+  }
 }
 
 export async function runDailyMaintenance(
   db: D1Database,
-  request: Request
+  request: Request,
+  env: CronEnv = {}
 ): Promise<string> {
   const summary: Record<string, number> = {};
   const run = async (label: string, sql: string) => {
@@ -63,7 +138,9 @@ export async function runDailyMaintenance(
     `DELETE FROM cron_runs WHERE ran_at < ${nowMinus("-30 days")}`
   );
 
+  const digest = await sofiaDigest(db, env.GAS_WEBAPP_URL_SOFIA);
+
   const { drainScoreQueue } = await import("../routes/scoring.js");
   const started = await drainScoreQueue(db, request);
-  return JSON.stringify({ pruned: summary, pumped: started ?? null });
+  return JSON.stringify({ pruned: summary, pumped: started ?? null, digest });
 }
