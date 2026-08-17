@@ -36,7 +36,7 @@ import adminHtml from "../../pages/admin.html?raw";
 import headerCss from "../../pages/static/header.css?raw";
 // @ts-ignore vite ?raw
 import headerJs from "../../pages/static/header.js?raw";
-import { accessEmail, resolveAccess, type Access } from "../lib/rbac.js";
+import { accessEmail, canCoach, resolveAccess, selfAgentFor, type Access } from "../lib/rbac.js";
 
 const RAILWAY_BASE = "https://hellolanding-qa.up.railway.app";
 const KNOWN_TEAMS = new Set(["member_support", "sales", "sofia"]);
@@ -379,6 +379,49 @@ export async function handleTeamRoutes(
     const { reviewQueue } = await import("./scoring.js");
     return reviewQueue(db, m[1]);
   }
+
+  // ── coaching loop (CoachingLoopSpec §4 — routes/coaching.ts) ─────────────
+  // Gates live inside the module: `coach` capability (admin|qa|scoped
+  // manager) on everything, plus the §4.5 redacted self-view on the GET.
+  m = path.match(/^\/api\/([^/]+)\/agents\/([^/]+)\/coachings$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
+    const { listAgentCoachings } = await import("./coaching.js");
+    return listAgentCoachings(request, db, m[1], decodeURIComponent(m[2]), url, lookupAllow);
+  }
+  m = path.match(/^\/api\/([^/]+)\/coachings$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const { createCoaching } = await import("./coaching.js");
+    return createCoaching(request, db, m[1], lookupAllow);
+  }
+  m = path.match(/^\/api\/([^/]+)\/coachings\/(\d+)$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "PATCH") {
+    const { patchCoaching } = await import("./coaching.js");
+    return patchCoaching(request, db, m[1], Number(m[2]), lookupAllow);
+  }
+  m = path.match(/^\/api\/([^/]+)\/coachings\/(\d+)\/(conduct|cancel|confirm)$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const mod = await import("./coaching.js");
+    const fn =
+      m[3] === "conduct" ? mod.conductCoaching
+      : m[3] === "cancel" ? mod.cancelCoaching
+      : mod.confirmCoaching;
+    return fn(request, db, m[1], Number(m[2]), lookupAllow);
+  }
+  m = path.match(/^\/api\/([^/]+)\/coaching-queue$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
+    const { coachingQueue } = await import("./coaching.js");
+    return coachingQueue(request, db, m[1], lookupAllow);
+  }
+  m = path.match(/^\/api\/([^/]+)\/chiclets$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
+    const { listChiclets } = await import("./coaching.js");
+    return listChiclets(db, m[1], url);
+  }
+  m = path.match(/^\/api\/([^/]+)\/chiclets\/(\d+)\/resolve$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const { resolveChiclet } = await import("./coaching.js");
+    return resolveChiclet(request, db, m[1], Number(m[2]), lookupAllow);
+  }
   m = path.match(/^\/api\/([^/]+)\/score$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
     const deny = await requirePrivileged();
@@ -485,12 +528,16 @@ export async function handleTeamRoutes(
   if (m && KNOWN_TEAMS.has(m[1])) {
     // Pages render action buttons off `role` (privileged|team — the
     // Railway contract); rbac_role/email are the richer RBAC identity.
+    // can_coach + self_agent (CoachingLoopSpec §4/§4.5): the coaching card
+    // and the future agent self-dashboard key off these, never off pages.
     const access = await resolveAccess(request, db, lookupAllow);
     return json({
       role: access.privileged ? "privileged" : "team",
       team_id: m[1],
       rbac_role: access.role,
       email: access.email,
+      can_coach: canCoach(access, m[1]),
+      self_agent: await selfAgentFor(request, db, m[1]),
     });
   }
 
@@ -839,11 +886,8 @@ async function lookupRoutes(
   if (sub === "/calls") {
     const userId = p.get("user_id");
     if (!userId) return json({ detail: "user_id query param required" }, 422);
-    const params = new URLSearchParams({
-      target_id: userId,
-      target_type: "user",
-      limit: String(Math.min(100, Math.max(1, parseInt(p.get("limit") ?? "10", 10) || 10))),
-    });
+    const limit = Math.min(100, Math.max(1, parseInt(p.get("limit") ?? "10", 10) || 10));
+    const baseParams = new URLSearchParams({ target_id: userId, target_type: "user" });
     for (const [inKey, outKey] of [
       ["date_start", "started_after"],
       ["date_end", "started_before"],
@@ -853,44 +897,85 @@ async function lookupRoutes(
         const t = Date.parse(v.includes("Z") || v.includes("+") ? v : v + "Z");
         if (Number.isNaN(t))
           return json({ detail: `${inKey} must be ISO format (YYYY-MM-DDTHH:MM)` }, 400);
-        params.set(outKey, String(t));
+        baseParams.set(outKey, String(t));
       }
     }
-    if (p.get("cursor")) params.set("cursor", p.get("cursor")!);
-    const r = await fetch(`${DP}/call?${params}`, { headers: auth });
-    if (!r.ok) return json({ user_id: userId, call_count: 0, calls: [], cursor: null });
-    const data = (await r.json()) as any;
+    // Direction/duration aren't Dialpad query filters (the API only takes
+    // target/started_after/started_before/cursor/limit) — filtering happens
+    // in-worker AFTER Dialpad's pagination (Uriel's v0.37–v0.39 addition).
+    // A filtered request therefore cursor-walks Dialpad pages, accumulating
+    // matches until `limit` are collected or history/cap runs out — one
+    // page of 10 raw calls rarely contains matches for a compound filter
+    // (the "both filters return nothing" report). Every fully-consumed
+    // page's matches are returned (may exceed `limit` slightly) so the
+    // returned cursor never skips matches inside a partially-used page.
+    const direction = p.get("direction"); // "inbound" | "outbound" | null (any)
+    const minDurationSecs = p.get("min_duration");
+    const maxDurationSecs = p.get("max_duration");
+    const minDurationMs = minDurationSecs ? Number(minDurationSecs) * 1000 : null;
+    const maxDurationMs = maxDurationSecs ? Number(maxDurationSecs) * 1000 : null;
+    const filtersActive =
+      !!direction || minDurationMs !== null || maxDurationMs !== null;
+    const MAX_FILTER_PAGES = 10; // × 50 raw calls — bounded Dialpad chaining
+    const pageLimit = filtersActive ? 50 : limit;
+
     const FLAG_MS = 25 * 60 * 1000;
-    const calls = (data.items ?? []).map((c: any) => {
-      const rec = c.recording_details?.[0] ?? null;
-      const duration = c.total_duration || c.duration || 0;
-      return {
-        call_id: String(c.call_id ?? ""),
-        date_started: epochIso(c.date_started),
-        date_connected: epochIso(c.date_connected),
-        date_ended: epochIso(c.date_ended),
-        duration,
-        direction: c.direction ?? "",
-        was_recorded: !!c.recording_details,
-        recording_id: rec ? String(rec.id ?? "") : "",
-        recording_url: rec ? rec.url ?? "" : "",
-        recording_duration: rec ? Math.trunc(Number(rec.duration ?? 0)) : 0,
-        recording_type: rec ? rec.recording_type ?? "" : "",
-        is_transferred: c.is_transferred ?? false,
-        external_number: c.external_number ?? "",
-        internal_number: c.internal_number ?? "",
-        contact_name: c.contact?.name ?? "",
-        contact_phone: c.contact?.phone ?? "",
-        mos_score: c.mos_score ?? null,
-        entry_point_call_id: String(c.entry_point_call_id ?? ""),
-        _flagged_long_call: duration > FLAG_MS,
-      };
-    });
+    const collected: any[] = [];
+    let cursor = p.get("cursor") || null;
+    let nextCursor: string | null = null;
+    let scanned = 0;
+    for (let page = 0; page < (filtersActive ? MAX_FILTER_PAGES : 1); page++) {
+      const params = new URLSearchParams(baseParams);
+      params.set("limit", String(pageLimit));
+      if (cursor) params.set("cursor", cursor);
+      const r = await fetch(`${DP}/call?${params}`, { headers: auth });
+      if (!r.ok) {
+        if (!collected.length && page === 0)
+          return json({ user_id: userId, call_count: 0, calls: [], cursor: null });
+        break; // keep what previous pages yielded; cursor resumes there
+      }
+      const data = (await r.json()) as any;
+      const items: any[] = data.items ?? [];
+      scanned += items.length;
+      nextCursor = data.cursor || null;
+      for (const c of items) {
+        const rec = c.recording_details?.[0] ?? null;
+        const duration = c.total_duration || c.duration || 0;
+        if (direction && (c.direction ?? "") !== direction) continue;
+        if (minDurationMs !== null && duration < minDurationMs) continue;
+        if (maxDurationMs !== null && duration > maxDurationMs) continue;
+        collected.push({
+          call_id: String(c.call_id ?? ""),
+          date_started: epochIso(c.date_started),
+          date_connected: epochIso(c.date_connected),
+          date_ended: epochIso(c.date_ended),
+          duration,
+          direction: c.direction ?? "",
+          was_recorded: !!c.recording_details,
+          recording_id: rec ? String(rec.id ?? "") : "",
+          recording_url: rec ? rec.url ?? "" : "",
+          recording_duration: rec ? Math.trunc(Number(rec.duration ?? 0)) : 0,
+          recording_type: rec ? rec.recording_type ?? "" : "",
+          is_transferred: c.is_transferred ?? false,
+          external_number: c.external_number ?? "",
+          internal_number: c.internal_number ?? "",
+          contact_name: c.contact?.name ?? "",
+          contact_phone: c.contact?.phone ?? "",
+          mos_score: c.mos_score ?? null,
+          entry_point_call_id: String(c.entry_point_call_id ?? ""),
+          _flagged_long_call: duration > FLAG_MS,
+        });
+      }
+      cursor = nextCursor;
+      if (collected.length >= limit || !nextCursor) break;
+    }
     return json({
       user_id: userId,
-      call_count: calls.length,
-      calls,
-      cursor: data.cursor || null,
+      call_count: collected.length,
+      calls: collected,
+      cursor: nextCursor,
+      scanned,
+      filters_active: filtersActive,
     });
   }
 

@@ -398,14 +398,11 @@ async function doSearch() {
   }
 }
 
-// Direction/duration filters run after Dialpad's own pagination, so a page
-// can come back with zero matches while later pages (via cursor) still
-// have some. Auto-continue quietly fetches a few more pages on the
-// caller's behalf instead of making them click "Load next 10" into a
-// string of empties — capped so one search can't chain unboundedly
-// against Dialpad.
-const AUTO_CONTINUE_MAX_PAGES = 5;
-
+// Direction/duration filtering AND the cursor-walk that keeps a click
+// delivering a full batch live in the WORKER now (lookup/calls loops
+// Dialpad pages, accumulating matches until `limit` are collected or its
+// page cap runs out). One request per click; `scanned` reports how many
+// raw calls the filters were applied to.
 async function fetchCalls(append = false) {
   if (!currentUserId) return;
 
@@ -424,47 +421,32 @@ async function fetchCalls(append = false) {
     totalLoaded = 0;
   }
 
-  let cursor = append ? nextCursor : null;
-  let pagesFetched = 0;
-
   try {
-    while (true) {
-      pagesFetched++;
-      if (pagesFetched > 1) {
-        btn.textContent = `Searching further back (${pagesFetched - 1}/${AUTO_CONTINUE_MAX_PAGES})...`;
-      }
+    const params = new URLSearchParams({ user_id: currentUserId, limit: '10' });
+    const ds = $('dateStart').value;
+    const de = $('dateEnd').value;
+    if (ds) params.set('date_start', ds);
+    if (de) params.set('date_end', de);
+    const dir = $('direction').value;
+    if (dir) params.set('direction', dir);
+    const minDur = $('minDuration').value;
+    const maxDur = $('maxDuration').value;
+    // Inputs are minutes (UX); the API takes seconds.
+    if (minDur) params.set('min_duration', String(Number(minDur) * 60));
+    if (maxDur) params.set('max_duration', String(Number(maxDur) * 60));
+    if (append && nextCursor) params.set('cursor', nextCursor);
 
-      const params = new URLSearchParams({ user_id: currentUserId, limit: '10' });
-      const ds = $('dateStart').value;
-      const de = $('dateEnd').value;
-      if (ds) params.set('date_start', ds);
-      if (de) params.set('date_end', de);
-      const dir = $('direction').value;
-      if (dir) params.set('direction', dir);
-      const minDur = $('minDuration').value;
-      const maxDur = $('maxDuration').value;
-      // Inputs are minutes (UX); the API takes seconds.
-      if (minDur) params.set('min_duration', String(Number(minDur) * 60));
-      if (maxDur) params.set('max_duration', String(Number(maxDur) * 60));
-      if (cursor) params.set('cursor', cursor);
-
-      const resp = await fetch(`${API_BASE}/lookup/calls?${params}`, { headers: authHeaders() });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-        throw new Error(err.detail || `HTTP ${resp.status}`);
-      }
-      const data = await resp.json();
-      nextCursor = data.cursor || null;
-      renderCalls(data.calls, append || pagesFetched > 1);
-
-      const emptyPage = !data.calls.length;
-      const moreToCheck = !!nextCursor;
-      const underCap = pagesFetched - 1 < AUTO_CONTINUE_MAX_PAGES;
-      if (emptyPage && moreToCheck && underCap) {
-        cursor = nextCursor;
-        continue;
-      }
-      break;
+    const resp = await fetch(`${API_BASE}/lookup/calls?${params}`, { headers: authHeaders() });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || `HTTP ${resp.status}`);
+    }
+    const data = await resp.json();
+    nextCursor = data.cursor || null;
+    renderCalls(data.calls, append);
+    if (data.filters_active && data.scanned > data.calls.length) {
+      $('callsCount').textContent =
+        `${totalLoaded} call${totalLoaded !== 1 ? 's' : ''} loaded (filters checked ${data.scanned} calls this fetch)`;
     }
   } catch (e) {
     $('callsError').textContent = e.message;
