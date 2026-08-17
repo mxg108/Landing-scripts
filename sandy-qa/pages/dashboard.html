@@ -167,6 +167,59 @@
     }
     .coaching-tip.visible { display: block; }
 
+    /* Per-section progression legend chips (identity = chip + NAME text,
+       never color alone; chips toggle their line) */
+    .viz-legend { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+    .viz-legend .chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 0.72rem; color: var(--text); background: var(--bg);
+      border: 1px solid var(--border); border-radius: 999px;
+      padding: 3px 10px; cursor: pointer; user-select: none;
+    }
+    .viz-legend .chip .swatch { width: 10px; height: 10px; border-radius: 3px; }
+    .viz-legend .chip.off { opacity: 0.38; }
+    .panel-subtitle { font-size: 0.85rem; color: var(--muted); margin: 16px 0 6px; font-family: 'Fraunces', serif; }
+
+    /* Coaching card */
+    .coaching-session { border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 12px; background: var(--bg); }
+    .coaching-session .sess-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .pill { font-size: 0.66rem; font-weight: 500; padding: 2px 9px; border-radius: 999px; color: #fff; text-transform: uppercase; letter-spacing: 0.04em; }
+    .pill.pending { background: var(--accent); }
+    .pill.completed { background: #6ba87b; }
+    .pill.cancelled { background: var(--muted); }
+    .pill.due { background: var(--red); }
+    .pill.origin { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    .pill.outcome-met { background: var(--green); }
+    .pill.outcome-partially_met { background: var(--amber); }
+    .pill.outcome-not_met { background: var(--red); }
+    .coaching-session .meta { font-size: 0.75rem; color: var(--muted); }
+    .coaching-session ul.commits { list-style: none; margin: 8px 0; }
+    .coaching-session ul.commits li { font-size: 0.8rem; line-height: 1.6; }
+    .coaching-session .links { font-size: 0.75rem; }
+    .coaching-session .links a { color: var(--accent); }
+    .coaching-session .readout { font-size: 0.75rem; color: var(--muted); margin-top: 6px; border-top: 1px dashed var(--border); padding-top: 6px; }
+    .coaching-session .actions { margin-top: 8px; display: flex; gap: 8px; }
+    .coach-btn {
+      font-family: 'DM Mono', monospace; font-size: 0.75rem; padding: 6px 14px;
+      border-radius: 6px; border: 1px solid var(--accent); background: var(--accent);
+      color: #fff; cursor: pointer;
+    }
+    .coach-btn.secondary { background: transparent; color: var(--accent); }
+    .coach-btn.danger { border-color: var(--red); background: transparent; color: var(--red); }
+    .coach-form { border: 1px dashed var(--border); border-radius: 10px; padding: 14px; margin-top: 10px; }
+    .coach-form label { font-size: 0.72rem; color: var(--muted); display: block; margin: 8px 0 3px; }
+    .coach-form input[type="text"], .coach-form input[type="date"], .coach-form input[type="datetime-local"],
+    .coach-form select, .coach-form textarea {
+      font-family: 'DM Mono', monospace; font-size: 0.8rem; width: 100%;
+      padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+    }
+    .coach-form .call-row { display: flex; align-items: baseline; gap: 8px; font-size: 0.78rem; padding: 4px 0; }
+    .coach-form .call-row .snippet { color: var(--muted); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
+    .coach-form .commit-row { display: flex; gap: 8px; margin-bottom: 6px; }
+    .coach-form .commit-row input { flex: 2; }
+    .coach-form .commit-row select { flex: 1; }
+    .coach-form .commit-row button { flex: 0; }
+
     /* Footer */
     .footer {
       text-align: center;
@@ -223,10 +276,56 @@
       </div>
     </div>
 
+    <div id="sectionProgressCard" class="card hidden">
+      <h2>Per-Section Progression</h2>
+      <div id="numericLegend" class="viz-legend"></div>
+      <div class="chart-wrapper">
+        <canvas id="sectionProgressChart"></canvas>
+      </div>
+      <div id="passRateBlock" class="hidden">
+        <div class="panel-subtitle">Binary sections — rolling pass rate (last 5 applicable calls)</div>
+        <div id="passRateLegend" class="viz-legend"></div>
+        <div class="chart-wrapper" style="height:200px">
+          <canvas id="passRateChart"></canvas>
+        </div>
+      </div>
+    </div>
+
     <div id="sectionCard" class="card hidden">
       <h2>Per-Section Averages</h2>
       <div class="chart-wrapper">
         <canvas id="sectionChart"></canvas>
+      </div>
+    </div>
+
+    <div id="coachingCard" class="card hidden">
+      <h2 id="coachingTitle">Coaching</h2>
+      <div id="coachingSessions"></div>
+      <div id="coachingBuilderWrap" class="hidden">
+        <button id="newCoachingBtn" class="coach-btn" onclick="toggleBuilder()">New coaching session</button>
+        <div id="coachForm" class="coach-form hidden">
+          <label>Calls to review in the 1:1 (from the charts above)</label>
+          <div id="callPicker"></div>
+          <label>Agent commitments</label>
+          <div id="commitRows"></div>
+          <button type="button" class="coach-btn secondary" onclick="addCommitRow()">+ commitment</button>
+          <label for="coachDeadline">Commitment deadline</label>
+          <input type="date" id="coachDeadline" />
+          <label for="coachScheduled">1:1 scheduled for (optional)</label>
+          <input type="datetime-local" id="coachScheduled" />
+          <label for="coachRole">Conducted by</label>
+          <select id="coachRole">
+            <option value="manager">Manager</option>
+            <option value="team_lead">Team lead</option>
+            <option value="hr">HR</option>
+            <option value="external">External</option>
+          </select>
+          <div class="actions" style="margin-top:12px;display:flex;gap:8px">
+            <button type="button" class="coach-btn" id="coachSubmitBtn" onclick="submitCoaching()">Create session</button>
+            <button type="button" class="coach-btn secondary" onclick="toggleBuilder()">Close</button>
+          </div>
+          <div id="coachFormStatus" class="meta" style="margin-top:8px;font-size:0.75rem;color:var(--muted)"></div>
+        </div>
       </div>
     </div>
 
@@ -394,7 +493,8 @@
 
       document.getElementById('placeholder').textContent = 'Loading...';
       document.getElementById('placeholder').classList.remove('hidden');
-      ['statsCard', 'trendCard', 'sectionCard', 'onepagerCard'].forEach(id =>
+      ['statsCard', 'trendCard', 'sectionProgressCard', 'sectionCard',
+       'onepagerCard', 'coachingCard'].forEach(id =>
         document.getElementById(id).classList.add('hidden')
       );
       // Reset AI assessment
@@ -428,10 +528,14 @@
       }
 
       document.getElementById('placeholder').classList.add('hidden');
+      _lastHistory = history;
       renderStats(history);
       renderTrendChart(history);
+      renderSectionProgress(history);
+      renderPassRate(history);
       renderSectionChart(history);
       renderOnepagerCard(agentName);
+      loadCoachingLayer(agentName);
 
       const windowLabel = customActive ? `${dateFrom} – ${dateTo}` : `Last ${selectedDays} days`;
       document.getElementById('footer').textContent =
@@ -587,7 +691,7 @@
             }
           }
         },
-        plugins: [{
+        plugins: [coachingMarkers, {
           id: 'goalLine',
           afterDraw(chart) {
             const yScale = chart.scales.y;
@@ -662,6 +766,374 @@
       });
 
       document.getElementById('sectionCard').classList.remove('hidden');
+    }
+
+    // ── Per-section progression + coaching layer (CoachingLoopSpec §5, CL2) ──
+    // Validated categorical order (dataviz reference palette, light mode,
+    // adjacent-pairs pass on the white card surface). Each PANEL assigns
+    // from slot 1 — identity chips carry the name, never color alone.
+    const SECTION_PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100',
+                             '#e87ba4', '#008300', '#4a3aa7', '#e34948'];
+
+    /* PURE-BEGIN — extracted & unit-tested in node (coaching_cl2_test) */
+    // Rolling pass rate over the trailing `win` APPLICABLE (Yes/No) values
+    // at each eval index; NA/blank skipped; < minN applicable → null gap.
+    function passRateSeries(values, win, minN) {
+      const out = [];
+      const applicable = []; // running [index → 1|0]
+      for (let i = 0; i < values.length; i++) {
+        const v = String(values[i] ?? '').trim().toLowerCase();
+        if (v === 'yes' || v === 'y') applicable.push(1);
+        else if (v === 'no' || v === 'n') applicable.push(0);
+        const windowVals = applicable.slice(-win);
+        out.push(windowVals.length >= minN
+          ? Math.round((windowVals.reduce((a, b) => a + b, 0) / windowVals.length) * 1000) / 10
+          : null);
+      }
+      return out;
+    }
+    // Marker position on the category axis: fractional index idx−0.5 where
+    // idx = first eval at/after t; −1 = before the window (skip); after the
+    // last eval → n−0.5 (right edge). tsList ascending.
+    function markerFraction(tsList, t) {
+      if (!tsList.length || t < tsList[0]) return -1;
+      for (let i = 0; i < tsList.length; i++) {
+        if (tsList[i] >= t) return i === 0 ? -1 : i - 0.5;
+      }
+      return tsList.length - 0.5;
+    }
+    /* PURE-END */
+
+    let _lastHistory = [];
+    let _coachings = [];
+    let _whoami = null;
+    let sectionProgressInstance = null;
+    let passRateInstance = null;
+
+    const OUTCOME_COLORS = { met: '#28A745', partially_met: '#E8A317', not_met: '#D9534F' };
+    const COMMIT_GLYPHS = { open: '○', met: '✓', partially_met: '◐', not_met: '✗', waived: '–' };
+
+    // Red dashed vertical at each conducted session's completed_at (§5 F3),
+    // interpolated onto the category axis; outcome-colored label dot.
+    const coachingMarkers = {
+      id: 'coachingMarkers',
+      afterDraw(chart) {
+        if (!_coachings.length || !_lastHistory.length) return;
+        const tsList = _lastHistory.map(r => Date.parse(r.timestamp));
+        const xs = chart.scales.x;
+        const ctx2 = chart.ctx;
+        const n = tsList.length;
+        const px = (f) => {
+          const lo = Math.max(0, Math.floor(f)), hi = Math.min(n - 1, Math.ceil(f));
+          const a = xs.getPixelForValue(lo), b = xs.getPixelForValue(hi);
+          const base = lo === hi ? a : a + (f - lo) * (b - a);
+          return Math.min(Math.max(base, chart.chartArea.left), chart.chartArea.right);
+        };
+        for (const c of _coachings) {
+          if (!c.completed_at) continue;
+          const f = markerFraction(tsList, Date.parse(c.completed_at));
+          if (f < 0) continue;
+          const x = px(f);
+          ctx2.save();
+          ctx2.setLineDash([5, 4]);
+          ctx2.strokeStyle = '#D9534F';
+          ctx2.lineWidth = 1.5;
+          ctx2.beginPath();
+          ctx2.moveTo(x, chart.chartArea.top);
+          ctx2.lineTo(x, chart.chartArea.bottom);
+          ctx2.stroke();
+          ctx2.setLineDash([]);
+          const d = new Date(c.completed_at);
+          ctx2.fillStyle = '#D9534F';
+          ctx2.font = '10px DM Mono';
+          ctx2.textAlign = 'left';
+          ctx2.fillText(`Coaching ${d.getMonth() + 1}/${d.getDate()}`, x + 4, chart.chartArea.top + 10);
+          ctx2.beginPath();
+          ctx2.arc(x + 4, chart.chartArea.top + 18, 3, 0, Math.PI * 2);
+          ctx2.fillStyle = OUTCOME_COLORS[c.outcome] || '#5a6478';
+          ctx2.fill();
+          ctx2.restore();
+        }
+      }
+    };
+
+    function legendChips(containerId, chart, labels, colors) {
+      const wrap = document.getElementById(containerId);
+      wrap.innerHTML = '';
+      labels.forEach((name, i) => {
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.innerHTML = `<span class="swatch" style="background:${colors[i]}"></span>${name}`;
+        chip.onclick = () => {
+          const vis = chart.isDatasetVisible(i);
+          chart.setDatasetVisibility(i, !vis);
+          chip.classList.toggle('off', vis);
+          chart.update();
+        };
+        wrap.appendChild(chip);
+      });
+    }
+
+    function renderSectionProgress(history) {
+      const ctx = document.getElementById('sectionProgressChart').getContext('2d');
+      if (sectionProgressInstance) { sectionProgressInstance.destroy(); sectionProgressInstance = null; }
+      const labels = history.map(r => new Date(r.timestamp)
+        .toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+      const names = _numericSectionKeys.map(k => _sectionLabels[k] || k);
+      const datasets = _numericSectionKeys.map((key, i) => ({
+        label: names[i],
+        data: history.map(r => r.sections ? parseSectionScore(r.sections[key]) : null),
+        borderColor: SECTION_PALETTE[i % SECTION_PALETTE.length],
+        backgroundColor: SECTION_PALETTE[i % SECTION_PALETTE.length],
+        borderWidth: 2, pointRadius: 3, pointHoverRadius: 6,
+        spanGaps: false, tension: 0.25, fill: false,
+      }));
+      sectionProgressInstance = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          onClick: (event, active) => {
+            if (active.length) {
+              const rec = history[active[0].index];
+              if (rec.eval_id) window.location.href = `/datapoint/${TEAM_ID}/${rec.eval_id}`;
+            }
+          },
+          scales: { y: { min: 1, max: 5, ticks: { stepSize: 1 } } },
+          plugins: { legend: { display: false } },
+        },
+        plugins: [coachingMarkers],
+      });
+      legendChips('numericLegend', sectionProgressInstance, names, SECTION_PALETTE);
+      document.getElementById('sectionProgressCard').classList.remove('hidden');
+    }
+
+    function renderPassRate(history) {
+      const ynKeys = _teamSections
+        .filter(s => (s.score_type === 'yn' || s.score_type === 'manual_yn') && !s.auto_value)
+        .map(s => s.history_id || s.id);
+      const block = document.getElementById('passRateBlock');
+      if (passRateInstance) { passRateInstance.destroy(); passRateInstance = null; }
+      if (!ynKeys.length) { block.classList.add('hidden'); return; }
+      const series = ynKeys.map(key => passRateSeries(
+        history.map(r => r.sections ? (r.sections[key] || {}).score : null), 5, 3));
+      if (series.every(s => s.every(v => v === null))) { block.classList.add('hidden'); return; }
+      const labels = history.map(r => new Date(r.timestamp)
+        .toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+      const names = ynKeys.map(k => _sectionLabels[k] || k);
+      const ctx = document.getElementById('passRateChart').getContext('2d');
+      passRateInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: ynKeys.map((key, i) => ({
+            label: names[i],
+            data: series[i],
+            borderColor: SECTION_PALETTE[i % SECTION_PALETTE.length],
+            backgroundColor: SECTION_PALETTE[i % SECTION_PALETTE.length],
+            borderWidth: 2, borderDash: [6, 4], pointRadius: 3, pointHoverRadius: 6,
+            spanGaps: false, tension: 0.25, fill: false,
+          })),
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          scales: { y: { min: 0, max: 100, ticks: { callback: v => v + '%' } } },
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: (item) =>
+              `${item.dataset.label}: ${item.parsed.y}% of last 5 applicable` } },
+          },
+        },
+        plugins: [coachingMarkers],
+      });
+      legendChips('passRateLegend', passRateInstance, names, SECTION_PALETTE);
+      block.classList.remove('hidden');
+    }
+
+    // ── coaching card (§5 F2 full / §4.5 self variant) ──────────────────────
+    const escHtml = s => String(s ?? '').replace(/[&<>"']/g, c =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    async function loadCoachingLayer(agentName) {
+      _coachings = [];
+      document.getElementById('coachingCard').classList.add('hidden');
+      try {
+        if (!_whoami) {
+          const w = await fetch(`${API_BASE}/whoami`);
+          _whoami = w.ok ? await w.json() : {};
+        }
+        const res = await fetch(
+          `${API_BASE}/agents/${encodeURIComponent(agentName)}/coachings?days=730`);
+        if (!res.ok) { refreshMarkers(); return; } // 403 viewer → plain charts
+        const data = await res.json();
+        _coachings = data.sessions.filter(s => s.status !== 'cancelled');
+        renderCoachingCard(data);
+      } catch (e) { console.error('coaching layer:', e); }
+      refreshMarkers();
+    }
+
+    function refreshMarkers() {
+      for (const c of [trendChartInstance, sectionProgressInstance, passRateInstance]) {
+        if (c) c.update();
+      }
+    }
+
+    function responseReadout(sess) {
+      if (!sess.completed_at || !_lastHistory.length) return '';
+      const t = Date.parse(sess.completed_at);
+      const before = _lastHistory.filter(r => Date.parse(r.timestamp) < t).map(r => r.overall_score);
+      const after = _lastHistory.filter(r => Date.parse(r.timestamp) >= t).map(r => r.overall_score);
+      if (!after.length || !before.length) return '';
+      const avg = a => (a.reduce((x, y) => x + y, 0) / a.length).toFixed(1);
+      return `Response in this window: ${before.length} calls avg ${avg(before)} → ${after.length} calls avg ${avg(after)} after coaching`;
+    }
+
+    function renderCoachingCard(data) {
+      const card = document.getElementById('coachingCard');
+      const wrap = document.getElementById('coachingSessions');
+      const selfView = data.self_view === true;
+      document.getElementById('coachingTitle').textContent =
+        selfView ? 'My Commitments' : 'Coaching';
+      document.getElementById('coachingBuilderWrap').classList.toggle('hidden', !data.can_coach);
+      const sessions = data.sessions;
+      if (!sessions.length && !data.can_coach) { card.classList.add('hidden'); return; }
+      wrap.innerHTML = sessions.length ? '' : '<div class="meta" style="font-size:.8rem;color:var(--muted)">No coaching sessions recorded yet.</div>';
+      const today = new Date().toISOString().slice(0, 10);
+      for (const s of sessions) {
+        const div = document.createElement('div');
+        div.className = 'coaching-session';
+        const due = s.status === 'completed' && !s.outcome && s.action_plan_deadline && s.action_plan_deadline <= today;
+        const pills = [
+          `<span class="pill ${due ? 'due' : s.status}">${due ? 'awaiting confirmation' : s.status}</span>`,
+          s.outcome ? `<span class="pill outcome-${s.outcome}">${s.outcome.replace(/_/g, ' ')}</span>` : '',
+          `<span class="pill origin">${s.sandy_born ? 'sandy' : 'railway'}</span>`,
+        ].join('');
+        const when = s.completed_at
+          ? `conducted ${s.completed_at.slice(0, 10)}` : s.scheduled_at
+            ? `scheduled ${s.scheduled_at.slice(0, 10)}` : `created ${(s.created_at || '').slice(0, 10)}`;
+        const commits = (s.commitments || []).map(c =>
+          `<li><span style="color:${OUTCOME_COLORS[c.status] || 'var(--muted)'}">${COMMIT_GLYPHS[c.status] || '○'}</span> ${escHtml(c.commitment)}${c.section_id ? ` <span class="meta">(${escHtml(_sectionLabels[c.section_id] || c.section_id)})</span>` : ''}</li>`
+        ).join('');
+        const links = (s.evaluations || []).map(e => e.ref
+          ? `<a href="/datapoint/${TEAM_ID}/${encodeURIComponent(e.ref)}" target="_blank" rel="noopener">${(e.call_connected_at || '').slice(0, 10) || 'call'}${e.overall_score != null ? ` · ${e.overall_score}` : ''}</a>`
+          : '<span class="meta">call removed</span>').join(' · ');
+        const readout = selfView ? '' : responseReadout(s);
+        let actions = '';
+        if (!selfView && data.can_coach && s.sandy_born) {
+          if (s.status === 'pending')
+            actions = `<button class="coach-btn" onclick="conductPrompt(${s.id}, ${s.action_plan_deadline ? 'true' : 'false'})">Mark conducted</button>
+                       <button class="coach-btn danger" onclick="cancelCoaching(${s.id})">Cancel</button>`;
+          else if (due)
+            actions = `<span class="meta">deadline passed — confirm from the <a href="/coaching/${TEAM_ID}" style="color:var(--accent)">coaching queue</a></span>`;
+        }
+        div.innerHTML = `
+          <div class="sess-head">${pills}<span class="meta">${when}${s.action_plan_deadline ? ` · deadline ${s.action_plan_deadline}` : ''}</span></div>
+          ${s.coaching_summary && !selfView ? `<div style="font-size:.8rem;line-height:1.5;margin-bottom:6px">${escHtml(s.coaching_summary)}</div>` : ''}
+          ${s.agent_attitude && !selfView ? `<div class="meta">attitude: ${escHtml(s.agent_attitude)}</div>` : ''}
+          ${commits ? `<ul class="commits">${commits}</ul>` : ''}
+          ${links ? `<div class="links">Calls: ${links}</div>` : ''}
+          ${readout ? `<div class="readout">${readout}</div>` : ''}
+          ${actions ? `<div class="actions">${actions}</div>` : ''}`;
+        wrap.appendChild(div);
+      }
+      card.classList.remove('hidden');
+    }
+
+    // ── builder (create) + conduct + cancel ─────────────────────────────────
+    function toggleBuilder() {
+      const form = document.getElementById('coachForm');
+      const opening = form.classList.contains('hidden');
+      form.classList.toggle('hidden');
+      if (!opening) return;
+      // call picker from the loaded window's records
+      const picker = document.getElementById('callPicker');
+      picker.innerHTML = _lastHistory.length ? '' :
+        '<div class="meta" style="font-size:.75rem">No evaluations in the current window.</div>';
+      _lastHistory.slice().reverse().forEach((r, i) => {
+        if (!r.eval_id) return;
+        const row = document.createElement('div');
+        row.className = 'call-row';
+        row.innerHTML = `
+          <input type="checkbox" id="pick${i}" value="${escHtml(r.eval_id)}">
+          <label for="pick${i}" style="display:inline;margin:0">${new Date(r.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · ${r.overall_score}</label>
+          <span class="snippet">${escHtml((r.improvements || '').slice(0, 90))}</span>`;
+        picker.appendChild(row);
+      });
+      const rows = document.getElementById('commitRows');
+      if (!rows.children.length) addCommitRow();
+      const d = new Date(Date.now() + 14 * 86400000);
+      document.getElementById('coachDeadline').value = d.toISOString().slice(0, 10);
+    }
+
+    function addCommitRow() {
+      const rows = document.getElementById('commitRows');
+      const row = document.createElement('div');
+      row.className = 'commit-row';
+      const opts = ['<option value="">— section (optional) —</option>']
+        .concat(_teamSections.filter(s => !s.auto_value).map(s =>
+          `<option value="${escHtml(s.id)}">${escHtml(s.name)}</option>`)).join('');
+      row.innerHTML = `<input type="text" placeholder="Commitment…" maxlength="300">
+        <select>${opts}</select>
+        <button type="button" class="coach-btn danger" onclick="this.parentElement.remove()">×</button>`;
+      rows.appendChild(row);
+    }
+
+    async function submitCoaching() {
+      const status = document.getElementById('coachFormStatus');
+      const btn = document.getElementById('coachSubmitBtn');
+      const commitments = [...document.querySelectorAll('#commitRows .commit-row')]
+        .map(r => ({ text: r.querySelector('input').value.trim(), section_id: r.querySelector('select').value || null }))
+        .filter(c => c.text);
+      const evalRefs = [...document.querySelectorAll('#callPicker input:checked')].map(i => i.value);
+      const body = {
+        agent_name: currentAgent,
+        deadline: document.getElementById('coachDeadline').value,
+        scheduled_at: document.getElementById('coachScheduled').value || undefined,
+        conducted_by_role: document.getElementById('coachRole').value,
+        eval_refs: evalRefs,
+        commitments,
+      };
+      btn.disabled = true; status.textContent = 'Saving…';
+      try {
+        const res = await fetch(`${API_BASE}/coachings`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        status.textContent = `Session #${data.coaching_id} created.`;
+        document.getElementById('coachForm').classList.add('hidden');
+        document.getElementById('commitRows').innerHTML = '';
+        loadCoachingLayer(currentAgent);
+      } catch (e) { status.textContent = `Failed: ${e.message}`; }
+      btn.disabled = false;
+    }
+
+    async function conductPrompt(id, hasDeadline) {
+      const summary = prompt('Coaching summary — what was discussed and agreed?');
+      if (summary === null || !summary.trim()) return;
+      const attitude = prompt('Agent attitude: receptive | engaged | neutral | defensive | dismissive | mixed', 'receptive');
+      if (attitude === null) return;
+      const body = { coaching_summary: summary.trim(), agent_attitude: attitude.trim().toLowerCase() };
+      if (!hasDeadline) {
+        const dl = prompt('Commitment deadline (YYYY-MM-DD):');
+        if (dl === null) return;
+        body.deadline = dl.trim();
+      }
+      const res = await fetch(`${API_BASE}/coachings/${id}/conduct`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) alert(data.detail || `HTTP ${res.status}`);
+      loadCoachingLayer(currentAgent);
+    }
+
+    async function cancelCoaching(id) {
+      if (!confirm('Cancel this coaching session?')) return;
+      const res = await fetch(`${API_BASE}/coachings/${id}/cancel`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) alert(data.detail || `HTTP ${res.status}`);
+      loadCoachingLayer(currentAgent);
     }
 
     function renderAssessment(progression) {
