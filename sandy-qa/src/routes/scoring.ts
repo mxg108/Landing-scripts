@@ -32,6 +32,7 @@ import {
   type CallProvider,
   type NormalizedCall,
 } from "../lib/providers/index.js";
+import { accessEmail } from "../lib/rbac.js";
 
 const WORKFLOW_NAME = "qa-scoring-pipeline";
 
@@ -44,6 +45,25 @@ const json = (data: unknown, status = 200) =>
 // ── trigger ────────────────────────────────────────────────────────────────
 // Call prefetch lives behind the provider seam now — lib/providers/dialpad.ts
 // is the verbatim extract of the get_transcript/get_call_details ports.
+
+// Auto-pull entry point (R4): the hourly Retell sweep triggers scoring
+// with roster-derived identities — same path as the console POST, minus
+// the form parsing and the route-level RBAC gate (the cron dispatcher is
+// platform-authenticated).
+export async function autoScoreTrigger(
+  request: Request,
+  db: D1Database,
+  teamId: string,
+  env: {
+    DIALPAD_API_KEY?: string;
+    RETELL_API_KEY?: string;
+    PULPO_MCP_URL?: string;
+    PULPO_MCP_TOKEN?: string;
+  },
+  opts: { callId: string; agentEmail: string; managerEmail: string }
+): Promise<Response> {
+  return scoreTriggerInternal(request, db, teamId, env, opts);
+}
 
 export async function scoreTrigger(
   request: Request,
@@ -175,6 +195,10 @@ async function scoreTriggerInternal(
     // No disposition on retell teams — call_analysis.call_summary is the
     // retrieval query (better than the transcript-head fallback, §4.3).
     summaryQuery: call.grounding?.sop_query ?? null,
+    // Per-team tag scoping (teams.retrieval_config, migration 0006):
+    // sofia retrieves ONLY Sofia-tagged docs; null = unscoped (MS/Sales).
+    tags: config.retrieval_config?.tags ?? null,
+    tagMatch: config.retrieval_config?.match ?? "any",
   });
 
   const durationMs = call.duration_ms;
@@ -562,7 +586,12 @@ export async function rescoreEvaluation(
   try {
     body = await request.json();
   } catch {}
-  const evaluatorEmail = (body.evaluator_email ?? "").trim().toLowerCase();
+  // The page sends its remembered evaluator email; when absent (fresh
+  // browser, review-queue path on flagged rows) fall back to the caller's
+  // CF-Access-asserted identity — the person who actually clicked.
+  const evaluatorEmail =
+    (body.evaluator_email ?? "").trim().toLowerCase() ||
+    accessEmail(request).trim().toLowerCase();
   if (!evaluatorEmail) return json({ detail: "evaluator_email required" }, 422);
   const ev = await resolveEval(db, teamId, ref);
   if (!ev) return json({ detail: "No evaluation matches this call id" }, 404);
@@ -610,6 +639,12 @@ export async function deleteEvaluation(
       409
     );
   await db.prepare("DELETE FROM qa_evaluation_sections WHERE evaluation_id = ?").bind(ev.id).run();
+  // Unlink coaching receipts first (FK, no ON DELETE): the coaching rows +
+  // audit trail survive; only the join to the destroyed eval goes.
+  await db
+    .prepare("DELETE FROM qa_coaching_evaluations WHERE evaluation_id = ?")
+    .bind(ev.id)
+    .run();
   await db.prepare("DELETE FROM qa_evaluations WHERE id = ?").bind(ev.id).run();
   // CC orphan latch (§3.9/§4.2): scored stays monotonic, orphaned flips on
   const now = new Date().toISOString();
@@ -725,6 +760,23 @@ export async function scorecardPayload(
         flags: [],
       };
     });
+  // Persisted manual-section values for restored-scorecard prefill — kept
+  // OUT of `sections` (Railway AI-only shape; duplicated ids once shadowed
+  // manual inputs, the #175 422) and delivered under their own key. Without
+  // this the editor re-rendered saved manual scores as "—" + empty
+  // reasoning even though D1 held them.
+  const manualSections = config.prompt_config.sections
+    .filter((s: any) => ["manual", "manual_yn"].includes(s.score_type))
+    .map((s: any) => {
+      const row: any = byId.get(s.id) ?? {};
+      return {
+        id: s.id,
+        score: row.numeric_score ?? null,
+        yn_value: row.binary_value ?? null,
+        reasoning: row.reasoning ?? null,
+        score_source: row.score_source ?? null,
+      };
+    });
   let model: string | null = null;
   try { model = JSON.parse(ev.models_used ?? "{}")?.text?.model ?? null; } catch {}
   return json({
@@ -740,6 +792,7 @@ export async function scorecardPayload(
     sandy_born: ev.id >= SANDY_BASE,
     scorecard: {
       sections,
+      manual_sections: manualSections,
       manager_email: ev.evaluator_email ?? "",
       dialpad_link: ev.dialpad_link,
       call_summary: ev.call_summary ?? "",
@@ -789,12 +842,17 @@ export async function approveEvaluation(
   ref: string,
   opts: {
     editOfFinalized: boolean;
-    gasUrls?: { member_support?: string; sales?: string };
+    gasUrls?: { member_support?: string; sales?: string; sofia?: string };
   }
 ): Promise<Response> {
   let body: any = {};
   try { body = await request.json(); } catch { return json({ detail: "JSON body required" }, 422); }
-  const evaluatorEmail = (body.evaluator_email ?? "").trim().toLowerCase();
+  // The page sends its remembered evaluator email; when absent (fresh
+  // browser, review-queue path on flagged rows) fall back to the caller's
+  // CF-Access-asserted identity — the person who actually clicked.
+  const evaluatorEmail =
+    (body.evaluator_email ?? "").trim().toLowerCase() ||
+    accessEmail(request).trim().toLowerCase();
   if (!evaluatorEmail) return json({ detail: "evaluator_email required" }, 422);
 
   const fullByRef = (r: string) =>
@@ -983,7 +1041,14 @@ export async function approveEvaluation(
   }
 
   return json({
-    ok: true, evaluation_id: ev.id, overall_score: overall, state: "finalized",
+    ok: true, evaluation_id: ev.id, overall_score: overall,
+    // pre-edit score for the page's "engine score X → Y" message (null on
+    // flagged first-approvals, which had no score yet)
+    old_score:
+      ev.overall_score !== null && ev.overall_score !== undefined
+        ? Number(ev.overall_score)
+        : null,
+    state: "finalized",
     edited, coaching_id: coachingId, email_dispatch: emailDispatch,
   });
 }
@@ -993,11 +1058,16 @@ export async function overrideEvaluation(
   db: D1Database,
   teamId: string,
   ref: string,
-  gasUrls?: { member_support?: string; sales?: string }
+  gasUrls?: { member_support?: string; sales?: string; sofia?: string }
 ): Promise<Response> {
   let body: any = {};
   try { body = await request.json(); } catch { return json({ detail: "JSON body required" }, 422); }
-  const evaluatorEmail = (body.evaluator_email ?? "").trim().toLowerCase();
+  // The page sends its remembered evaluator email; when absent (fresh
+  // browser, review-queue path on flagged rows) fall back to the caller's
+  // CF-Access-asserted identity — the person who actually clicked.
+  const evaluatorEmail =
+    (body.evaluator_email ?? "").trim().toLowerCase() ||
+    accessEmail(request).trim().toLowerCase();
   if (!evaluatorEmail) return json({ detail: "evaluator_email required" }, 422);
   if (body.acknowledged !== true)
     return json({ detail: "acknowledged=true required for an override" }, 422);
@@ -1150,7 +1220,7 @@ function answersFromSectionRows(rows: any[]): Record<string, number | string> {
 export async function scoringCallback(
   body: any,
   db: D1Database,
-  gasUrls?: { member_support?: string; sales?: string }
+  gasUrls?: { member_support?: string; sales?: string; sofia?: string }
 ): Promise<{ ok: boolean; note: string }> {
   const jobStatus = body.status === "complete" ? "complete" : "error";
   const p = body; // workflow result payload
@@ -1214,7 +1284,10 @@ export async function scoringCallback(
       .prepare("DELETE FROM qa_evaluation_sections WHERE evaluation_id = ?")
       .bind(newEvalId)
       .run();
-    await db.prepare("DELETE FROM qa_evaluations WHERE id = ?").bind(newEvalId).run();
+    // The eval row itself is UPDATEd in place below — deleting it throws
+    // FOREIGN KEY constraint failed when qa_coaching_evaluations holds a
+    // receipt link (S7 edit / §4.3 override), which is exactly what wedged
+    // the first coached-eval rescore.
   } else {
     const idRow = await db
       .prepare(
@@ -1245,54 +1318,65 @@ export async function scoringCallback(
     },
   };
 
-  const evalInsert = await db
-    .prepare(
-      `INSERT INTO qa_evaluations (
-        id, team_id, agent_id, agent_name_raw, agent_email, evaluator_email,
-        state, source, call_connected_at, call_ended_at, call_duration_ms,
-        language, dialpad_call_id, dialpad_entry_point_call_id,
-        dialpad_master_call_id, dialpad_link, caller_name, caller_phone,
-        call_summary, annotated_transcript, key_strengths, opportunities,
-        overall_score, formula_version, rubric_version, models_used,
-        ai_provider_primary, sampling_status, scoring_status,
-        human_review_required_at,
-        created_at, approved_at, finalized_at,
-        dialpad_disposition_category, dialpad_disposition, ai_csat,
-        command_center_call_id, dialpad_call_metadata
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    )
-    .bind(
-      newEvalId,
-      teamId, persist.agent_id, persist.agent_name, persist.agent_email,
-      flagged ? null : persist.manager_email,
-      flagged ? "draft" : "finalized", "ai",
-      persist.call_connected_at, persist.call_ended_at, persist.call_duration_ms,
-      p.annotation?.language_detected ?? null,
-      p.call_id, persist.dialpad_entry_point_call_id, persist.dialpad_master_call_id,
-      // review_link rides the payload since the provider seam; the fallback
-      // covers jobs queued before it existed.
-      persist.review_link ||
-        `https://dialpad.com/callhistory/callreview/${persist.dialpad_entry_point_call_id || p.call_id}`,
-      persist.caller_name || null, persist.caller_phone || null,
-      scorecard.call_summary ?? null,
-      p.annotation ? JSON.stringify(p.annotation) : null,
-      scorecard.key_strengths ?? null, scorecard.opportunities ?? null,
-      flagged ? null : overallScore,
-      fvRow.formula_version, config.rubric_version,
-      JSON.stringify(modelsUsed), "gemini",
-      "not_sampled",
-      flagged ? "flagged_human_review" : "complete",
-      // §0.3 queue entry: flagged rows carry the marker until a human
-      // resolution (approve/override) stamps completed_at.
-      flagged ? now : null,
-      now, flagged ? null : now, flagged ? null : now,
-      persist.cc_stamps?.disposition_category ?? null,
-      persist.cc_stamps?.disposition ?? null,
-      persist.cc_stamps?.ai_csat ?? null,
-      persist.cc_stamps?.cc_call_id ?? null,
-      JSON.stringify(meta)
-    )
-    .run();
+  const EVAL_COLS = [
+    "team_id", "agent_id", "agent_name_raw", "agent_email", "evaluator_email",
+    "state", "source", "call_connected_at", "call_ended_at", "call_duration_ms",
+    "language", "dialpad_call_id", "dialpad_entry_point_call_id",
+    "dialpad_master_call_id", "dialpad_link", "caller_name", "caller_phone",
+    "call_summary", "annotated_transcript", "key_strengths", "opportunities",
+    "overall_score", "formula_version", "rubric_version", "models_used",
+    "ai_provider_primary", "sampling_status", "scoring_status",
+    "human_review_required_at", "created_at", "approved_at", "finalized_at",
+    "dialpad_disposition_category", "dialpad_disposition", "ai_csat",
+    "command_center_call_id", "dialpad_call_metadata",
+  ];
+  const evalVals = [
+    teamId, persist.agent_id, persist.agent_name, persist.agent_email,
+    flagged ? null : persist.manager_email,
+    flagged ? "draft" : "finalized", "ai",
+    persist.call_connected_at, persist.call_ended_at, persist.call_duration_ms,
+    p.annotation?.language_detected ?? null,
+    p.call_id, persist.dialpad_entry_point_call_id, persist.dialpad_master_call_id,
+    // review_link rides the payload since the provider seam; the fallback
+    // covers jobs queued before it existed.
+    persist.review_link ||
+      `https://dialpad.com/callhistory/callreview/${persist.dialpad_entry_point_call_id || p.call_id}`,
+    persist.caller_name || null, persist.caller_phone || null,
+    scorecard.call_summary ?? null,
+    p.annotation ? JSON.stringify(p.annotation) : null,
+    scorecard.key_strengths ?? null, scorecard.opportunities ?? null,
+    flagged ? null : overallScore,
+    fvRow.formula_version, config.rubric_version,
+    JSON.stringify(modelsUsed), "gemini",
+    "not_sampled",
+    flagged ? "flagged_human_review" : "complete",
+    // §0.3 queue entry: flagged rows carry the marker until a human
+    // resolution (approve/override) stamps completed_at.
+    flagged ? now : null,
+    now, flagged ? null : now, flagged ? null : now,
+    persist.cc_stamps?.disposition_category ?? null,
+    persist.cc_stamps?.disposition ?? null,
+    persist.cc_stamps?.ai_csat ?? null,
+    persist.cc_stamps?.cc_call_id ?? null,
+    JSON.stringify(meta),
+  ];
+  if (persist.rescore_of) {
+    // §4.2 REPLACE-on-same-id via UPDATE — coaching-receipt FKs stay valid.
+    await db
+      .prepare(
+        `UPDATE qa_evaluations SET ${EVAL_COLS.map((c) => `${c}=?`).join(", ")} WHERE id=?`
+      )
+      .bind(...evalVals, newEvalId)
+      .run();
+  } else {
+    await db
+      .prepare(
+        `INSERT INTO qa_evaluations (id, ${EVAL_COLS.join(", ")})
+         VALUES (?${",?".repeat(EVAL_COLS.length)})`
+      )
+      .bind(newEvalId, ...evalVals)
+      .run();
+  }
   const evalId = newEvalId;
 
   for (const r of sectionRows) {

@@ -28,6 +28,9 @@ export interface TeamConfig {
   company: string;
   provider: string; // 'dialpad' | 'retell' — call-provider seam (migration 0005)
   provider_config: any; // e.g. retell {agent_ids: [...]}; null for dialpad teams
+  // {tags: [...], match: 'any'|'all'} — per-team doc-retrieval scope
+  // (migration 0006); null = unscoped. Provider-agnostic by design.
+  retrieval_config: { tags?: string[]; match?: string } | null;
   // PromptConfig for the scoring prompt builders — raw rubric sections
   // (score_descriptions / na_applies_when / special_reasoning_instructions
   // included) + the rubric's scoring_prompt block.
@@ -60,7 +63,7 @@ function isNumeric(s: any): boolean {
 export async function loadTeamConfig(db: D1Database, teamId: string): Promise<TeamConfig> {
   const team = await db
     .prepare(
-      "SELECT stats_config, excluded_test_agents, company, provider, provider_config FROM teams WHERE id = ?"
+      "SELECT stats_config, excluded_test_agents, company, provider, provider_config, retrieval_config FROM teams WHERE id = ?"
     )
     .bind(teamId)
     .first<{
@@ -69,6 +72,7 @@ export async function loadTeamConfig(db: D1Database, teamId: string): Promise<Te
       company: string | null;
       provider: string | null;
       provider_config: string | null;
+      retrieval_config: string | null;
     }>();
   if (!team) throw new Error(`unknown team ${teamId}`);
 
@@ -129,6 +133,7 @@ export async function loadTeamConfig(db: D1Database, teamId: string): Promise<Te
     company: team.company ?? "Landing Living LLC",
     provider: team.provider ?? "dialpad",
     provider_config: team.provider_config ? JSON.parse(team.provider_config) : null,
+    retrieval_config: team.retrieval_config ? JSON.parse(team.retrieval_config) : null,
     prompt_config: {
       company: team.company ?? "Landing Living LLC",
       scoring_prompt: current.scoring_prompt ?? {},

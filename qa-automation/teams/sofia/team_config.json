@@ -1,0 +1,237 @@
+{
+  "team_id": "sofia",
+  "display_name": "Sofia AI",
+  "company": "Landing Living LLC",
+  "excluded_test_agents": [],
+  "hr_internal_section_ids": [],
+  "hr_export": {
+    "sections": [
+      {
+        "id": "sop_adherence",
+        "hr_label": "SOP Adherence"
+      },
+      {
+        "id": "accuracy",
+        "hr_label": "Accuracy & Policy Truthfulness"
+      },
+      {
+        "id": "conversational_flow",
+        "hr_label": "Human-Likeness: Conversational Flow"
+      },
+      {
+        "id": "tone_empathy",
+        "hr_label": "Human-Likeness: Tone & Empathy"
+      },
+      {
+        "id": "intent_resolution",
+        "hr_label": "Intent Capture & Resolution"
+      },
+      {
+        "id": "escalation_handling",
+        "hr_label": "Escalation & Transfer Handling"
+      }
+    ]
+  },
+  "stats": {
+    "min_evals_for_outlier": 5,
+    "outlier_z_threshold": 3.5,
+    "ewma_span": 5,
+    "ewma_min_evals": 3,
+    "ewma_trend_delta": 3.0,
+    "spc_sigma_multiplier": 2.0
+  },
+  "gemini": {
+    "scoring_model": "gemini-2.5-flash",
+    "scoring_temperature": 0.2,
+    "scoring_max_output_tokens": 65536,
+    "progression_model": "gemini-2.5-flash",
+    "progression_temperature": 0.3,
+    "progression_max_output_tokens": 16384
+  },
+  "sheets": {
+    "form_responses_ai": {
+      "tab_name": "Form Responses AI"
+    },
+    "analyst_history": {
+      "tab_name": "Analyst_History",
+      "tab_name_legacy": "Analyst_History_legacy"
+    },
+    "score_destination": {
+      "tab_name": "Form Responses 1",
+      "section_score_columns": {
+        "D": "greeting",
+        "E": "caller_id",
+        "F": "purpose",
+        "G": "matching",
+        "H": "process_adherence",
+        "I": "call_resolution",
+        "J": "comms",
+        "K": "efficiency",
+        "L": "human_review_required",
+        "M": "cri"
+      },
+      "score_readback_col": "Q",
+      "arrayformula_buffer_seconds": 4,
+      "metadata_cols": {
+        "timestamp": "A",
+        "manager_email": "B",
+        "agent_name": "C",
+        "key_strengths": "N",
+        "opportunities": "O",
+        "dialpad_link": "P"
+      },
+      "metadata_cols_note": "Call-time initiative (PR-1): `timestamp` (col A) now semantically holds the call's date_connected from Dialpad, not the eval/approval clock. Sourced via fr_ai_row[COL_TIMESTAMP] in Stage 2 \u2014 the FR-AI tab's col C was repurposed by sheets_service.write_draft_to_fr_ai. The JSON value 'A' didn't change; only the meaning of what lands there did. See references/CallTimeOnAnalystHistory.md. Section keys updated 2026-06-30 to Ops-signed short ids per Wave2Plan.md \u00a79; column letters unchanged \u2014 sheet ARRAYFORMULAs reference letters, not names."
+    },
+    "mails_tab": "Mails"
+  },
+  "rubric": {
+    "rubric_version": "sofia_v0",
+    "sections": [
+      {
+        "id": "sop_adherence",
+        "history_id": "sop_adherence",
+        "name": "SOP Adherence",
+        "section_number": 1,
+        "score_type": "numeric",
+        "score_range": [
+          1,
+          5
+        ],
+        "audio_dependent": false,
+        "rubric_question": "Did Sofia follow the applicable Landing SOP(s) for the caller's issue \u2014 required steps, correct information, proper process?",
+        "score_descriptions": {
+          "1": "Ignored or contradicted the applicable SOP; handled the issue by improvisation",
+          "2": "Major SOP steps skipped or done out of order; outcome salvaged only by luck",
+          "3": "Core SOP followed with minor omissions that did not affect the outcome",
+          "4": "Followed the SOP correctly end-to-end with one cosmetic slip",
+          "5": "Followed the applicable SOP precisely, including edge-case handling"
+        },
+        "na_applicable": false,
+        "confidence_cap": null,
+        "special_reasoning_instructions": "Ground this section in the SOP CONTEXT block when present. If no SOP context was retrieved for this call, score only what general Landing policy clearly requires and cap confidence at low."
+      },
+      {
+        "id": "accuracy",
+        "history_id": "accuracy",
+        "name": "Accuracy & Policy Truthfulness",
+        "section_number": 2,
+        "score_type": "numeric",
+        "score_range": [
+          1,
+          5
+        ],
+        "audio_dependent": false,
+        "rubric_question": "Was everything Sofia stated about Landing policy, the member's account, pricing, or process actually true and grounded?",
+        "score_descriptions": {
+          "1": "Fabricated policy, commitments, or account facts (hallucination with member impact)",
+          "2": "At least one materially wrong or unfounded claim, or promised an action she cannot take",
+          "3": "Accurate overall; minor imprecision with no member impact",
+          "4": "Accurate throughout; hedged appropriately when unsure",
+          "5": "Fully accurate and grounded; clearly separated facts from items needing human follow-up"
+        },
+        "na_applicable": false,
+        "confidence_cap": null,
+        "special_reasoning_instructions": "Treat specific unverifiable claims (dates, amounts, policy exceptions) as inaccuracies unless supported by the call context. The audio is the source of truth."
+      },
+      {
+        "id": "conversational_flow",
+        "history_id": "conversational_flow",
+        "name": "Human-Likeness: Conversational Flow",
+        "section_number": 3,
+        "score_type": "numeric",
+        "score_range": [
+          1,
+          5
+        ],
+        "audio_dependent": true,
+        "rubric_question": "Did the conversation flow like a natural human call \u2014 timing, turn-taking, no awkward gaps, interruptions, or robotic loops?",
+        "score_descriptions": {
+          "1": "Robotic: long dead air, talks over the caller repeatedly, loops or non-sequiturs",
+          "2": "Frequent unnatural pauses or interruptions; the caller had to repeat themselves",
+          "3": "Generally natural; occasional stilted timing a caller would notice",
+          "4": "Natural timing and turn-taking; at most one minor artifact",
+          "5": "Indistinguishable from a competent human agent in pacing and turn-taking"
+        },
+        "na_applicable": false,
+        "confidence_cap": null,
+        "special_reasoning_instructions": "Use the PLATFORM SIGNAL MARKERS block (system-verified response-gap, interruption, silence, and latency measurements) as objective evidence for this section and cite the relevant measurements in the reasoning."
+      },
+      {
+        "id": "tone_empathy",
+        "history_id": "tone_empathy",
+        "name": "Human-Likeness: Tone & Empathy",
+        "section_number": 4,
+        "score_type": "numeric",
+        "score_range": [
+          1,
+          5
+        ],
+        "audio_dependent": true,
+        "rubric_question": "Did Sofia's tone, word choice, and emotional responses fit the caller's situation?",
+        "score_descriptions": {
+          "1": "Flat or mismatched affect; ignored obvious frustration or distress",
+          "2": "Acknowledged emotion generically or late; scripted-sounding sympathy",
+          "3": "Appropriate tone; empathy present but shallow",
+          "4": "Warm, situationally appropriate tone; acknowledged the caller's state naturally",
+          "5": "Genuinely human-feeling warmth; matched the caller's register throughout"
+        },
+        "na_applicable": false,
+        "confidence_cap": null,
+        "special_reasoning_instructions": null
+      },
+      {
+        "id": "intent_resolution",
+        "history_id": "intent_resolution",
+        "name": "Intent Capture & Resolution",
+        "section_number": 5,
+        "score_type": "numeric",
+        "score_range": [
+          1,
+          5
+        ],
+        "audio_dependent": false,
+        "rubric_question": "Did Sofia correctly identify what the caller needed and either resolve it or set up the right next step?",
+        "score_descriptions": {
+          "1": "Misidentified the need; the caller left unresolved with no viable path",
+          "2": "Partially captured the need; resolution attempt off-target",
+          "3": "Captured the need; resolved or routed with minor gaps (e.g. a weak recap)",
+          "4": "Correctly resolved or routed with clear confirmation of next steps",
+          "5": "Fully resolved or perfectly routed, confirmed understanding, no loose ends"
+        },
+        "na_applicable": false,
+        "confidence_cap": null,
+        "special_reasoning_instructions": "The CALL PLATFORM ANALYSIS block (Retell post-call summary and sentiment) is informational context, not ground truth \u2014 verify it against the audio."
+      },
+      {
+        "id": "escalation_handling",
+        "history_id": "escalation_handling",
+        "name": "Escalation & Transfer Handling",
+        "section_number": 6,
+        "score_type": "yn",
+        "score_range": null,
+        "audio_dependent": false,
+        "rubric_question": "When the call needed a human (explicit request, out-of-scope issue, or policy requirement), did Sofia recognize it and hand off correctly?",
+        "score_descriptions": {
+          "0": "Missed a needed escalation, resisted a human request, or botched the transfer",
+          "1": "Recognized the escalation need promptly and completed the handoff correctly"
+        },
+        "na_applicable": true,
+        "confidence_cap": null,
+        "special_reasoning_instructions": null
+      }
+    ],
+    "scoring_prompt": {
+      "sop_sections": [
+        "sop_adherence",
+        "accuracy"
+      ],
+      "confidence_levels_note": "- \"high\": Clear evidence in audio, no ambiguity\n- \"medium\": Reasonable inference, some ambiguity or audio-dependent nuance\n- \"low\": Insufficient signal, heavy guessing required",
+      "system_prompt_template": "You are a QA evaluator for {company}'s AI voice agent program.\nYou will listen to a full call recording taken by Sofia, {company}'s AI voice agent, and score it using the rubric provided.\nSofia is not a human agent: do not excuse errors on that basis, and score conversational naturalness exactly as the rubric defines it. Judge what a caller on the line would actually experience.\n\nCRITICAL OUTPUT RULES:\n- Return ONLY a valid JSON object. No markdown fences, no prose, no explanations outside the JSON.\n- All string values must have apostrophes and internal quotes escaped.\n- Never use raw newlines inside string values \u2014 use a space instead.\n- The JSON must be parseable by Python json.loads() without modification.\n- Use the Second person (\"you\") when referring to the agent (Sofia) in the reasoning AND feedback sections, as if you are directly addressing her with a personal tone, DO NOT use the Third person (\"they/them\") anywhere in your outputs.",
+      "audio_dependent_sections": [
+        "conversational_flow",
+        "tone_empathy"
+      ],
+      "long_call_focus_sections": []
+    }
+  }
+}

@@ -180,6 +180,17 @@ gains an optional `summaryQuery` used when disposition is absent (better
 than the current 600-char transcript-head fallback; sub-τ still falls into
 the existing conservative `sop_context_missing` path).
 
+**Tag scoping (added 2026-08-10, owner ask):** Sofia retrieves ONLY docs
+tagged `Sofia`. `teams.retrieval_config` (migration 0006) carries a
+provider-agnostic `{tags, match}` scope; Pulpo's `search_knowledge_base`
+has no tag parameter, so the scope is enforced by filtering search hits
+against the `list_documents_by_tag` id set (cached 1 h, case-insensitive,
+≤50 docs). **Fail-closed**: unresolved scope ⇒ retrieval skipped
+(`tag_scope_unavailable`), never a leak of other teams' docs. ⚠ At ship
+time ZERO docs carried the `Sofia` tag — Sofia scoring runs the
+conservative no-SOP path until docs are tagged in Pulpo. Future per-team
+scoping (MS/Sales, non-Pulpo providers) = set the same config shape.
+
 ### 4.4 The rest
 
 - `public_log_url` → review link on console/datapoint/editor (LLM req/resp +
@@ -225,8 +236,16 @@ download fails loudly and a console re-score rebuilds a fresh URL.
    null for retell.
 5. `emailDispatch.resolveGasUrl` → explicit map
    `{member_support: MS, sales: SALES}`; `sofia` (and any future team) →
-   `undefined` → existing `'skipped'` receipt. **Email suppressed for Sofia
-   by construction** (no inbox; owner digest is a later decision).
+   `undefined` → existing `'skipped'` receipt. ~~Email suppressed for Sofia
+   by construction~~ **Superseded 2026-08-12 (owner):** Sofia has her own
+   GAS deployment (secret `GAS_WEBAPP_URL_SOFIA`, exactly 20 chars; script
+   `12vGwhCNK1…`); scorecard emails deliver to **Jackson** via the shared
+   sender's optional `CONFIG.EMAIL.TO_OVERRIDE` (set in
+   `qa-automation/teams/sofia/Branding.js` — no-op for MS/Sales; CC dropped
+   when it duplicates To). Sofia's `Config.js` regenerates from
+   `qa-automation/teams/sofia/team_config.json` via `build_config.py sofia
+   --config …` — NOT from `backend/config/teams/` (Railway glob-loads that
+   dir and must not learn about sofia).
 
 ## 7. Sofia rubric/formula v0 (draft — owner design pass required)
 
@@ -269,9 +288,16 @@ changes.
   paginated) with scored/queued status joins and one-click Score (reviewer =
   viewer's Access email). Plus rubric hardening with owner: section defs,
   weights, review-gate relaxation, per-build (`agent_version`) dashboard cut.
-- **R4 — auto-pull + digest:** list-calls v3 hourly sweep on the existing
-  "7 * * * *" cron + voicemail/short-call skip list; owner digest email
-  (pushed from R3 — wants real data first, §9.5).
+- **R4 — auto-pull + digest** *(SHIPPED 2026-08-12, v0.36 + GAS @6)*:
+  hourly sweep rides the "7 * * * *" pump (2-cron cap): list-calls v3
+  newest-50 → trailing 26h window → skip voicemail + calls <30s →
+  ≤10 enqueues/tick; stateless (idempotency = existing eval / ANY prior
+  queue row — one automatic attempt per call, failures wait for a human
+  re-score). Reviewer on auto-scored evals = roster supervisor (Jackson).
+  Daily digest rides "37 9 * * *": app POSTs `{digest}` to the sofia GAS
+  webapp (only when the 24h had activity) → `_renderDigestHtml` →
+  delivers to `EMAIL.TO_OVERRIDE`. Sweep + digest receipts land in
+  cron_runs notes.
 
 ## 9. Open questions (owner/Max)
 

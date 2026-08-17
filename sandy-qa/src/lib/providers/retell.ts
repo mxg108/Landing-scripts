@@ -223,6 +223,30 @@ export async function listRetellCalls(
   };
 }
 
+// Fresh playback URL for the lookup page's mini player. Retell exposes
+// recordings ONLY as the get-call v2 fields recording_url /
+// recording_multi_channel_url (S3 WAV, 24h-signed when opt_in_signed_url)
+// — no separate streaming API, and v3 list items omit them — so each play
+// click fetches a fresh signed URL. Single-channel preferred for listening
+// (mixed mono beats agent-left/caller-right stereo on speakers).
+export async function getRetellRecordingUrl(
+  key: string,
+  callId: string
+): Promise<{ url: string; mime: string }> {
+  const res = await fetch(`${RETELL}/v2/get-call/${encodeURIComponent(callId)}`, {
+    headers: { authorization: `Bearer ${key}` },
+  });
+  if (res.status === 401)
+    throw new ProviderCallError("Retell auth failed — check the RETELL_API_KEY app secret", 503);
+  if (res.status === 404 || res.status === 422)
+    throw new ProviderCallError(`Retell call ${callId} not found`, 422);
+  if (!res.ok) throw new ProviderCallError(`Retell get-call HTTP ${res.status}`, 502);
+  const raw = (await res.json()) as any;
+  const url = raw.recording_url || raw.recording_multi_channel_url;
+  if (!url) throw new ProviderCallError(`no recording available for call ${callId}`, 422);
+  return { url, mime: "audio/wav" };
+}
+
 export function makeRetellProvider(key: string): CallProvider {
   return {
     id: "retell",

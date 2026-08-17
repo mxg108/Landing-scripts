@@ -186,7 +186,7 @@ export async function handleTeamRoutes(
   dialpadKey?: string,
   lookupAllow?: string,
   pulpo?: { url?: string; token?: string },
-  gasUrls?: { member_support?: string; sales?: string },
+  gasUrls?: { member_support?: string; sales?: string; sofia?: string },
   retellKey?: string
 ): Promise<Response | null> {
   const path = url.pathname;
@@ -497,9 +497,9 @@ export async function handleTeamRoutes(
   // ── lookup APIs (dialpad teams: Dialpad-backed; sofia: Retell v3 list) ───
   m = path.match(/^\/api\/([^/]+)\/lookup(\/calls|\/recording-link|\/scoring-permission)?$/);
   if (m && m[1] === "sofia") {
-    if (m[2] !== "/calls")
+    if (m[2] !== "/calls" && m[2] !== "/recording-link")
       return json(
-        { detail: "not applicable for Retell — recordings and permissions ride the scoring pipeline" },
+        { detail: "not applicable for Retell — permissions ride the scoring pipeline" },
         404
       );
     const deny = await requirePrivileged();
@@ -509,6 +509,18 @@ export async function handleTeamRoutes(
         { detail: "RETELL_API_KEY app secret not configured — add it in the Sandy Dashboard (Edit Secrets)." },
         503
       );
+    if (m[2] === "/recording-link") {
+      // Fresh 24h-signed WAV URL per click (v3 list items omit recordings).
+      const callId = url.searchParams.get("call_id") ?? "";
+      if (!callId) return json({ detail: "call_id required" }, 422);
+      const { getRetellRecordingUrl } = await import("../lib/providers/retell.js");
+      try {
+        return json(await getRetellRecordingUrl(retellKey, callId));
+      } catch (err) {
+        const status = (err as any)?.status ?? 502;
+        return json({ detail: String((err as any)?.message ?? err) }, status);
+      }
+    }
     const config = await loadTeamConfig(db, "sofia");
     const { listRetellCalls } = await import("../lib/providers/retell.js");
     const page = await listRetellCalls(retellKey, {
@@ -649,9 +661,10 @@ function recordFromFrameRow(r: import("../lib/historyFrame.js").FrameRow) {
     overall_score: r.overall_score,
     sections: {},
     eval_id: r.eval_id || null,
-    dialpad_link: r.eval_id
-      ? `https://dialpad.com/callhistory/callreview/${r.eval_id}`
-      : null,
+    // r.dialpad_link is set only on retell rows (public_log_url).
+    dialpad_link:
+      r.dialpad_link ||
+      (r.eval_id ? `https://dialpad.com/callhistory/callreview/${r.eval_id}` : null),
     caller_name: r.caller_name || null,
     source: "ai",
   };

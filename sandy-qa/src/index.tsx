@@ -21,6 +21,9 @@ export interface Env {
   // Dashboard-set app secret: Retell.ai (Sofia AI's call provider). Absent →
   // scoring sofia returns 503 with instructions; dialpad teams unaffected.
   RETELL_API_KEY?: string;
+  // Dashboard-set app secret: Sofia's GAS webapp (scorecard emails deliver
+  // to Jackson via the overlay's EMAIL.TO_OVERRIDE — Sofia has no inbox).
+  GAS_WEBAPP_URL_SOFIA?: string;
   // Dashboard-set app secret: comma-separated emails allowed on /lookup
   // (interim deny-by-default compliance lock until per-team RBAC lands).
   LOOKUP_ALLOW?: string;
@@ -63,7 +66,11 @@ export default {
       const teamRes = await handleTeamRoutes(
         request, env.DB, url, env.DIALPAD_API_KEY, env.LOOKUP_ALLOW,
         { url: env.PULPO_MCP_URL, token: env.PULPO_MCP_TOKEN },
-        { member_support: env.GAS_WEBAPP_URL_MS, sales: env.GAS_WEBAPP_URL_SALES },
+        {
+          member_support: env.GAS_WEBAPP_URL_MS,
+          sales: env.GAS_WEBAPP_URL_SALES,
+          sofia: env.GAS_WEBAPP_URL_SOFIA,
+        },
         env.RETELL_API_KEY
       );
       if (teamRes) return teamRes;
@@ -184,12 +191,19 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
       }
       const { cron } = await request.json() as { cron: string; timestamp: string };
       const { runHourlyPump, runDailyMaintenance } = await import("./lib/maintenance.js");
+      const cronEnv = {
+        RETELL_API_KEY: env.RETELL_API_KEY,
+        DIALPAD_API_KEY: env.DIALPAD_API_KEY,
+        PULPO_MCP_URL: env.PULPO_MCP_URL,
+        PULPO_MCP_TOKEN: env.PULPO_MCP_TOKEN,
+        GAS_WEBAPP_URL_SOFIA: env.GAS_WEBAPP_URL_SOFIA,
+      };
       let note: string;
       try {
         note =
           cron === "37 9 * * *"
-            ? await runDailyMaintenance(env.DB, request)
-            : await runHourlyPump(env.DB, request); // "7 * * * *" + default
+            ? await runDailyMaintenance(env.DB, request, cronEnv)
+            : await runHourlyPump(env.DB, request, cronEnv); // "7 * * * *" + default
       } catch (err) {
         note = JSON.stringify({ error: String((err as any)?.message ?? err).slice(0, 300) });
       }
@@ -230,16 +244,17 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
       // qa-scoring-pipeline: persist the evaluation (draft/finalize + toast)
       if (workflowName === "qa-scoring-pipeline") {
         const { scoringCallback, drainScoreQueue } = await import("./routes/scoring.js");
+        const jobId = (body as any).persist
+          ? `score-${(body as any).team_id}-${(body as any).call_id}-${String((body as any).persist.agent_name ?? "")
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")}`
+          : null;
         try {
           const outcome = await scoringCallback(body, env.DB, {
             member_support: env.GAS_WEBAPP_URL_MS,
             sales: env.GAS_WEBAPP_URL_SALES,
+            sofia: env.GAS_WEBAPP_URL_SOFIA,
           });
-          const jobId = (body as any).persist
-            ? `score-${(body as any).team_id}-${(body as any).call_id}-${String((body as any).persist.agent_name ?? "")
-                .toLowerCase()
-                .replace(/[^a-z0-9]+/g, "-")}`
-            : null;
           if (jobId) {
             await env.DB.prepare(
               "UPDATE workflow_runs SET status = ?, result = ? WHERE run_id = ?"
@@ -259,7 +274,25 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
           }
           console.log(`[scoring] ${outcome.ok ? "OK" : "FAIL"}: ${outcome.note}`);
         } catch (err) {
-          console.log(`[scoring] persist threw: ${String(err).slice(0, 300)}`);
+          // A thrown persist must still terminalize the job — otherwise the
+          // queue row sits 'running' until the 25-min stale rescue mislabels
+          // it "no callback" (observed: coached-eval rescore FK throw).
+          const msg = `persist threw: ${String(err).slice(0, 300)}`;
+          console.log(`[scoring] ${msg}`);
+          if (jobId) {
+            try {
+              await env.DB.prepare(
+                "UPDATE workflow_runs SET status = 'error', result = ? WHERE run_id = ?"
+              )
+                .bind(JSON.stringify({ ok: false, note: msg }), jobId)
+                .run();
+              await env.DB.prepare(
+                "UPDATE qa_score_queue SET status = 'error', last_error = ?, finished_at = ? WHERE job_id = ?"
+              )
+                .bind(msg, new Date().toISOString(), jobId)
+                .run();
+            } catch {}
+          }
         }
         // A finished run frees the single workflow slot — start the next
         // queued job even when persist failed or the job id was missing.

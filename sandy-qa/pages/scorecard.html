@@ -610,26 +610,28 @@ function buildScorecardPanel(jobId, sc, filename, callId, sheetsRow) {
     .filter(ts => !ts.auto_value)
     .map(ts => {
       if (ts.score_type === 'manual' || ts.score_type === 'manual_yn') {
-        const manualNaOpt = ts.na_applicable ? `<option value="NA">N/A</option>` : '';
+        // Prefill from the persisted evaluation (restored scorecards):
+        // without this, a re-opened scorecard rendered "—" + empty
+        // reasoning even though the values were saved in D1.
+        const saved = ((sc.manual_sections || []).find(m => m.id === ts.id)) || {};
+        const savedVal = String(
+          ts.score_type === 'manual_yn'
+            ? (saved.yn_value ?? '')
+            : (saved.yn_value === 'NA' ? 'NA' : (saved.score ?? ''))
+        );
+        const opt = (v, label) =>
+          `<option value="${v}" ${savedVal === v ? 'selected' : ''}>${label}</option>`;
+        const manualNaOpt = ts.na_applicable ? opt('NA', 'N/A') : '';
         const options = ts.score_type === 'manual_yn'
-          ? `<option value="" selected>—</option>
-             <option value="Y">Y</option>
-             <option value="N">N</option>
-             ${manualNaOpt}`
-          : `<option value="" selected>—</option>
-             <option value="1">1/5</option>
-             <option value="2">2/5</option>
-             <option value="3">3/5</option>
-             <option value="4">4/5</option>
-             <option value="5">5/5</option>
-             ${manualNaOpt}`;
+          ? `${opt('', '—')}${opt('Y', 'Y')}${opt('N', 'N')}${manualNaOpt}`
+          : `${opt('', '—')}${opt('1', '1/5')}${opt('2', '2/5')}${opt('3', '3/5')}${opt('4', '4/5')}${opt('5', '5/5')}${manualNaOpt}`;
         return `
           <div class="section-row" style="border-left:3px solid var(--warning);">
             <div>
               <div class="section-name" style="color:var(--warning);">${ts.name} — Score Required</div>
               <textarea class="section-reasoning" id="manual-reasoning-${ts.id}-${jobId}"
                 placeholder="Enter reasoning for ${ts.name} score (persisted for progression analysis)"
-                rows="2" style="width:100%; margin-top:0.4rem; font-family:'DM Mono',monospace; font-size:0.82rem; border:1px solid #d1d5db; border-radius:4px; padding:0.4rem; resize:vertical;"></textarea>
+                rows="2" style="width:100%; margin-top:0.4rem; font-family:'DM Mono',monospace; font-size:0.82rem; border:1px solid #d1d5db; border-radius:4px; padding:0.4rem; resize:vertical;">${escHtml(saved.reasoning || '')}</textarea>
             </div>
             <div>
               <select class="score-select" id="manual-score-${ts.id}-${jobId}" onchange="checkManualScores('${jobId}')">
@@ -703,7 +705,12 @@ function buildScorecardPanel(jobId, sc, filename, callId, sheetsRow) {
   `;
 
   const manualSecs = _teamSections.filter(s => s.score_type === 'manual' || s.score_type === 'manual_yn');
-  const initialDisabled = manualSecs.length > 0;
+  // Prefilled manual values (restored scorecards) satisfy the gate.
+  const manualPrefilled = manualSecs.every(s => {
+    const m = ((sc.manual_sections || []).find(x => x.id === s.id)) || {};
+    return (m.score ?? m.yn_value ?? null) !== null;
+  });
+  const initialDisabled = manualSecs.length > 0 && !manualPrefilled;
   const initialStatus = initialDisabled
     ? `Score ${manualSecs.map(s => s.name).join(' + ')} to enable Approve & Send.`
     : 'Review scores and click to send evaluation email.';
@@ -1044,7 +1051,7 @@ async function reapproveFinalized() {
          : ' Agent notified via the disclaimer email.')
       : '';
     statusEl.textContent =
-      `Re-approved — engine score ${data.old_score} → ${data.overall_score}.${duty}`;
+      `Re-approved — engine score ${data.old_score ?? '—'} → ${data.overall_score}.${duty}`;
     panel.querySelectorAll('select, textarea').forEach(el => el.disabled = true);
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}. You can retry.`;

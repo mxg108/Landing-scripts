@@ -20,6 +20,7 @@ export interface FrameRow {
   // contract — excluded from parity's serializeTsFrame on purpose).
   caller_name: string;
   agent_email: string;
+  dialpad_link: string; // stored review link (retell: public_log_url)
 }
 
 export function stripAccents(s: string): string {
@@ -69,7 +70,8 @@ export async function fetchHistoryFrame(
       .prepare(
         `SELECT e.id, e.agent_id, e.agent_name_raw, e.evaluator_email, e.overall_score,
                 e.caller_name, e.agent_email,
-                e.dialpad_link, e.dialpad_entry_point_call_id, e.dialpad_call_metadata,
+                e.dialpad_link, e.dialpad_entry_point_call_id, e.dialpad_call_id,
+                e.dialpad_call_metadata,
                 COALESCE(e.call_connected_at, e.approved_at) AS ts, e.approved_at,
                 COALESCE(a.canonical_name, a.name, e.agent_name_raw) AS agent_display,
                 COALESCE(a.active, 0) AS is_active,
@@ -172,7 +174,15 @@ export async function fetchHistoryFrame(
     const meta = ev.dialpad_call_metadata ? JSON.parse(ev.dialpad_call_metadata) : {};
     const link =
       ev.dialpad_link || meta?.backfill?.superseded_dialpad_link || "";
-    const evalId = evalIdFromLink(link) || (ev.dialpad_entry_point_call_id ?? "");
+    // Retell links (public_log_url) parse to a shared garbage segment
+    // ("public.log") that collapsed every sofia datapoint URL — use the
+    // provider call id. Branch on the TEAM's provider, not link content:
+    // legacy Railway rows carry arbitrary non-dialpad links (forms, contact
+    // URLs) whose parsed garbage IS the parity-serialized eval_id.
+    const evalId =
+      config.provider === "retell"
+        ? (ev.dialpad_call_id ?? "")
+        : evalIdFromLink(link) || (ev.dialpad_entry_point_call_id ?? "");
 
     const secVals = byEval.get(ev.id) ?? {};
     const num: Record<string, number | null> = {};
@@ -195,6 +205,9 @@ export async function fetchHistoryFrame(
       yn,
       caller_name: ev.caller_name ?? "",
       agent_email: ev.agent_email ?? "",
+      // Only retell rows carry their stored review link; dialpad teams
+      // keep the downstream callreview construction untouched.
+      dialpad_link: config.provider === "retell" ? link : "",
     });
   }
   return rows;

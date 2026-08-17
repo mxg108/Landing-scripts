@@ -43,7 +43,11 @@ _TEAMS_DIR = _REPO_ROOT / "qa-automation" / "teams"
 # Make backend.* importable
 sys.path.insert(0, str(_AI_SCORING))
 
-from backend.config.team_config import TeamConfig, get_team_config  # noqa: E402
+from backend.config.team_config import (  # noqa: E402
+    TeamConfig,
+    _assemble_rubric_block,
+    get_team_config,
+)
 
 
 def _js_string(value: str | None) -> str:
@@ -181,6 +185,15 @@ def render_config_js(team_id: str, config: TeamConfig) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("team_id", help="Team id (matches teams/{id}.json)")
+    parser.add_argument(
+        "--config",
+        help=(
+            "Explicit path to the team JSON (bypasses backend/config/teams/ — "
+            "for teams that must NOT be visible to the Railway backend, whose "
+            "team registry glob-loads that directory; e.g. sofia lives in "
+            "qa-automation/teams/sofia/team_config.json)"
+        ),
+    )
     args = parser.parse_args()
 
     team_id = args.team_id
@@ -191,7 +204,15 @@ def main() -> int:
         print(f"Error: team directory not found: {out_dir}", file=sys.stderr)
         return 1
 
-    config = get_team_config(team_id)
+    if args.config:
+        # Same assembly get_team_config performs, from an explicit path.
+        raw = json.loads(Path(args.config).read_text(encoding="utf-8"))
+        raw["rubric"] = _assemble_rubric_block(raw)
+        for legacy_key in ("rubric_version", "sections", "scoring_prompt"):
+            raw.pop(legacy_key, None)
+        config = TeamConfig(**raw)
+    else:
+        config = get_team_config(team_id)
     text = render_config_js(team_id, config)
     out_path.write_text(text, encoding="utf-8")
 

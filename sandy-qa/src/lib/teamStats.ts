@@ -540,9 +540,11 @@ export function assembleTeamEvals(
       timestamp: iso(r.ts),
       eval_approved_at: iso(r.eval_approved_at),
       overall_score: r.overall_score,
-      dialpad_link: r.eval_id
-        ? `https://dialpad.com/callhistory/callreview/${r.eval_id}`
-        : "",
+      // r.dialpad_link is set only on retell rows (public_log_url); dialpad
+      // teams keep the constructed callreview URL exactly as before.
+      dialpad_link:
+        r.dialpad_link ||
+        (r.eval_id ? `https://dialpad.com/callhistory/callreview/${r.eval_id}` : ""),
       eval_id: r.eval_id,
       supervisor: r.supervisor || null,
       evaluator_email: r.manager_email || null,
