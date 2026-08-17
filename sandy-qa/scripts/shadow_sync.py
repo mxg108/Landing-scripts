@@ -40,24 +40,33 @@ SANDY_ID_BASE = 10_000_000
 WIPE_ORDER = {
     "qa_agent_stat_points": f"WHERE evaluation_id < {SANDY_ID_BASE}",
     "qa_coaching_evaluations": f"WHERE evaluation_id < {SANDY_ID_BASE}",
-    "qa_coachings": "",
+    # Parents range-scoped like their children (CoachingLoopSpec §2 / CL0):
+    # Sandy-born rows (>= SANDY_ID_BASE) survive the child wipes, so an
+    # unscoped parent wipe fails the deferred-FK check at COMMIT and D1
+    # rolls the whole sync back (observed: every run 2026-08-03 12:30 →
+    # 2026-08-16 FAILed on SQLITE_CONSTRAINT_FOREIGNKEY). Same reason
+    # qa_agents is NOT in this dict at all — surviving Sandy evals/
+    # coachings/assessments reference agent rows, and the sofia roster row
+    # has no Railway counterpart to re-import; agents sync as UPSERTs
+    # (sync_agents_upsert below), never deletes.
+    "qa_coachings": f"WHERE id < {SANDY_ID_BASE}",
     "qa_evaluation_tags": f"WHERE evaluation_id < {SANDY_ID_BASE}",
-    "qa_assessment_sections": "",
-    "qa_assessments": "",
+    "qa_assessment_sections": f"WHERE assessment_id < {SANDY_ID_BASE}",
+    "qa_assessments": f"WHERE id < {SANDY_ID_BASE}",
     "qa_formula_compliance_sweeps": f"WHERE evaluation_id < {SANDY_ID_BASE}",
     "qa_evaluation_sections": f"WHERE evaluation_id < {SANDY_ID_BASE}",
     "qa_evaluations": f"WHERE id < {SANDY_ID_BASE}",
-    "qa_agents": "",
     # FK-free tables re-imported by RESYNC — wipe or their PKs collide.
     "qa_tags": "",
     "qa_score_audit": f"WHERE id < {SANDY_ID_BASE}",
     "qa_score_audit_archive": "",
     "qa_api_audit_log": "",
 }
-# Re-import: agents first, then everything from qa_evaluations onward in
-# pg_to_d1's FK-safe order (cc_* tables stay on their initial snapshot until
-# the CC slice; dispositions freshness is not shadow-gating).
-RESYNC = [("qa.agents", "qa_agents")] + [
+# Re-import: everything from qa_evaluations onward in pg_to_d1's FK-safe
+# order (cc_* tables stay on their initial snapshot until the CC slice;
+# dispositions freshness is not shadow-gating). qa_agents is deliberately
+# absent — see sync_agents_upsert.
+RESYNC = [
     t for t in TABLES if t[1] in (
         "qa_evaluations", "qa_evaluation_sections", "qa_formula_compliance_sweeps",
         "qa_agent_stat_points", "qa_tags", "qa_evaluation_tags", "qa_coachings",
@@ -87,6 +96,40 @@ def d1_finalized_ids() -> set[int]:
 def truncate(s, n=280):
     s = s or ""
     return s if len(s) <= n else s[: n - 1] + "…"
+
+
+async def sync_agents_upsert(conn) -> int:
+    """qa_agents: UPSERT by id, never DELETE (the cc_calls pattern — and
+    explicitly NOT ``INSERT OR REPLACE``, whose delete half would cascade).
+    A wipe here is doubly wrong: surviving Sandy-born rows (evals/coachings/
+    assessments >= SANDY_ID_BASE) hold agent_id FKs that fail the deferred
+    check at commit, and provider-team roster rows Railway doesn't have
+    (sofia, seeded by migration 0005) would be destroyed with nothing to
+    re-import. Departures propagate as active=0 UPDATEs from PG."""
+    cols = [
+        r["column_name"] for r in await conn.fetch(
+            """SELECT column_name FROM information_schema.columns
+               WHERE table_schema = 'qa' AND table_name = 'agents'
+               AND is_generated = 'NEVER' ORDER BY ordinal_position""")
+    ]
+    rows = await conn.fetch(f"SELECT {', '.join(cols)} FROM qa.agents")
+    if not rows:
+        return 0
+    col_list = ", ".join(cols)
+    updates = ", ".join(f"{c}=excluded.{c}" for c in cols if c != "id")
+    stmts = ["PRAGMA defer_foreign_keys = true;"]
+    for r in rows:
+        vals = ", ".join(pg_to_d1.lit(r[c]) for c in cols)
+        stmts.append(
+            f"INSERT INTO qa_agents ({col_list}) VALUES ({vals}) "
+            f"ON CONFLICT(id) DO UPDATE SET {updates};"
+        )
+        if sum(len(s) for s in stmts) > 300_000:
+            pg_to_d1.apply_sql("\n".join(stmts))
+            stmts = ["PRAGMA defer_foreign_keys = true;"]
+    if len(stmts) > 1:
+        pg_to_d1.apply_sql("\n".join(stmts))
+    return len(rows)
 
 
 CC_CALLS_COLS = [
@@ -192,7 +235,9 @@ async def main():
                 f"DELETE FROM qa_evaluations WHERE id IN ({ids});"
             )
 
-        # 1. wipe + re-import of the RAILWAY-OWNED qa_* range (updates included)
+        # 1. roster upsert (no deletes — see sync_agents_upsert), then wipe +
+        # re-import of the RAILWAY-OWNED qa_* range (updates included)
+        await sync_agents_upsert(conn)
         pg_to_d1.apply_sql(
             "PRAGMA defer_foreign_keys = true;\n"
             + "\n".join(f"DELETE FROM {t} {w};".strip() for t, w in WIPE_ORDER.items())
