@@ -270,7 +270,13 @@
     </div>
 
     <div id="trendCard" class="card hidden">
-      <h2>Overall Score Trend</h2>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <h2 style="margin-bottom:0">Overall Score Trend</h2>
+        <span class="viz-legend" style="margin-bottom:0">
+          <span class="chip" id="modeSmoothed" onclick="setChartMode('smoothed')">Smoothed</span>
+          <span class="chip" id="modeRaw" onclick="setChartMode('raw')">Raw calls</span>
+        </span>
+      </div>
       <div class="chart-wrapper">
         <canvas id="trendChart"></canvas>
       </div>
@@ -529,6 +535,9 @@
 
       document.getElementById('placeholder').classList.add('hidden');
       _lastHistory = history;
+      _view = buildView(history);
+      document.getElementById('modeSmoothed').classList.toggle('off', _viewMode !== 'smoothed');
+      document.getElementById('modeRaw').classList.toggle('off', _viewMode !== 'raw');
       renderStats(history);
       renderTrendChart(history);
       renderSectionProgress(history);
@@ -633,20 +642,27 @@
       const ctx = document.getElementById('trendChart').getContext('2d');
       if (trendChartInstance) { trendChartInstance.destroy(); trendChartInstance = null; }
 
-      const labels = history.map(r => {
-        const d = new Date(r.timestamp);
-        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      });
-      const data = history.map(r => r.overall_score);
-      const pointColors = data.map(s => overallColor(s));
-
-      trendChartInstance = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels,
-          datasets: [{
+      const view = _view;
+      const pointColors = view.overall.map(s => overallColor(s));
+      const datasets = view.mode === 'smoothed'
+        ? [{
+            label: 'Trend (EWMA)',
+            data: view.overallLine,
+            borderColor: '#1A61D9',
+            backgroundColor: 'rgba(26, 97, 217, 0.08)',
+            fill: true, tension: 0.3, borderWidth: 3,
+            pointRadius: 0, pointHoverRadius: 0,
+          }, {
+            label: 'Daily average',
+            data: view.overall,
+            showLine: false,
+            pointBackgroundColor: pointColors,
+            pointBorderColor: pointColors,
+            pointRadius: 4, pointHoverRadius: 7,
+          }]
+        : [{
             label: 'Overall Score',
-            data,
+            data: view.overall,
             borderColor: '#1A61D9',
             backgroundColor: 'rgba(26, 97, 217, 0.1)',
             fill: true,
@@ -655,16 +671,18 @@
             pointBorderColor: pointColors,
             pointRadius: 5,
             pointHoverRadius: 7
-          }]
-        },
+          }];
+
+      trendChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: { labels: view.labels, datasets },
         options: {
           responsive: true,
           maintainAspectRatio: false,
           onClick: (event, activeElements) => {
             if (activeElements.length) {
-              const idx = activeElements[0].index;
-              const rec = history[idx];
-              if (rec.eval_id) window.location.href = `/datapoint/${TEAM_ID}/${rec.eval_id}`;
+              const ref = view.clickRef(activeElements[0].index);
+              if (ref) window.location.href = `/datapoint/${TEAM_ID}/${ref}`;
             }
           },
           scales: {
@@ -675,15 +693,20 @@
               callbacks: {
                 afterBody(items) {
                   const idx = items[0].dataIndex;
-                  const rec = history[idx];
-                  let lines = [];
-                  if (rec.key_strengths) {
-                    const str = typeof rec.key_strengths === 'string' ? rec.key_strengths : '';
-                    lines.push('Strengths: ' + str.substring(0, 80) + (str.length > 80 ? '...' : ''));
+                  const lines = [];
+                  if (view.mode === 'smoothed' && view.counts[idx] > 1) {
+                    lines.push(`${view.counts[idx]} calls this day (avg shown)`);
                   }
-                  if (rec.improvements) {
-                    const imp = typeof rec.improvements === 'string' ? rec.improvements : '';
-                    lines.push('Improve: ' + imp.substring(0, 80) + (imp.length > 80 ? '...' : ''));
+                  const rec = view.recAt(idx);
+                  if (rec) {
+                    if (rec.key_strengths) {
+                      const str = typeof rec.key_strengths === 'string' ? rec.key_strengths : '';
+                      lines.push('Strengths: ' + str.substring(0, 80) + (str.length > 80 ? '...' : ''));
+                    }
+                    if (rec.improvements) {
+                      const imp = typeof rec.improvements === 'string' ? rec.improvements : '';
+                      lines.push('Improve: ' + imp.substring(0, 80) + (imp.length > 80 ? '...' : ''));
+                    }
                   }
                   return lines;
                 }
@@ -802,7 +825,105 @@
       }
       return tsList.length - 0.5;
     }
+    // LA-calendar-day buckets over ascending epoch-ms timestamps → groups
+    // of source indexes (the smoothed view's x unit: one point per day).
+    function laDay(ms) {
+      return new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Los_Angeles' })
+        .format(new Date(ms));
+    }
+    function dayBuckets(tsArray) {
+      const out = [];
+      for (let i = 0; i < tsArray.length; i++) {
+        const day = laDay(tsArray[i]);
+        if (!out.length || out[out.length - 1].day !== day)
+          out.push({ day, ts: tsArray[i], idxs: [] });
+        out[out.length - 1].idxs.push(i);
+      }
+      return out;
+    }
+    // pandas-style adjusted EWMA (the house smoothing — same family the
+    // team dashboard's agent EWMA uses). Nulls carry the previous smoothed
+    // value forward (no decay), so section gaps don't dip the trend.
+    function ewmaSeries(values, span) {
+      const alpha = 2 / (span + 1);
+      let num = 0, den = 0;
+      const out = [];
+      for (const v of values) {
+        if (v === null || v === undefined || Number.isNaN(v)) {
+          out.push(den > 0 ? Math.round((num / den) * 10) / 10 : null);
+          continue;
+        }
+        num = num * (1 - alpha) + v;
+        den = den * (1 - alpha) + 1;
+        out.push(Math.round((num / den) * 10) / 10);
+      }
+      return out;
+    }
     /* PURE-END */
+
+    // ── chart view model: 'smoothed' (default) = day buckets + EWMA;
+    //    'raw' = one point per eval (drill-down view) ─────────────────────
+    const EWMA_SPAN = 5;
+    let _viewMode = localStorage.getItem('qa_chart_mode') === 'raw' ? 'raw' : 'smoothed';
+    let _view = null;
+
+    function buildView(history) {
+      const fmt = ms => new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const secVal = (r, key) => r.sections ? parseSectionScore(r.sections[key]) : null;
+      if (_viewMode === 'raw') {
+        return {
+          mode: 'raw',
+          labels: history.map(r => fmt(Date.parse(r.timestamp))),
+          tsList: history.map(r => Date.parse(r.timestamp)),
+          counts: history.map(() => 1),
+          overall: history.map(r => r.overall_score),
+          overallLine: null,
+          clickRef: i => history[i].eval_id || null,
+          section: key => history.map(r => secVal(r, key)),
+          passRate: key => passRateSeries(
+            history.map(r => r.sections ? (r.sections[key] || {}).score : null), 5, 3),
+          recAt: i => history[i],
+        };
+      }
+      const buckets = dayBuckets(history.map(r => Date.parse(r.timestamp)));
+      const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+      const overall = buckets.map(b =>
+        Math.round(mean(b.idxs.map(i => history[i].overall_score)) * 10) / 10);
+      return {
+        mode: 'smoothed',
+        labels: buckets.map(b => fmt(b.ts)),
+        tsList: buckets.map(b => b.ts),
+        counts: buckets.map(b => b.idxs.length),
+        overall,
+        overallLine: ewmaSeries(overall, EWMA_SPAN),
+        clickRef: i => buckets[i].idxs.length === 1
+          ? (history[buckets[i].idxs[0]].eval_id || null) : null,
+        section: key => ewmaSeries(buckets.map(b => {
+          const vals = b.idxs.map(i => secVal(history[i], key)).filter(v => v !== null);
+          return vals.length ? mean(vals) : null;
+        }), EWMA_SPAN),
+        passRate: key => {
+          const per = passRateSeries(
+            history.map(r => r.sections ? (r.sections[key] || {}).score : null), 5, 3);
+          return buckets.map(b => per[b.idxs[b.idxs.length - 1]]);
+        },
+        recAt: i => buckets[i].idxs.length === 1 ? history[buckets[i].idxs[0]] : null,
+      };
+    }
+
+    function setChartMode(mode) {
+      if (mode === _viewMode) return;
+      _viewMode = mode;
+      try { localStorage.setItem('qa_chart_mode', mode); } catch (e) {}
+      document.getElementById('modeSmoothed').classList.toggle('off', mode !== 'smoothed');
+      document.getElementById('modeRaw').classList.toggle('off', mode !== 'raw');
+      if (_lastHistory.length) {
+        _view = buildView(_lastHistory);
+        renderTrendChart(_lastHistory);
+        renderSectionProgress(_lastHistory);
+        renderPassRate(_lastHistory);
+      }
+    }
 
     let _lastHistory = [];
     let _coachings = [];
@@ -818,8 +939,8 @@
     const coachingMarkers = {
       id: 'coachingMarkers',
       afterDraw(chart) {
-        if (!_coachings.length || !_lastHistory.length) return;
-        const tsList = _lastHistory.map(r => Date.parse(r.timestamp));
+        if (!_coachings.length || !_view || !_view.tsList.length) return;
+        const tsList = _view.tsList;
         const xs = chart.scales.x;
         const ctx2 = chart.ctx;
         const n = tsList.length;
@@ -877,30 +998,36 @@
     function renderSectionProgress(history) {
       const ctx = document.getElementById('sectionProgressChart').getContext('2d');
       if (sectionProgressInstance) { sectionProgressInstance.destroy(); sectionProgressInstance = null; }
-      const labels = history.map(r => new Date(r.timestamp)
-        .toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+      const view = _view;
+      const smoothed = view.mode === 'smoothed';
       const names = _numericSectionKeys.map(k => _sectionLabels[k] || k);
       const datasets = _numericSectionKeys.map((key, i) => ({
         label: names[i],
-        data: history.map(r => r.sections ? parseSectionScore(r.sections[key]) : null),
+        data: view.section(key),
         borderColor: SECTION_PALETTE[i % SECTION_PALETTE.length],
         backgroundColor: SECTION_PALETTE[i % SECTION_PALETTE.length],
-        borderWidth: 2, pointRadius: 3, pointHoverRadius: 6,
+        borderWidth: 2,
+        pointRadius: smoothed ? 0 : 3,
+        pointHoverRadius: smoothed ? 4 : 6,
         spanGaps: false, tension: 0.25, fill: false,
       }));
       sectionProgressInstance = new Chart(ctx, {
         type: 'line',
-        data: { labels, datasets },
+        data: { labels: view.labels, datasets },
         options: {
           responsive: true, maintainAspectRatio: false,
           onClick: (event, active) => {
             if (active.length) {
-              const rec = history[active[0].index];
-              if (rec.eval_id) window.location.href = `/datapoint/${TEAM_ID}/${rec.eval_id}`;
+              const ref = view.clickRef(active[0].index);
+              if (ref) window.location.href = `/datapoint/${TEAM_ID}/${ref}`;
             }
           },
           scales: { y: { min: 1, max: 5, ticks: { stepSize: 1 } } },
-          plugins: { legend: { display: false } },
+          plugins: {
+            legend: { display: false },
+            tooltip: smoothed ? { callbacks: { label: (item) =>
+              `${item.dataset.label}: ${item.parsed.y} (EWMA of daily avg)` } } : {},
+          },
         },
         plugins: [coachingMarkers],
       });
@@ -915,11 +1042,10 @@
       const block = document.getElementById('passRateBlock');
       if (passRateInstance) { passRateInstance.destroy(); passRateInstance = null; }
       if (!ynKeys.length) { block.classList.add('hidden'); return; }
-      const series = ynKeys.map(key => passRateSeries(
-        history.map(r => r.sections ? (r.sections[key] || {}).score : null), 5, 3));
+      const view = _view;
+      const series = ynKeys.map(key => view.passRate(key));
       if (series.every(s => s.every(v => v === null))) { block.classList.add('hidden'); return; }
-      const labels = history.map(r => new Date(r.timestamp)
-        .toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+      const labels = view.labels;
       const names = ynKeys.map(k => _sectionLabels[k] || k);
       const ctx = document.getElementById('passRateChart').getContext('2d');
       passRateInstance = new Chart(ctx, {
