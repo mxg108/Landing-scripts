@@ -297,11 +297,14 @@ the new chart answers "where are they heading"):
   color-coding reads as "which section" first, "how good" via position.
 - YN/binary sections plot as **rolling pass-rate lines** (owner answer
   §11.9 — v1, not deferred): trailing-5 applicable evals (NA excluded;
-  fewer than 3 applicable → no point), `Y/(Y+N)` as a percentage on a
-  right-hand 0–100% axis (`y1`), **dashed** line style to distinguish the
-  derived series from raw numeric ones, same per-section hue palette,
-  legend chips alongside the numeric sections. Tooltip shows the window
-  ("4/5 passed, last 5 applicable").
+  fewer than 3 applicable → no point), `Y/(Y+N)` as a percentage,
+  **dashed** line style to distinguish the derived series from raw numeric
+  ones. *CL2 build amendment:* NOT on a second y-axis of the numeric chart
+  — dual-axis is the canonical chart anti-pattern — but as a **second
+  stacked panel** in the same card (own 0–100% axis, shared x categories,
+  own legend). Each panel assigns its hues from slot 1 of the validated
+  categorical order, so neither panel ever cycles. Tooltip shows the
+  window ("4/5 passed, last 5 applicable").
 
 **F3 — coaching markers** on BOTH the overall and section charts: a shared
 `coachingMarkers` Chart.js plugin (same afterDraw pattern as the existing
