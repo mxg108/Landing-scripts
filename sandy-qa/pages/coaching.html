@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Coaching</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --navy: #15192D; --accent: #1A61D9; --bg: #E7EFFB; --surface: #fff;
+      --border: #c9d5e8; --text: #15192D; --muted: #5a6478;
+      --green: #28A745; --amber: #E8A317; --red: #D9534F;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'DM Mono', monospace; background: var(--bg); color: var(--text); min-height: 100vh; }
+    h1, h2, h3 { font-family: 'Fraunces', serif; }
+    .header { background: var(--navy); color: #fff; padding: 18px 24px; display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+    .header h1 { font-size: 1.25rem; }
+    .header .sub { font-size: .75rem; color: rgba(255,255,255,.65); }
+    .header a { color: #9ec5f4; font-size: .75rem; text-decoration: none; }
+    .container { max-width: 1000px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+    .card h2 { font-size: 1.05rem; margin-bottom: 14px; color: var(--navy); }
+    .count-badge { display: inline-block; min-width: 22px; text-align: center; padding: 1px 8px; border-radius: 999px; background: var(--red); color: #fff; font-size: .75rem; font-family: 'DM Mono', monospace; vertical-align: middle; }
+    .count-badge.zero { background: var(--green); }
+    table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+    th { text-align: left; font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); }
+    td { padding: 8px; border-bottom: 1px solid #eef2f8; vertical-align: top; }
+    td a { color: var(--accent); }
+    .empty { color: var(--muted); font-size: .82rem; padding: 12px 4px; }
+    .pill { font-size: .64rem; font-weight: 500; padding: 2px 9px; border-radius: 999px; color: #fff; text-transform: uppercase; letter-spacing: .04em; }
+    .pill.pending { background: var(--accent); }
+    .pill.completed { background: #6ba87b; }
+    .pill.cancelled { background: var(--muted); }
+    .pill.origin { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    .pill.outcome-met { background: var(--green); }
+    .pill.outcome-partially_met { background: var(--amber); }
+    .pill.outcome-not_met { background: var(--red); }
+    .overdue { color: var(--red); font-weight: 500; }
+    button.act {
+      font-family: 'DM Mono', monospace; font-size: .75rem; padding: 6px 14px;
+      border-radius: 6px; border: 1px solid var(--accent); background: var(--accent);
+      color: #fff; cursor: pointer;
+    }
+    button.act.secondary { background: transparent; color: var(--accent); }
+    button.act:disabled { opacity: .5; cursor: not-allowed; }
+    .confirm-panel { background: var(--bg); border: 1px dashed var(--border); border-radius: 10px; padding: 14px; margin: 6px 0 10px; }
+    .facts { font-size: .78rem; color: var(--muted); margin-bottom: 10px; line-height: 1.5; }
+    .facts b { color: var(--text); }
+    .verdict-row { display: flex; gap: 8px; align-items: baseline; margin-bottom: 8px; flex-wrap: wrap; }
+    .verdict-row .ctext { flex: 2 1 300px; font-size: .8rem; line-height: 1.5; }
+    .verdict-row select, .verdict-row input, .confirm-panel textarea {
+      font-family: 'DM Mono', monospace; font-size: .76rem; padding: 6px 8px;
+      border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+    }
+    .verdict-row select { flex: 0 0 150px; }
+    .verdict-row input { flex: 1 1 180px; }
+    .confirm-panel textarea { width: 100%; min-height: 48px; margin-top: 6px; }
+    .filters { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+    .filters select, .filters input {
+      font-family: 'DM Mono', monospace; font-size: .78rem; padding: 7px 9px;
+      border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+    }
+    .detail { background: var(--bg); border-radius: 8px; padding: 12px; margin: 4px 0 8px; font-size: .78rem; line-height: 1.55; }
+    .detail ul { list-style: none; margin: 6px 0; }
+    .status-line { font-size: .75rem; color: var(--muted); margin-top: 8px; }
+    @media (max-width: 640px) { .hide-sm { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Coaching</h1>
+    <span class="sub" id="teamLabel"></span>
+    <a id="dashLink" href="#">Team dashboard ›</a>
+    <a id="consoleLink" href="#">Scoring console ›</a>
+  </div>
+
+  <div class="container">
+    <div class="card">
+      <h2>Due for confirmation <span class="count-badge" id="dueCount">…</span></h2>
+      <div id="dueBody"><div class="empty">Loading…</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Upcoming deadlines</h2>
+      <div id="upcomingBody"><div class="empty">Loading…</div></div>
+    </div>
+
+    <div class="card">
+      <h2>All sessions</h2>
+      <div class="filters">
+        <select id="fStatus" onchange="loadAll()">
+          <option value="">All statuses</option>
+          <option value="pending">Pending</option>
+          <option value="completed">Conducted</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+        <input id="fAgent" type="text" placeholder="Filter by agent…" oninput="debounceAll()" />
+      </div>
+      <div id="allBody"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+
+  <script>
+    const TEAM_ID = (location.pathname.match(/^\/coaching\/([^\/]+)/) || [, 'member_support'])[1];
+    const API_BASE = `/api/${TEAM_ID}`;
+    document.getElementById('teamLabel').textContent = TEAM_ID.replace(/_/g, ' ');
+    document.getElementById('dashLink').href = `/dashboard/${TEAM_ID}`;
+    document.getElementById('consoleLink').href = `/score/${TEAM_ID}`;
+
+    const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    // Timestamps are UTC ISO; render the LA calendar day (the project TZ).
+    const laDay = iso => iso ? new Intl.DateTimeFormat('sv-SE',
+      { timeZone: 'America/Los_Angeles' }).format(new Date(iso)) : '';
+    const OUTCOME_COLORS = { met: 'var(--green)', partially_met: 'var(--amber)', not_met: 'var(--red)' };
+    const GLYPHS = { open: '○', met: '✓', partially_met: '◐', not_met: '✗', waived: '–' };
+    const agentLink = name =>
+      `<a href="/dashboard/${TEAM_ID}/agent/${encodeURIComponent(name)}" target="_blank" rel="noopener">${esc(name)}</a>`;
+
+    async function getJSON(url) {
+      const res = await fetch(url);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      return data;
+    }
+
+    // ── due queue + confirm flow ──────────────────────────────────────────
+    let _due = [];
+
+    async function loadQueue() {
+      const dueBody = document.getElementById('dueBody');
+      const upBody = document.getElementById('upcomingBody');
+      const count = document.getElementById('dueCount');
+      try {
+        const data = await getJSON(`${API_BASE}/coaching-queue`);
+        _due = data.due;
+        count.textContent = String(data.count);
+        count.classList.toggle('zero', data.count === 0);
+        if (!data.due.length) {
+          dueBody.innerHTML = '<div class="empty">Queue clear — no commitments awaiting confirmation.</div>';
+        } else {
+          dueBody.innerHTML = `<table><thead><tr>
+              <th>Agent</th><th>Conducted</th><th>Deadline</th><th class="hide-sm">Overdue</th>
+              <th class="hide-sm">Commitments</th><th></th></tr></thead>
+            <tbody>${data.due.map(r => {
+              const overdue = Math.max(0, Math.round((Date.parse(data.today) - Date.parse(r.action_plan_deadline)) / 86400000));
+              return `<tr>
+                <td>${agentLink(r.agent_name)}</td>
+                <td>${laDay(r.completed_at)}</td>
+                <td>${esc(r.action_plan_deadline)}</td>
+                <td class="hide-sm ${overdue ? 'overdue' : ''}">${overdue ? overdue + 'd' : '—'}</td>
+                <td class="hide-sm">${r.open_commitments} open</td>
+                <td><button class="act" onclick="toggleConfirm(${r.id})">Confirm</button></td>
+              </tr>
+              <tr id="confirm-${r.id}" style="display:none"><td colspan="6"></td></tr>`;
+            }).join('')}</tbody></table>`;
+        }
+        upBody.innerHTML = data.upcoming.length
+          ? `<table><thead><tr><th>Agent</th><th>Conducted</th><th>Deadline</th><th class="hide-sm">Open commitments</th></tr></thead>
+             <tbody>${data.upcoming.map(r => `<tr>
+               <td>${agentLink(r.agent_name)}</td><td>${laDay(r.completed_at)}</td>
+               <td>${esc(r.action_plan_deadline)}</td>
+               <td class="hide-sm">${r.open_commitments}</td></tr>`).join('')}</tbody></table>`
+          : '<div class="empty">No conducted sessions with a future deadline.</div>';
+      } catch (e) {
+        count.textContent = '!';
+        dueBody.innerHTML = `<div class="empty">Could not load the queue: ${esc(e.message)}</div>`;
+        upBody.innerHTML = '';
+      }
+    }
+
+    function toggleConfirm(id) {
+      const row = document.getElementById(`confirm-${id}`);
+      const open = row.style.display !== 'none';
+      document.querySelectorAll('tr[id^="confirm-"]').forEach(tr => { tr.style.display = 'none'; });
+      if (open) return;
+      const r = _due.find(x => x.id === id);
+      if (!r) return;
+      const f = r.facts || {};
+      const factLine = (label, s) => s && s.n
+        ? `<b>${s.n}</b> call${s.n !== 1 ? 's' : ''} avg <b>${s.avg}</b>` : 'no scored calls';
+      const opts = ['met', 'partially_met', 'not_met', 'waived'].map(v =>
+        `<option value="${v}">${v.replace(/_/g, ' ')}</option>`).join('');
+      row.firstElementChild.innerHTML = `
+        <div class="confirm-panel">
+          <div class="facts">
+            30 days before coaching: ${factLine('before', f.before)} →
+            coaching to deadline: ${factLine('during', f.during)}
+          </div>
+          ${(r.commitments || []).filter(c => c.status === 'open').map(c => `
+            <div class="verdict-row" data-cid="${c.id}">
+              <span class="ctext">${esc(c.commitment)}</span>
+              <select><option value="">— verdict —</option>${opts}</select>
+              <input type="text" placeholder="note (optional)" maxlength="300">
+            </div>`).join('')}
+          <textarea id="onote-${id}" placeholder="Outcome note (optional)…"></textarea>
+          <div style="margin-top:10px;display:flex;gap:8px;align-items:baseline">
+            <button class="act" onclick="submitConfirm(${id})">Confirm outcome</button>
+            <span class="status-line" id="cstatus-${id}"></span>
+          </div>
+        </div>`;
+      row.style.display = '';
+    }
+
+    async function submitConfirm(id) {
+      const row = document.getElementById(`confirm-${id}`);
+      const status = document.getElementById(`cstatus-${id}`);
+      const verdicts = [...row.querySelectorAll('.verdict-row')].map(v => ({
+        id: Number(v.dataset.cid),
+        status: v.querySelector('select').value,
+        note: v.querySelector('input').value.trim() || undefined,
+      }));
+      if (verdicts.some(v => !v.status)) {
+        status.textContent = 'Every commitment needs a verdict.';
+        return;
+      }
+      status.textContent = 'Saving…';
+      try {
+        const res = await fetch(`${API_BASE}/coachings/${id}/confirm`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            commitments: verdicts,
+            outcome_note: document.getElementById(`onote-${id}`).value.trim() || undefined,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        status.textContent = `Outcome: ${data.outcome.replace(/_/g, ' ')} — chiclet #${data.chiclet_id} raised on the team dashboard.`;
+        setTimeout(() => { loadQueue(); loadAll(); }, 900);
+      } catch (e) { status.textContent = `Failed: ${e.message}`; }
+    }
+
+    // ── all sessions ──────────────────────────────────────────────────────
+    let _allTimer = null;
+    function debounceAll() { clearTimeout(_allTimer); _allTimer = setTimeout(loadAll, 300); }
+
+    async function loadAll() {
+      const body = document.getElementById('allBody');
+      const params = new URLSearchParams({ days: '365' });
+      const st = document.getElementById('fStatus').value;
+      const ag = document.getElementById('fAgent').value.trim();
+      if (st) params.set('status', st);
+      if (ag) params.set('agent', ag);
+      try {
+        const data = await getJSON(`${API_BASE}/coachings?${params}`);
+        if (!data.sessions.length) {
+          body.innerHTML = '<div class="empty">No sessions match.</div>';
+          return;
+        }
+        body.innerHTML = `<table><thead><tr>
+            <th>Agent</th><th>Status</th><th class="hide-sm">Conducted</th>
+            <th>Deadline</th><th class="hide-sm">Outcome</th><th>Origin</th><th></th></tr></thead>
+          <tbody>${data.sessions.map(s => `
+            <tr>
+              <td>${agentLink(s.agent_name)}</td>
+              <td><span class="pill ${s.status}">${s.status}</span></td>
+              <td class="hide-sm">${laDay(s.completed_at) || '—'}</td>
+              <td>${esc(s.action_plan_deadline || '—')}</td>
+              <td class="hide-sm">${s.outcome ? `<span class="pill outcome-${s.outcome}">${s.outcome.replace(/_/g, ' ')}</span>` : '—'}</td>
+              <td><span class="pill origin">${s.sandy_born ? 'sandy' : 'railway'}</span></td>
+              <td><button class="act secondary" onclick="toggleDetail(${s.id})">Detail</button></td>
+            </tr>
+            <tr id="detail-${s.id}" style="display:none"><td colspan="7">${detailHtml(s)}</td></tr>`).join('')}
+          </tbody></table>`;
+      } catch (e) {
+        body.innerHTML = `<div class="empty">Could not load sessions: ${esc(e.message)}</div>`;
+      }
+    }
+
+    function detailHtml(s) {
+      const commits = (s.commitments || []).map(c =>
+        `<li><span style="color:${OUTCOME_COLORS[c.status] || 'var(--muted)'}">${GLYPHS[c.status] || '○'}</span>
+         ${esc(c.commitment)}${c.confirmation_note ? ` <span style="color:var(--muted)">— ${esc(c.confirmation_note)}</span>` : ''}</li>`).join('');
+      const calls = (s.evaluations || []).map(e => e.ref
+        ? `<a href="/datapoint/${TEAM_ID}/${encodeURIComponent(e.ref)}" target="_blank" rel="noopener">${laDay(e.call_connected_at) || 'call'}${e.overall_score != null ? ` · ${e.overall_score}` : ''}</a>`
+        : '<span style="color:var(--muted)">call removed</span>').join(' · ');
+      return `<div class="detail">
+        ${s.coaching_summary ? `<div>${esc(s.coaching_summary)}</div>` : ''}
+        ${s.agent_attitude ? `<div style="color:var(--muted)">attitude: ${esc(s.agent_attitude)}</div>` : ''}
+        ${commits ? `<ul>${commits}</ul>` : '<div style="color:var(--muted)">no structured commitments</div>'}
+        ${calls ? `<div>Calls: ${calls}</div>` : ''}
+        ${s.outcome_note ? `<div style="color:var(--muted)">outcome note: ${esc(s.outcome_note)}</div>` : ''}
+        <div style="color:var(--muted);margin-top:4px">
+          by ${esc(s.conducted_by_email || s.conducted_by_role)}${s.outcome_confirmed_by ? ` · confirmed by ${esc(s.outcome_confirmed_by)} ${laDay(s.outcome_confirmed_at)}` : ''}
+        </div>
+      </div>`;
+    }
+
+    function toggleDetail(id) {
+      const row = document.getElementById(`detail-${id}`);
+      row.style.display = row.style.display === 'none' ? '' : 'none';
+    }
+
+    loadQueue();
+    loadAll();
+  </script>
+</body>
+</html>

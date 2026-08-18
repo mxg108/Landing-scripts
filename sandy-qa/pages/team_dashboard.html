@@ -240,6 +240,29 @@
       border: 1px solid var(--border); border-radius: 0 0 8px 8px;
     }
 
+    /* Alert rail (LandingOpsCommandCenter Zone-B slice — first native
+       chiclet type: T2 'coaching' outcome confirmations, §6.5). */
+    .alert-rail { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+    .alert-rail:empty { display: none; }
+    .alert-chiclet {
+      display: flex; align-items: center; gap: 10px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-left: 4px solid var(--amber); /* T2 border state */
+      border-radius: 10px; padding: 10px 14px; font-size: 0.8rem;
+    }
+    .alert-chiclet .source-stripe {
+      width: 6px; align-self: stretch; border-radius: 3px;
+      background: var(--accent); /* QA-pipeline source */
+    }
+    .alert-chiclet .summary { flex: 1; line-height: 1.45; }
+    .alert-chiclet .when { color: var(--muted); font-size: 0.7rem; white-space: nowrap; }
+    .alert-chiclet .rail-actions { display: flex; gap: 6px; }
+    .alert-chiclet .rail-actions a, .alert-chiclet .rail-actions button {
+      font-family: 'DM Mono', monospace; font-size: 0.7rem; padding: 4px 10px;
+      border-radius: 6px; border: 1px solid var(--accent); color: var(--accent);
+      background: transparent; cursor: pointer; text-decoration: none;
+    }
+
     /* Toast (SSE eval_approved notifications) */
     .toast-container {
       position: fixed; bottom: 24px; right: 24px; z-index: 1000;
@@ -301,6 +324,9 @@
 </div>
 
 <div class="container">
+  <!-- Alert rail: active CC chiclets (visible on every tab) -->
+  <div class="alert-rail" id="alertRail"></div>
+
   <!-- Overview Tab -->
   <div class="tab-panel active" id="panel-overview">
     <div class="chiclet-row" id="chicletRow"></div>
@@ -1375,11 +1401,76 @@ function openEventStream() {
       console.error('Failed to parse agent_status payload:', err);
     }
   });
+  // CC-protocol chiclet events (CoachingLoopSpec §6.5) — the alert rail
+  // is the first Sandy-side Zone-B consumer; the future ported CC page
+  // reads the same stream unchanged.
+  _eventSource.addEventListener('chiclet_created', e => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.chiclet) { _chiclets.unshift(data.chiclet); renderAlertRail(); }
+    } catch (err) { console.error('chiclet_created parse:', err); }
+  });
+  _eventSource.addEventListener('chiclet_resolved', e => {
+    try {
+      const data = JSON.parse(e.data);
+      _chiclets = _chiclets.filter(c => c.id !== data.id);
+      renderAlertRail();
+    } catch (err) { console.error('chiclet_resolved parse:', err); }
+  });
   // EventSource auto-reconnects on its own; no manual cap (per design Q3).
   _eventSource.addEventListener('error', () => {
     // Browser will retry. Log so devtools shows a breadcrumb.
     console.warn('SSE connection error; browser will retry.');
   });
+}
+
+// ── alert rail (active cc_chiclets; §6.5) ──────────────────────────────────
+let _chiclets = [];
+let _canCoach = false;
+
+async function loadAlertRail() {
+  try {
+    const [cRes, wRes] = await Promise.all([
+      fetch(`${API_BASE}/chiclets?status=active`),
+      fetch(`${API_BASE}/whoami`),
+    ]);
+    if (cRes.ok) _chiclets = (await cRes.json()).chiclets || [];
+    if (wRes.ok) _canCoach = !!(await wRes.json()).can_coach;
+    renderAlertRail();
+  } catch (e) { console.error('alert rail:', e); }
+}
+
+function renderAlertRail() {
+  const rail = document.getElementById('alertRail');
+  if (!rail) return;
+  rail.innerHTML = _chiclets.map(c => {
+    const agentHref = c.agent_name
+      ? `/dashboard/${TEAM_ID}/agent/${encodeURIComponent(c.agent_name)}` : null;
+    return `<div class="alert-chiclet" data-chiclet="${c.id}">
+      <span class="source-stripe" title="QA pipeline"></span>
+      <span class="summary">${escapeHtml(c.summary)}</span>
+      <span class="when">${_timeAgo ? _timeAgo(c.created_at) : (c.created_at || '').slice(0, 10)}</span>
+      <span class="rail-actions">
+        <a href="/coaching/${TEAM_ID}">View coaching</a>
+        ${agentHref ? `<a href="${agentHref}">Agent</a>` : ''}
+        ${_canCoach ? `<button onclick="ackChiclet(${c.id}, this)">Acknowledge</button>` : ''}
+      </span>
+    </div>`;
+  }).join('');
+}
+
+async function ackChiclet(id, btn) {
+  btn.disabled = true;
+  try {
+    const res = await fetch(`${API_BASE}/chiclets/${id}/resolve`, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+    _chiclets = _chiclets.filter(c => c.id !== id);
+    renderAlertRail();
+  } catch (e) {
+    btn.disabled = false;
+    console.error('acknowledge failed:', e.message);
+  }
 }
 
 function scheduleStatsRefetch() {
@@ -1479,6 +1570,7 @@ qaHeader = window.QAHeader.init({
 });
 fetchMails();
 openEventStream();
+loadAlertRail();
 _scheduleMidnightRerender();
 </script>
 </body>

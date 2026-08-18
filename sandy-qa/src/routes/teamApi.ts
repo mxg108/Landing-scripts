@@ -33,6 +33,8 @@ import scoringConsoleHtml from "../../pages/index.html?raw";
 // @ts-ignore vite ?raw
 import adminHtml from "../../pages/admin.html?raw";
 // @ts-ignore vite ?raw
+import coachingPageHtml from "../../pages/coaching.html?raw";
+// @ts-ignore vite ?raw
 import headerCss from "../../pages/static/header.css?raw";
 // @ts-ignore vite ?raw
 import headerJs from "../../pages/static/header.js?raw";
@@ -101,6 +103,8 @@ h1,h2,h3{font-family:'Fraunces',serif}
       (Dialpad; Sofia&rsquo;s is Retell-backed with one-click scoring). <b>Restricted</b> to authorized QA staff.</li>
     <li><b>Scoring console</b> — <span class="path">/score/&lt;team&gt;</span>: batch-score calls by
       Dialpad ID + the human-review queue. <b>Restricted</b> to authorized QA staff.</li>
+    <li><b>Coaching</b> — <span class="path">/coaching/&lt;team&gt;</span>: 1:1 sessions, agent
+      commitments, and the confirmation queue. <b>Restricted</b> to QA staff and team managers.</li>
   </ul></div>
   <div class="note">During the migration shadow period this app mirrors production evaluation
   data live; AI scoring &amp; review actions are live here for QA staff via the scoring console.</div>
@@ -122,14 +126,19 @@ const json = (data: unknown, status = 200) =>
 // Denial page with the request-access flow. The person never needed to
 // know RBAC existed until this moment — the page explains the wall and
 // lets them request through it in place.
-function deniedPage(kind: "lookup" | "score", teamId: string): Response {
+function deniedPage(kind: "lookup" | "score" | "coaching", teamId: string): Response {
   const copy =
     kind === "lookup"
       ? {
           title: "Call lookup is restricted",
           why: "This page surfaces call history and recordings across the company, so it is limited to authorized QA staff.",
         }
-      : {
+      : kind === "coaching"
+        ? {
+            title: "The coaching page is restricted",
+            why: "Coaching sessions carry manager feedback and agent commitments, so this page is limited to QA staff and team managers.",
+          }
+        : {
           title: "The scoring console is restricted",
           why: "Triggering AI evaluations creates progression records for agents, so it is limited to authorized QA staff.",
         };
@@ -254,6 +263,13 @@ export async function handleTeamRoutes(
     return access.privileged ? html(scoringConsoleHtml) : deniedPage("score", m[1]);
   }
 
+  // Coaching page (§6 — dedicated, never mixed with the review queue).
+  m = path.match(/^\/coaching\/([^/]+)$/);
+  if (m && KNOWN_TEAMS.has(m[1])) {
+    const access = await resolveAccess(request, db, lookupAllow);
+    return canCoach(access, m[1]) ? html(coachingPageHtml) : deniedPage("coaching", m[1]);
+  }
+
   // ── access admin (roles + request inbox) ─────────────────────────────────
   if (path === "/admin") {
     const access = await resolveAccess(request, db, lookupAllow);
@@ -344,7 +360,7 @@ export async function handleTeamRoutes(
     if (!email) return json({ detail: "No SSO identity on this request." }, 401);
     let body: any = {};
     try { body = await request.json(); } catch { return json({ detail: "JSON body required" }, 422); }
-    const page = body.page === "score" ? "score" : "lookup";
+    const page = ["score", "coaching"].includes(body.page) ? body.page : "lookup";
     const pending = await db
       .prepare(
         "SELECT id FROM qa_access_requests WHERE email = ? AND page = ? AND status = 'pending' LIMIT 1"
@@ -392,6 +408,10 @@ export async function handleTeamRoutes(
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
     const { createCoaching } = await import("./coaching.js");
     return createCoaching(request, db, m[1], lookupAllow);
+  }
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
+    const { listTeamCoachings } = await import("./coaching.js");
+    return listTeamCoachings(request, db, m[1], url, lookupAllow);
   }
   m = path.match(/^\/api\/([^/]+)\/coachings\/(\d+)$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "PATCH") {
