@@ -220,10 +220,15 @@ async function triggerInsights(
     "../workflow.js"
   );
   try {
+    // Same resolution as the scoring drain: the internal listing first,
+    // hardcoded id as the fallback (the listing matches allowed_applications
+    // by app NAME — a registration with the app id was invisible to it,
+    // which is exactly how the first live button click failed).
     const known = await listTriggerableWorkflows();
-    const wf = known.find((w: any) => w.name === WORKFLOW_NAME);
-    if (!wf) return { ok: false, detail: `workflow ${WORKFLOW_NAME} not registered/enabled` };
-    const run = await triggerWorkflowWithCallback(wf.id, WORKFLOW_NAME, request, payload);
+    const wfId =
+      known.find((w: any) => w.name === WORKFLOW_NAME)?.id ??
+      "e497b54d-b09f-4ddc-81ed-833911edc457";
+    const run = await triggerWorkflowWithCallback(wfId, WORKFLOW_NAME, request, payload);
     return { ok: true, runId: run?.id ?? null };
   } catch (err) {
     const msg = String((err as any)?.message ?? err).slice(0, 300);
