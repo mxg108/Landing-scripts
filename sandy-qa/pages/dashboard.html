@@ -1134,9 +1134,12 @@
           s.outcome ? `<span class="pill outcome-${s.outcome}">${s.outcome.replace(/_/g, ' ')}</span>` : '',
           `<span class="pill origin">${s.sandy_born ? 'sandy' : 'railway'}</span>`,
         ].join('');
+        // LA calendar days — a UTC .slice(0,10) showed tomorrow's date for
+        // evening sessions (observed on the first live 1:1).
+        const laD = iso => iso ? laDay(Date.parse(iso)) : '';
         const when = s.completed_at
-          ? `conducted ${s.completed_at.slice(0, 10)}` : s.scheduled_at
-            ? `scheduled ${s.scheduled_at.slice(0, 10)}` : `created ${(s.created_at || '').slice(0, 10)}`;
+          ? `conducted ${laD(s.completed_at)}` : s.scheduled_at
+            ? `scheduled ${laD(s.scheduled_at)}` : `created ${laD(s.created_at)}`;
         const commits = (s.commitments || []).map(c =>
           `<li><span style="color:${OUTCOME_COLORS[c.status] || 'var(--muted)'}">${COMMIT_GLYPHS[c.status] || '○'}</span> ${escHtml(c.commitment)}${c.section_id ? ` <span class="meta">(${escHtml(_sectionLabels[c.section_id] || c.section_id)})</span>` : ''}</li>`
         ).join('');

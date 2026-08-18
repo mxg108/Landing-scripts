@@ -485,6 +485,39 @@ export async function cancelCoaching(
 
 // ── GET /api/{t}/coaching-queue (§6 — the queue is a predicate) ────────────
 
+// Deterministic facts for the confirm decision (§11.4 windows): before =
+// the 30 days leading into the session; during = completed_at → deadline
+// end-of-day (the commitment-verdict window). Pure D1, always free.
+async function verdictFacts(
+  db: D1Database,
+  teamId: string,
+  agentId: number,
+  completedAt: string,
+  deadline: string
+) {
+  const stat = async (fromIso: string, toIso: string) => {
+    const r = await db
+      .prepare(
+        `SELECT COUNT(*) AS n, AVG(overall_score) AS avg FROM qa_evaluations
+         WHERE team_id = ? AND agent_id = ? AND state = 'finalized'
+           AND COALESCE(call_connected_at, created_at) >= ?
+           AND COALESCE(call_connected_at, created_at) < ?`
+      )
+      .bind(teamId, agentId, fromIso, toIso)
+      .first<any>();
+    return {
+      n: r?.n ?? 0,
+      avg: r?.avg !== null && r?.avg !== undefined ? Math.round(r.avg * 10) / 10 : null,
+    };
+  };
+  const preStart = new Date(Date.parse(completedAt) - 30 * 86_400_000).toISOString();
+  const deadlineEnd = `${deadline}T23:59:59Z`;
+  return {
+    before: await stat(preStart, completedAt),
+    during: await stat(completedAt, deadlineEnd),
+  };
+}
+
 export async function coachingQueue(
   request: Request,
   db: D1Database,
@@ -511,7 +544,55 @@ export async function coachingQueue(
     .all<any>();
   const due = rows.results.filter((r) => r.action_plan_deadline <= today);
   const upcoming = rows.results.filter((r) => r.action_plan_deadline > today);
+  // Confirm-flow payload: commitments to verdict + the facts panel.
+  await attachChildren(db, due);
+  for (const r of due) {
+    r.facts = await verdictFacts(
+      db, teamId, r.agent_id, r.completed_at, r.action_plan_deadline
+    );
+  }
   return json({ team_id: teamId, today, count: due.length, due, upcoming });
+}
+
+// ── GET /api/{t}/coachings (team-wide list for the /coaching page) ─────────
+
+export async function listTeamCoachings(
+  request: Request,
+  db: D1Database,
+  teamId: string,
+  url: URL,
+  lookupAllow?: string
+): Promise<Response> {
+  const access = await resolveAccess(request, db, lookupAllow);
+  if (!canCoach(access, teamId))
+    return json({ detail: "Coaching records are restricted to QA staff and team managers." }, 403);
+  const p = url.searchParams;
+  const days = Math.min(730, Math.max(1, parseInt(p.get("days") ?? "180", 10) || 180));
+  const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
+  const status = p.get("status");
+  const agent = (p.get("agent") ?? "").trim().toLowerCase();
+  let where = `c.team_id = ? AND (c.status = 'pending' OR c.outcome IS NULL
+               OR COALESCE(c.completed_at, c.created_at) >= ?)`;
+  const binds: any[] = [teamId, cutoff];
+  if (status && ["pending", "completed", "cancelled"].includes(status)) {
+    where += " AND c.status = ?";
+    binds.push(status);
+  }
+  if (agent) {
+    where += " AND (LOWER(a.name) LIKE ? OR LOWER(a.canonical_name) LIKE ?)";
+    binds.push(`%${agent}%`, `%${agent}%`);
+  }
+  const rows = await db
+    .prepare(
+      `SELECT c.*, COALESCE(a.canonical_name, a.name, '?') AS agent_name
+       FROM qa_coachings c LEFT JOIN qa_agents a ON a.id = c.agent_id
+       WHERE ${where} ORDER BY c.created_at DESC LIMIT 200`
+    )
+    .bind(...binds)
+    .all<any>();
+  const sessions = rows.results.map((s) => ({ ...s, sandy_born: s.id >= SANDY_BASE }));
+  await attachChildren(db, sessions);
+  return json({ team_id: teamId, count: sessions.length, sessions });
 }
 
 // ── POST confirm — supervisor verdicts → outcome + the §6.5 T2 chiclet ─────
