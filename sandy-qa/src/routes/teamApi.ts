@@ -538,12 +538,14 @@ export async function handleTeamRoutes(
       return json({ detail: `No evaluations for '${agent}' in ${month}` }, 404);
     return html(page);
   }
+  // Progression assessment (CL4 — CoachingLoopSpec §8): GET serves the
+  // persisted current assessment / job status; POST triggers a qa-insights
+  // run (idempotent on in-flight jobs; fresh assessments never re-spend).
   m = path.match(/^\/api\/([^/]+)\/agents\/([^/]+)\/progression$/);
-  if (m && KNOWN_TEAMS.has(m[1]))
-    return json(
-      { detail: "Progression assessments port with the scoring-workflow slice (AI generation)." },
-      503
-    );
+  if (m && KNOWN_TEAMS.has(m[1]) && ["GET", "POST"].includes(request.method)) {
+    const { progressionRequest } = await import("./insights.js");
+    return progressionRequest(request, db, m[1], decodeURIComponent(m[2]), url);
+  }
   m = path.match(/^\/api\/([^/]+)\/whoami$/);
   if (m && KNOWN_TEAMS.has(m[1])) {
     // Pages render action buttons off `role` (privileged|team — the
