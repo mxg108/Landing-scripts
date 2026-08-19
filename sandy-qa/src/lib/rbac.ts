@@ -23,6 +23,9 @@ export interface Access {
   role: Role;
   /** admin|qa — may use lookup, trigger scoring, and run scorecard actions */
   privileged: boolean;
+  /** the qa_roles row's team scope: null = all teams (only meaningful for
+   *  manager rows — CoachingLoopSpec §4 activates the reserved role) */
+  role_team_id: string | null;
 }
 
 // SSO identity: signature validation happens at the Access edge before the
@@ -51,14 +54,14 @@ export async function resolveAccess(
   lookupAllow?: string
 ): Promise<Access> {
   const email = accessEmail(request);
-  if (!email) return { email: "", role: "viewer", privileged: false };
+  if (!email) return { email: "", role: "viewer", privileged: false, role_team_id: null };
   const row = await db
-    .prepare("SELECT role FROM qa_roles WHERE email = ?")
+    .prepare("SELECT role, team_id FROM qa_roles WHERE email = ?")
     .bind(email)
-    .first<{ role: Role }>();
+    .first<{ role: Role; team_id: string | null }>();
   if (row) {
     const privileged = row.role === "admin" || row.role === "qa";
-    return { email, role: row.role, privileged };
+    return { email, role: row.role, privileged, role_team_id: row.team_id ?? null };
   }
   if (
     lookupAllow &&
@@ -68,7 +71,39 @@ export async function resolveAccess(
       .filter(Boolean)
       .includes(email)
   ) {
-    return { email, role: "qa", privileged: true };
+    return { email, role: "qa", privileged: true, role_team_id: null };
   }
-  return { email, role: "viewer", privileged: false };
+  return { email, role: "viewer", privileged: false, role_team_id: null };
+}
+
+// ── coaching capability + self identity (CoachingLoopSpec §4/§4.5) ─────────
+// `coach` is the manager role's activation: admin|qa everywhere, manager on
+// their scoped team (team_id NULL = all). Deliberately separate from
+// `privileged` — managers get coaching surfaces, never scorecard actions.
+
+export function canCoach(access: Access, teamId: string): boolean {
+  if (access.privileged) return true;
+  return (
+    access.role === "manager" &&
+    (access.role_team_id === null || access.role_team_id === teamId)
+  );
+}
+
+/** The caller's own roster row on this team (CF-Access email match), or
+ *  null. Powers the agent self-view: capability-keyed, page-agnostic, so a
+ *  future agent self-dashboard composes the same gate. */
+export async function selfAgentFor(
+  request: Request,
+  db: D1Database,
+  teamId: string
+): Promise<{ id: number; name: string; canonical_name: string | null; email: string } | null> {
+  const email = accessEmail(request);
+  if (!email) return null;
+  const row = await db
+    .prepare(
+      "SELECT id, name, canonical_name, email FROM qa_agents WHERE team_id = ? AND active = 1 AND LOWER(email) = ? LIMIT 1"
+    )
+    .bind(teamId, email)
+    .first<any>();
+  return row ?? null;
 }
