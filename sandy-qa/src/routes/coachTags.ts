@@ -1,9 +1,12 @@
-// Coaching tag vocabulary — CoachingTagsSpec §3 (T1). Four fixed supertags
-// (the 0008 CHECK enum), globally-unique normalized names, soft
-// deprecation with a replaced_by merge pointer, session↔tag links that
-// FREEZE once the session's outcome is confirmed. Cross-team vocabulary:
-// the {team} in the URL is routing convention; scoping is a RAG-time
-// concern (owner §8.4). Every route is gated `coach`.
+// Coaching tag vocabulary — CoachingTagsSpec §3 + §2.1 (T1). Three KINDS:
+// SUPERTAG (the 0008 `type` CHECK enum), TAG (parent_tag_id NULL), SUBTAG
+// (parent set, any depth — kind is derived, never stored). Globally-unique
+// normalized names carrying the parent prefix, soft deprecation that
+// CASCADES down the family (restore doesn't, and is blocked under a
+// deprecated ancestor), session↔tag links that FREEZE once the session's
+// outcome is confirmed. Cross-team vocabulary: the {team} in the URL is
+// routing convention; scoping is a RAG-time concern (owner §8.4). Every
+// route is gated `coach`.
 
 import { accessEmail, canCoach, resolveAccess } from "../lib/rbac.js";
 
@@ -53,17 +56,25 @@ export async function listTags(
   const rows = (
     await db
       .prepare(
-        `SELECT t.*, r.name AS replaced_by_name,
+        `SELECT t.*, r.name AS replaced_by_name, p.name AS parent_name,
+                CASE WHEN t.parent_tag_id IS NULL THEN 'tag' ELSE 'subtag' END AS kind,
+                (SELECT COUNT(*) FROM qa_coach_tags ch
+                  WHERE ch.parent_tag_id = t.id AND ch.status = 'active') AS active_children,
                 (SELECT COUNT(*) FROM qa_coaching_tag_links l
                   JOIN qa_coachings c ON c.id = l.coaching_id
                   WHERE l.tag_id = t.id AND c.id >= ?) AS sessions
-         FROM qa_coach_tags t LEFT JOIN qa_coach_tags r ON r.id = t.replaced_by_tag_id
+         FROM qa_coach_tags t
+         LEFT JOIN qa_coach_tags r ON r.id = t.replaced_by_tag_id
+         LEFT JOIN qa_coach_tags p ON p.id = t.parent_tag_id
          ${includeDeprecated ? "" : "WHERE t.status = 'active'"}
          ORDER BY t.type, t.name`
       )
       .bind(SANDY_BASE)
       .all<any>()
   ).results;
+  // by_type keeps name-sorted rows — the parent prefix means a family
+  // always groups contiguously under its root, so the picker can render
+  // trees (or indented lists) straight off this order.
   const byType: Record<string, any[]> = {};
   for (const t of TAG_TYPES) byType[t] = [];
   for (const r of rows) (byType[r.type] ??= []).push(r);
@@ -82,13 +93,43 @@ export async function createTag(
   if ("deny" in g) return g.deny;
   let body: any = {};
   try { body = await request.json(); } catch { return json({ detail: "JSON body required" }, 422); }
-  const type = String(body.type ?? "");
-  if (!(TAG_TYPES as readonly string[]).includes(type))
-    return json({ detail: `type must be one of ${TAG_TYPES.join("|")}` }, 422);
-  const name = normalizeTagName(body.name);
+
+  // §2.1: a parent makes this a SUBTAG — type is INHERITED from the parent
+  // chain (a passed type must agree), the name auto-prefixes with the
+  // parent's, and the parent must be active. No parent = TAG (type required).
+  let parent: any = null;
+  let type: string;
+  if (body.parent_tag_id !== undefined && body.parent_tag_id !== null) {
+    parent = await db
+      .prepare("SELECT id, type, name, status FROM qa_coach_tags WHERE id = ?")
+      .bind(Number(body.parent_tag_id))
+      .first<any>();
+    if (!parent) return json({ detail: `parent_tag_id ${body.parent_tag_id} does not exist` }, 422);
+    if (parent.status !== "active")
+      return json({ detail: `parent '${parent.name}' is deprecated — restore it before adding subtags` }, 422);
+    if (body.type !== undefined && String(body.type) !== parent.type)
+      return json(
+        { detail: `subtags inherit the supertag — '${parent.name}' is ${parent.type}, not ${body.type}` },
+        422
+      );
+    type = parent.type;
+  } else {
+    type = String(body.type ?? "");
+    if (!(TAG_TYPES as readonly string[]).includes(type))
+      return json({ detail: `type must be one of ${TAG_TYPES.join("|")}` }, 422);
+  }
+
+  let name = normalizeTagName(body.name);
   if (!name) return json({ detail: "name is required (letters, digits, underscores)" }, 422);
+  // Leaf-or-full: "cold" and "dialpad_transfers_cold" both land on the
+  // prefixed name; the prefix keeps the whole family adjacent in listings.
+  if (parent && name !== parent.name && !name.startsWith(parent.name + "_"))
+    name = `${parent.name}_${name}`;
+  if (parent && name === parent.name)
+    return json({ detail: "subtag needs a leaf name beyond its parent's" }, 422);
+
   const existing = await db
-    .prepare("SELECT id, type, status FROM qa_coach_tags WHERE name = ?")
+    .prepare("SELECT id, type, status, parent_tag_id FROM qa_coach_tags WHERE name = ?")
     .bind(name)
     .first<any>();
   if (existing) {
@@ -100,17 +141,18 @@ export async function createTag(
         tag_id: existing.id,
         status: existing.status,
         type: existing.type,
+        parent_tag_id: existing.parent_tag_id,
       },
       409
     );
   }
   const ins = await db
-    .prepare("INSERT INTO qa_coach_tags (type, name, description, created_by) VALUES (?,?,?,?)")
-    .bind(type, name, (body.description ?? "").toString().trim() || null, g.email)
+    .prepare("INSERT INTO qa_coach_tags (type, name, description, created_by, parent_tag_id) VALUES (?,?,?,?,?)")
+    .bind(type, name, (body.description ?? "").toString().trim() || null, g.email, parent?.id ?? null)
     .run();
   const id = Number(ins.meta.last_row_id);
   const row = await db.prepare("SELECT * FROM qa_coach_tags WHERE id = ?").bind(id).first<any>();
-  return json({ ok: true, tag: row }, 201);
+  return json({ ok: true, tag: { ...row, kind: parent ? "subtag" : "tag", parent_name: parent?.name ?? null } }, 201);
 }
 
 // ── POST deprecate / restore ───────────────────────────────────────────────
@@ -140,13 +182,38 @@ export async function deprecateTag(
     if (!target) return json({ detail: `replaced_by_tag_id ${replacedBy} does not exist` }, 422);
     if (target.status !== "active") return json({ detail: "replacement tag must be active" }, 422);
   }
+  const ts = now();
+  const note = (body.note ?? "").toString().trim() || null;
   await db
     .prepare(
       "UPDATE qa_coach_tags SET status='deprecated', deprecated_by=?, deprecated_at=?, deprecation_note=?, replaced_by_tag_id=? WHERE id=?"
     )
-    .bind(g.email, now(), (body.note ?? "").toString().trim() || null, replacedBy, id)
+    .bind(g.email, ts, note, replacedBy, id)
     .run();
-  return json({ ok: true, tag_id: id, status: "deprecated", replaced_by_tag_id: replacedBy });
+  // §2.1: deprecation CASCADES down the family — an axis retired at the
+  // root retires its whole subtree (each level in turn, depth-safe).
+  const cascaded: number[] = [];
+  let frontier = [id];
+  while (frontier.length) {
+    const ph = frontier.map(() => "?").join(",");
+    const kids = (
+      await db
+        .prepare(`SELECT id FROM qa_coach_tags WHERE parent_tag_id IN (${ph}) AND status = 'active'`)
+        .bind(...frontier)
+        .all<any>()
+    ).results.map((r) => r.id);
+    if (!kids.length) break;
+    await db
+      .prepare(
+        `UPDATE qa_coach_tags SET status='deprecated', deprecated_by=?, deprecated_at=?,
+          deprecation_note=? WHERE id IN (${kids.map(() => "?").join(",")})`
+      )
+      .bind(g.email, ts, `cascade: parent ${tag.name} deprecated${note ? ` (${note})` : ""}`, ...kids)
+      .run();
+    cascaded.push(...kids);
+    frontier = kids;
+  }
+  return json({ ok: true, tag_id: id, status: "deprecated", replaced_by_tag_id: replacedBy, cascaded });
 }
 
 export async function restoreTag(
@@ -161,6 +228,21 @@ export async function restoreTag(
   const tag = await db.prepare("SELECT * FROM qa_coach_tags WHERE id = ?").bind(id).first<any>();
   if (!tag) return json({ detail: `no tag ${id}` }, 404);
   if (tag.status === "active") return json({ ok: true, tag_id: id, status: "active", idempotent: true });
+  // §2.1: restore is per-node and blocked under a deprecated ancestor —
+  // a live subtag inside a dead family would be unreachable in pickers
+  // and incoherent in rollups. Restore the ancestors first (each restore
+  // is one node; deprecation's cascade is deliberately asymmetric).
+  let pid = tag.parent_tag_id;
+  while (pid) {
+    const anc = await db
+      .prepare("SELECT id, name, status, parent_tag_id FROM qa_coach_tags WHERE id = ?")
+      .bind(pid)
+      .first<any>();
+    if (!anc) break;
+    if (anc.status !== "active")
+      return json({ detail: `ancestor '${anc.name}' is deprecated — restore it first` }, 409);
+    pid = anc.parent_tag_id;
+  }
   await db
     .prepare(
       "UPDATE qa_coach_tags SET status='active', deprecated_by=NULL, deprecated_at=NULL, deprecation_note=NULL, replaced_by_tag_id=NULL WHERE id=?"

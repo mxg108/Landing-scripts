@@ -90,6 +90,41 @@ at birth. Every tag MUST carry exactly one:
 | `soft_skills` | interpersonal | `rudeness`, `filler_words`, `tone_matching` |
 | `effectiveness` | outcomes & efficiency | `long_hold`, `no_fcr`, `unresolved_callback` |
 
+### 2.1 Subtags — the three-kind hierarchy (owner amendment, 2026-08-19)
+
+There are exactly three KINDS: **SUPERTAG**, **TAG**, **SUBTAG**. A tag
+sits directly under a supertag; a subtag sits under a tag *or under
+another subtag* — `dialpad_transfers_cold` under `dialpad_transfers`
+under `dialpad` — and is still just a SUBTAG (no fourth kind appears at
+depth). This gives inheritance, granularity on demand, DB cohesion, and
+dedup-by-visibility (the picker shows the existing `dialpad_*` family
+before anyone types a duplicate).
+
+Model: **kind is derived, never stored.** One nullable
+`parent_tag_id` (migration 0009 — 0008 was already applied live):
+
+- `type` column = the supertag (unchanged);
+- `parent_tag_id IS NULL` → kind TAG;
+- `parent_tag_id IS NOT NULL` → kind SUBTAG, any depth.
+
+Invariants (app-enforced — SQLite CHECKs can't see other rows):
+
+- a subtag **inherits its parent's supertag** — a request's `type` is
+  ignored/validated against the parent chain; the axis can never fork
+  mid-tree;
+- names carry the **parent-name prefix** (`{parent}_{leaf}`); create
+  auto-prefixes when the caller passes the leaf alone ("cold" under
+  `dialpad_transfers` → `dialpad_transfers_cold`) — global uniqueness
+  then namespaces the whole family for free;
+- parents must be **active** to take new children;
+- **deprecation cascades down** (deprecating `dialpad` deprecates the
+  whole family — stamps carry a cascade note); **restore does not** —
+  it restores the one node, and a subtag can't restore while an
+  ancestor is deprecated;
+- linking is per-node (a session tagged `dialpad_transfers_cold` links
+  that node only); **aggregation rolls up** — T3 counts that session
+  under `dialpad_transfers`, `dialpad`, and `system_skills` alike.
+
 Design judgments (the honest-thoughts section, §7, argues these):
 
 - **Type is immutable** after creation. A CHECK enum enforces the four;
