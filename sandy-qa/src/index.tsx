@@ -241,6 +241,17 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
         .set({ status: body.status ?? "error", result: JSON.stringify(body) })
         .where(eq(workflowRuns.run_id, body.run_id));
       console.log(`[callback] workflow=${workflowName} run_id=${body.run_id} status=${body.status}`);
+      // qa-insights: persist narrative assessments (CoachingLoopSpec §8).
+      if (workflowName === "qa-insights") {
+        try {
+          const { insightsCallback } = await import("./routes/insights.js");
+          const outcome = await insightsCallback(body, env.DB);
+          console.log(`[insights] ${outcome.ok ? "OK" : "PARTIAL"}: ${outcome.note}`);
+        } catch (err) {
+          console.log(`[insights] persist threw: ${String(err).slice(0, 300)}`);
+        }
+        return Response.json({ ok: true });
+      }
       // qa-scoring-pipeline: persist the evaluation (draft/finalize + toast)
       if (workflowName === "qa-scoring-pipeline") {
         const { scoringCallback, drainScoreQueue } = await import("./routes/scoring.js");

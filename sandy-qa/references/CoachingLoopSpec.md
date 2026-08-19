@@ -493,8 +493,10 @@ all results; app-side `insightsCallback` persists:
   intersecting it** (the idempotency guard that also prevents double-spend
   while Railway's own monthly export still writes assessments during
   shadow — Sandy fills gaps, e.g. sofia, and takes over fully at cutover).
-- **Team insights**: console card "Coaching Insights" (`can_coach`) — shows
-  the current `team` narrative + facts, button to regenerate (`team` run).
+- **Team insights**: a "Team insights" card on `/coaching/{team}`
+  (`can_coach`) — the §11.2 page decision moved every coach-facing tool
+  there, superseding this section's original console placement. Shows the
+  current `team` narrative + fact summary, button to regenerate.
 - Concurrency: one-active-run 409s surface as "insights engine busy — retry
   shortly" (no insights queue in v1; revisit only if it actually bites).
 

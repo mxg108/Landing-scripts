@@ -6,6 +6,7 @@
 import type { FrameRow } from "./historyFrame.js";
 import type { TeamConfig } from "./teamConfig.js";
 import { monthInBucketTz, BUCKET_TZ } from "./teamStats.js";
+import { evalWindowStat } from "./coachingFacts.js";
 
 const NAVY = "#15192D";
 const BLUE = "#1A61D9";
@@ -136,6 +137,96 @@ function assessmentHtml(assessment: any | null): string {
 
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
+// ── Coaching & commitments block (CoachingLoopSpec §7, CL4) ────────────────
+// Sessions whose conduct date OR deadline lands in the month, with
+// commitment statuses and the deterministic response readout. Renders
+// nothing for months without coaching (layout unchanged — additive, like
+// the assessment box).
+
+const COMMIT_GLYPHS: Record<string, string> = {
+  open: "○", met: "✓", partially_met: "◐", not_met: "✗", waived: "–",
+};
+const OUTCOME_COLORS: Record<string, string> = {
+  met: GREEN, partially_met: AMBER, not_met: RED,
+};
+
+async function coachingBlock(
+  db: D1Database,
+  config: TeamConfig,
+  agent: string,
+  month: string
+): Promise<string> {
+  const roster = await db
+    .prepare(
+      `SELECT id FROM qa_agents WHERE team_id = ?
+         AND (name = ? OR canonical_name = ?) LIMIT 1`
+    )
+    .bind(config.team_id, agent, agent)
+    .first<any>();
+  if (!roster) return "";
+  const sessions = (
+    await db
+      .prepare(
+        `SELECT * FROM qa_coachings
+         WHERE team_id = ? AND agent_id = ? AND status != 'cancelled'
+           AND (substr(COALESCE(completed_at, ''), 1, 7) = ?
+                OR substr(COALESCE(action_plan_deadline, ''), 1, 7) = ?)
+         ORDER BY COALESCE(completed_at, created_at)`
+      )
+      .bind(config.team_id, roster.id, month, month)
+      .all<any>()
+  ).results;
+  if (!sessions.length) return "";
+
+  const parts: string[] = [];
+  for (const s of sessions) {
+    const commits = (
+      await db
+        .prepare(
+          "SELECT commitment, status FROM qa_coaching_commitments WHERE coaching_id = ? ORDER BY id"
+        )
+        .bind(s.id)
+        .all<any>()
+    ).results;
+    let readout = "";
+    if (s.completed_at) {
+      const preStart = new Date(Date.parse(s.completed_at) - 30 * 86_400_000).toISOString();
+      const postEnd = s.action_plan_deadline
+        ? `${s.action_plan_deadline}T23:59:59Z`
+        : new Date().toISOString();
+      const pre = await evalWindowStat(db, config.team_id, roster.id, preStart, s.completed_at);
+      const post = await evalWindowStat(db, config.team_id, roster.id, s.completed_at, postEnd);
+      if (pre.n && post.n)
+        readout =
+          `<div class="c-readout">Response: ${pre.n} calls avg ${pre.avg} before → ` +
+          `${post.n} calls avg ${post.avg} after coaching</div>`;
+    }
+    const outcomeBadge = s.outcome
+      ? `<span class="c-outcome" style="background:${OUTCOME_COLORS[s.outcome] ?? GRAY}">` +
+        `${esc(s.outcome.replace(/_/g, " "))}</span>`
+      : `<span class="c-outcome" style="background:${GRAY}">confirmation due ${esc(s.action_plan_deadline ?? "—")}</span>`;
+    const commitLis = commits
+      .map(
+        (k: any) =>
+          `<div class="c-commit"><span style="color:${OUTCOME_COLORS[k.status] ?? GRAY}">` +
+          `${COMMIT_GLYPHS[k.status] ?? "○"}</span> ${esc(k.commitment)}</div>`
+      )
+      .join("");
+    parts.push(
+      `<div class="c-sess">` +
+        `<div><strong>${esc((s.completed_at ?? s.created_at ?? "").slice(0, 10))}</strong> ` +
+        `· ${esc(s.conducted_by_role)} ${outcomeBadge}` +
+        (s.action_plan_deadline ? ` <span class="muted">deadline ${esc(s.action_plan_deadline)}</span>` : "") +
+        `</div>${commitLis}${readout}</div>`
+    );
+  }
+  return (
+    `<h2>Coaching &amp; commitments</h2><div class="coach-block">` +
+    parts.join("") +
+    `</div>`
+  );
+}
+
 export async function renderMonthOnepager(
   db: D1Database,
   config: TeamConfig,
@@ -213,6 +304,8 @@ export async function renderMonthOnepager(
     timeZone: BUCKET_TZ, dateStyle: "short", timeStyle: "short",
   }).format(new Date());
 
+  const coachingHtml = await coachingBlock(db, config, agent, month);
+
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>${esc(agent)} — QA ${monthLabel}</title>
 <style>
@@ -244,6 +337,13 @@ export async function renderMonthOnepager(
   .assessment { border: 1.5px dashed ${BLUE}; border-radius: 10px; padding: 14px 16px;
                  margin-top: 16px; color: ${NAVY}; background: #fbfcff; }
   .a-sec { font-size: 11.5px; margin: 2px 0; }
+  .coach-block { border: 1px solid #e8ebf0; border-radius: 10px; padding: 12px 14px; }
+  .c-sess { margin-bottom: 10px; font-size: 12px; }
+  .c-sess:last-child { margin-bottom: 0; }
+  .c-outcome { color: #fff; font-size: 10px; padding: 1px 8px; border-radius: 8px;
+               text-transform: uppercase; letter-spacing: 0.05em; }
+  .c-commit { font-size: 11.5px; margin: 3px 0 0 8px; }
+  .c-readout { font-size: 11px; color: #9aa3af; margin-top: 4px; }
   footer { margin-top: 18px; font-size: 10.5px; color: #9aa3af; }
 </style></head><body>
 <header>
@@ -267,6 +367,8 @@ ${sparkline(overall)}
 <table><tbody>
 ${tableRows}
 </tbody></table>
+
+${coachingHtml}
 
 ${assessmentHtml(assessment)}
 

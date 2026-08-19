@@ -140,7 +140,32 @@ export async function runDailyMaintenance(
 
   const digest = await sofiaDigest(db, env.GAS_WEBAPP_URL_SOFIA);
 
+  // EOM assessments (CoachingLoopSpec §8, CL4): on the 1st (LA), generate
+  // the closed month's progression assessments — one qa-insights batch run,
+  // one item per agent with finalized evals and no assessment already
+  // covering the month (the guard that also avoids double-spend while
+  // Railway's own monthly export still writes assessments during shadow).
+  let eom: any = null;
+  const laDay = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "America/Los_Angeles",
+  }).format(new Date());
+  if (laDay.endsWith("-01")) {
+    const [y, m] = laDay.slice(0, 7).split("-").map(Number);
+    const closed = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
+    try {
+      const { eomAssessmentBatch } = await import("../routes/insights.js");
+      eom = await eomAssessmentBatch(
+        db, request, ["member_support", "sales", "sofia"], closed
+      );
+    } catch (err) {
+      eom = { triggered: false, error: String((err as any)?.message ?? err).slice(0, 200) };
+    }
+  }
+
   const { drainScoreQueue } = await import("../routes/scoring.js");
   const started = await drainScoreQueue(db, request);
-  return JSON.stringify({ pruned: summary, pumped: started ?? null, digest });
+  return JSON.stringify({
+    pruned: summary, pumped: started ?? null, digest,
+    ...(eom ? { eom } : {}),
+  });
 }

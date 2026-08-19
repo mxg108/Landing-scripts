@@ -353,7 +353,7 @@
       <h2>AI Progression Assessment</h2>
       <div id="assessmentPlaceholder" style="text-align:center;padding:20px;">
         <button id="aiBtn" onclick="loadAIAssessment()" style="font-family:'DM Mono',monospace;font-size:0.85rem;padding:10px 24px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;">Get AI Assessment</button>
-        <p style="font-size:0.75rem;color:var(--muted);margin-top:8px;">Generates a Gemini coaching assessment (~$0.15 per API call)</p>
+        <p style="font-size:0.75rem;color:var(--muted);margin-top:8px;">Claude assessment grounded in the score history and coaching commitments — takes ~15s, cached 1h</p>
       </div>
       <div id="assessmentContent" class="hidden">
         <div id="assessmentOverall" class="assessment-overall"></div>
@@ -596,22 +596,34 @@
       document.getElementById('assessmentContent').classList.remove('hidden');
     }
 
+    // Async contract (CL4): POST triggers a qa-insights run (fresh
+    // persisted assessments return immediately — a repeat click never
+    // re-spends), then GET polls until the callback persists. Platform
+    // rule: the app never runs AI inline.
     async function loadAIAssessment() {
       if (!currentAgent) return;
       const btn = document.getElementById('aiBtn');
       btn.disabled = true;
       btn.textContent = 'Generating...';
-
-      const progression = await fetchJSON(
-        `${API_BASE}/agents/${encodeURIComponent(currentAgent)}/progression?days=${selectedDays}`
-      );
-
-      if (progression) {
-        _showAssessment(progression);
-        _cacheAssessment(progression);
+      const url = `${API_BASE}/agents/${encodeURIComponent(currentAgent)}/progression?days=${selectedDays}`;
+      try {
+        let res = await fetch(url, { method: 'POST' });
+        let data = await res.json().catch(() => ({}));
+        if (!res.ok && res.status !== 202) throw new Error(data.detail || `HTTP ${res.status}`);
+        const t0 = Date.now();
+        while (!data.ready) {
+          if (data.status === 'error') throw new Error(data.detail || 'generation failed');
+          if (Date.now() - t0 > 150000) throw new Error('timed out — try again');
+          btn.textContent = 'Claude is analyzing…';
+          await new Promise(r => setTimeout(r, 4000));
+          res = await fetch(url, { cache: 'no-store' });
+          data = await res.json().catch(() => ({}));
+        }
+        _showAssessment(data);
+        _cacheAssessment(data);
         _resetAIButton();
-      } else {
-        btn.textContent = 'Failed — retry';
+      } catch (e) {
+        btn.textContent = `Failed — retry (${String(e.message).slice(0, 60)})`;
         btn.disabled = false;
       }
     }
