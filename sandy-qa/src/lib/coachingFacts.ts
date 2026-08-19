@@ -12,6 +12,7 @@ import { fetchRecords } from "./records.js";
 
 const r1 = (n: number) => Math.round(n * 10) / 10;
 const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+const SANDY_BASE = 10_000_000;
 
 // Finalized-eval stats in [fromIso, toIso) — shared window primitive.
 export async function evalWindowStat(
@@ -191,15 +192,18 @@ export async function teamFacts(
     .bind(teamId, fromIso)
     .first<any>();
 
+  // Sandy-born only (CoachingTagsSpec §1.2): Railway-era coachings are
+  // deprecated read-side — they also produced the "overdue confirmations"
+  // noise the Sandy queue could never act on.
   const sessions = (
     await db
       .prepare(
         `SELECT c.*, COALESCE(a.canonical_name, a.name, '?') AS agent_name
          FROM qa_coachings c LEFT JOIN qa_agents a ON a.id = c.agent_id
-         WHERE c.team_id = ? AND c.status != 'cancelled'
+         WHERE c.team_id = ? AND c.id >= ? AND c.status != 'cancelled'
            AND COALESCE(c.completed_at, c.created_at) >= ?`
       )
-      .bind(teamId, fromIso)
+      .bind(teamId, SANDY_BASE, fromIso)
       .all<any>()
   ).results;
 
@@ -209,10 +213,10 @@ export async function teamFacts(
           .prepare(
             `SELECT k.*, c.agent_id, c.completed_at, c.action_plan_deadline
              FROM qa_coaching_commitments k JOIN qa_coachings c ON c.id = k.coaching_id
-             WHERE c.team_id = ? AND c.status != 'cancelled'
+             WHERE c.team_id = ? AND c.id >= ? AND c.status != 'cancelled'
                AND COALESCE(c.completed_at, c.created_at) >= ?`
           )
-          .bind(teamId, fromIso)
+          .bind(teamId, SANDY_BASE, fromIso)
           .all<any>()
       ).results
     : [];

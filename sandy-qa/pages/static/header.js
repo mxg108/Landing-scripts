@@ -90,18 +90,19 @@
 
   // --- Markup -------------------------------------------------------------
   function renderInto(host, opts) {
+    // showOn: 'all' = every page; a list = only those page modes. Team View
+    // hides on the team page itself (it IS the current page). Coaching is
+    // capability-gated (CoachingTagsSpec §1.1): rendered hidden, revealed
+    // by the whoami fetch below when can_coach — non-coaches never see it.
     const navLinks = [
-      { key: 'scoring',  label: 'Batch Scoring', href: `/score/${opts.team}`,     showOn: 'both'  },
-      { key: 'teamview', label: 'Team View',     href: `/dashboard/${opts.team}`, showOn: 'agent' },
-      { key: 'lookup',   label: 'Lookup',        href: `/lookup/${opts.team}`,    showOn: 'both'  },
+      { key: 'scoring',  label: 'Batch Scoring', href: `/score/${opts.team}`,     showOn: 'all' },
+      { key: 'teamview', label: 'Team View',     href: `/dashboard/${opts.team}`, showOn: ['agent', 'plain'] },
+      { key: 'lookup',   label: 'Lookup',        href: `/lookup/${opts.team}`,    showOn: 'all' },
+      { key: 'coaching', label: 'Coaching',      href: `/coaching/${opts.team}`,  showOn: ['team', 'agent'], gated: 'can_coach' },
     ];
-    // Batch Scoring stays exposed on both views — it's the entry point to
-    // the bulk-scoring flow, which is being extended later and shouldn't
-    // be reachable only from the agent page. Team View is hidden on the
-    // team page itself (it IS the current page).
     const navHtml = navLinks
-      .filter(n => n.showOn === 'both' || n.showOn === opts.page)
-      .map(n => `<a class="qa-nav-btn" data-nav="${n.key}" href="${n.href}">${n.label}</a>`)
+      .filter(n => n.showOn === 'all' || n.showOn.includes(opts.page))
+      .map(n => `<a class="qa-nav-btn" data-nav="${n.key}" href="${n.href}"${n.gated ? ' hidden data-gated="' + n.gated + '"' : ''}>${n.label}</a>`)
       .join('');
 
     const supervisorOpts = (opts.supervisors || [])
@@ -113,6 +114,16 @@
       .join('');
 
     host.classList.add('qa-header');
+    // page:'plain' (coaching page): nav + title only — it has no window
+    // state, so the controls row is not rendered at all.
+    if (opts.page === 'plain') {
+      host.innerHTML = `
+      <div class="qa-header-nav">
+        ${navHtml}
+        <h1 id="qaHeaderTitle">${escapeHtml(opts.title || '')}</h1>
+      </div>`;
+      return;
+    }
     host.innerHTML = `
       <div class="qa-header-nav">
         ${navHtml}
@@ -171,6 +182,35 @@
 
     const $ = sel => host.querySelector(sel);
     const $$ = sel => Array.from(host.querySelectorAll(sel));
+
+    // Capability-gated nav (Coaching): one whoami fetch, cached per tab so
+    // Team↔Agent navigation doesn't re-ask. Reveal only when can_coach.
+    const gated = $$('.qa-nav-btn[data-gated]');
+    if (gated.length && opts.team) {
+      const cacheKey = `qa_whoami_${opts.team}`;
+      const reveal = (w) => {
+        gated.forEach(a => { if (w && w[a.dataset.gated]) a.hidden = false; });
+      };
+      let cached = null;
+      try { cached = JSON.parse(sessionStorage.getItem(cacheKey) || 'null'); } catch (e) {}
+      if (cached) reveal(cached);
+      else {
+        fetch(`/api/${opts.team}/whoami`)
+          .then(r => r.ok ? r.json() : null)
+          .then(w => {
+            if (!w) return;
+            try { sessionStorage.setItem(cacheKey, JSON.stringify({ can_coach: !!w.can_coach })); } catch (e) {}
+            reveal(w);
+          })
+          .catch(() => {});
+      }
+    }
+
+    // 'plain' pages have no controls — nav + title is the whole header.
+    if (opts.page === 'plain') {
+      if (typeof opts.onChange === 'function') opts.onChange({});
+      return {};
+    }
 
     // Hydrate controls from URL state.
     const supervisorSel = $('select[data-role="supervisor"]');

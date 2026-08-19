@@ -35,6 +35,9 @@ import {
 import { accessEmail } from "../lib/rbac.js";
 
 const WORKFLOW_NAME = "qa-scoring-pipeline";
+// Sandy-born id space (PR #174): evals/coachings/audit >= this are Sandy's;
+// below it is the Railway range the shadow sync owns.
+const SANDY_BASE = 10_000_000;
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -477,8 +480,10 @@ export async function scoreStatus(
 // ── review queue (§0.3) — port of eval_store.list_review_queue ─────────────
 // Every evaluation that WOULD require a human look and hasn't had one
 // (human_review_required_at set, completed_at not): flagged drafts parked by
-// the §3.14 gate, plus Railway-born queue rows carried in by the shadow sync.
-// Exits: approve (editor) or override stamps completed_at.
+// the §3.14 gate. Exits: approve (editor) or override stamps completed_at.
+// Sandy-born only since CoachingTagsSpec §1.2 (owner: fresh start on Sandy)
+// — Railway-born queue rows the shadow sync carries in no longer render;
+// they can only be resolved on Railway anyway (the editor's 409).
 
 export async function reviewQueue(
   db: D1Database,
@@ -490,11 +495,11 @@ export async function reviewQueue(
               agent_email, overall_score, state, scoring_status, source,
               human_review_required_at, auto_rescored_at, finalized_at
        FROM qa_evaluations
-       WHERE team_id = ? AND human_review_required_at IS NOT NULL
+       WHERE team_id = ? AND id >= ? AND human_review_required_at IS NOT NULL
          AND human_review_completed_at IS NULL
        ORDER BY human_review_required_at`
     )
-    .bind(teamId)
+    .bind(teamId, SANDY_BASE)
     .all<any>();
   return json({
     team_id: teamId,
@@ -507,8 +512,7 @@ export async function reviewQueue(
 // Shadow-period doctrine: Sandy actions touch SANDY-BORN evaluations only
 // (id >= SANDY_ID_BASE). A Railway-born row edited here would be silently
 // reverted by the next sync — refuse loudly instead; act on Railway.
-
-const SANDY_BASE = 10_000_000;
+// (SANDY_BASE itself is declared at the top of the file.)
 
 // A job-id ref (score-{team}-{call}-{agent}) maps to the call ref its run
 // persisted. Actions arrive with the editor URL's ref — which IS the job id
