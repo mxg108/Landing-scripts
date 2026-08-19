@@ -432,6 +432,28 @@ export async function handleTeamRoutes(
     const { coachingQueue } = await import("./coaching.js");
     return coachingQueue(request, db, m[1], lookupAllow);
   }
+  // ── coaching tags (CoachingTagsSpec §3 — routes/coachTags.ts) ────────────
+  m = path.match(/^\/api\/([^/]+)\/coach-tags$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
+    const { listTags } = await import("./coachTags.js");
+    return listTags(request, db, m[1], url, lookupAllow);
+  }
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const { createTag } = await import("./coachTags.js");
+    return createTag(request, db, m[1], lookupAllow);
+  }
+  m = path.match(/^\/api\/([^/]+)\/coach-tags\/(\d+)\/(deprecate|restore)$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const mod = await import("./coachTags.js");
+    return (m[3] === "deprecate" ? mod.deprecateTag : mod.restoreTag)(
+      request, db, m[1], Number(m[2]), lookupAllow
+    );
+  }
+  m = path.match(/^\/api\/([^/]+)\/coachings\/(\d+)\/tags$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "PUT") {
+    const { putSessionTags } = await import("./coachTags.js");
+    return putSessionTags(request, db, m[1], Number(m[2]), lookupAllow);
+  }
   m = path.match(/^\/api\/([^/]+)\/insights\/team$/);
   if (m && KNOWN_TEAMS.has(m[1]) && ["GET", "POST"].includes(request.method)) {
     const { teamInsightRequest } = await import("./insights.js");

@@ -10,6 +10,7 @@
 
 import { accessEmail, canCoach, resolveAccess, selfAgentFor } from "../lib/rbac.js";
 import { extractEvalId } from "../lib/records.js";
+import { setSessionTags, tagsForSessions } from "./coachTags.js";
 
 const SANDY_BASE = 10_000_000;
 
@@ -144,7 +145,12 @@ async function attachChildren(db: D1Database, sessions: any[]): Promise<void> {
   for (const s of sessions) {
     s.commitments = [];
     s.evaluations = [];
+    s.tags = [];
   }
+  // T1: typed coaching tags (CoachingTagsSpec §2) — kept on the self view
+  // too (themes of the agent's own session, not supervisor judgment).
+  const tagMap = await tagsForSessions(db, ids);
+  for (const [cid, tags] of tagMap) byId.get(cid) && (byId.get(cid).tags = tags);
   for (let i = 0; i < ids.length; i += 80) {
     const chunk = ids.slice(i, i + 80);
     const ph = chunk.map(() => "?").join(",");
@@ -440,6 +446,12 @@ export async function conductCoaching(
     return json({ detail: "a commitment deadline is required before conducting (PATCH it or pass deadline here)" }, 422);
   const completedBy = access.email || accessEmail(request);
   if (!completedBy) return json({ detail: "No SSO identity on this request." }, 401);
+  // Optional typed tags (T1) — validated BEFORE the status flip so a bad
+  // tag id can't leave a half-conducted session.
+  if (body.tag_ids !== undefined) {
+    const t = await setSessionTags(db, { id, outcome: c.outcome }, body.tag_ids, completedBy);
+    if (!t.ok) return t.error;
+  }
   const ts = now();
   await db
     .prepare(
@@ -653,6 +665,13 @@ export async function confirmCoaching(
     : voting.every((v) => v.status === "not_met")
       ? "not_met"
       : "partially_met";
+
+  // Optional typed tags (T1): the last edit before the set freezes with
+  // the confirmed record. Validated before any write.
+  if (body.tag_ids !== undefined) {
+    const t = await setSessionTags(db, { id, outcome: null }, body.tag_ids, confirmer);
+    if (!t.ok) return t.error;
+  }
 
   const ts = now();
   for (const [k, v] of verdicts) {
