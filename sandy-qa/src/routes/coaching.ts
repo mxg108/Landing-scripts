@@ -209,15 +209,18 @@ export async function listAgentCoachings(
   const days = Math.min(730, Math.max(1, parseInt(url.searchParams.get("days") ?? "90", 10) || 90));
   const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
   // Pending/unconfirmed sessions always show; closed history windows out.
+  // Sandy-born only (CoachingTagsSpec §1.2 — Railway-era coachings are
+  // deprecated read-side; the shadow sync would resurrect a delete, so
+  // the hard delete waits for cutover).
   const rows = await db
     .prepare(
       `SELECT * FROM qa_coachings
-       WHERE team_id = ? AND agent_id = ?
+       WHERE team_id = ? AND agent_id = ? AND id >= ?
          AND (status = 'pending' OR outcome IS NULL
               OR COALESCE(completed_at, created_at) >= ?)
        ORDER BY created_at DESC`
     )
-    .bind(teamId, agent.id, cutoff)
+    .bind(teamId, agent.id, SANDY_BASE, cutoff)
     .all<any>();
   const sessions = rows.results.map((s) => ({ ...s, sandy_born: s.id >= SANDY_BASE }));
   await attachChildren(db, sessions);
@@ -571,9 +574,10 @@ export async function listTeamCoachings(
   const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
   const status = p.get("status");
   const agent = (p.get("agent") ?? "").trim().toLowerCase();
-  let where = `c.team_id = ? AND (c.status = 'pending' OR c.outcome IS NULL
+  // Sandy-born only (CoachingTagsSpec §1.2 — Railway-era deprecated).
+  let where = `c.team_id = ? AND c.id >= ? AND (c.status = 'pending' OR c.outcome IS NULL
                OR COALESCE(c.completed_at, c.created_at) >= ?)`;
-  const binds: any[] = [teamId, cutoff];
+  const binds: any[] = [teamId, SANDY_BASE, cutoff];
   if (status && ["pending", "completed", "cancelled"].includes(status)) {
     where += " AND c.status = ?";
     binds.push(status);

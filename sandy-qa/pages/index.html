@@ -760,10 +760,8 @@
 
   // --- Review queue (§0.3) ---
   // Every evaluation that WOULD require a human look and hasn't had one.
-  // Rows exit via approve (editor) or override. Railway-born rows render
-  // for visibility but must be resolved on Railway during the shadow
-  // period (the editor refuses with a 409).
-  const SANDY_ID_BASE = 10000000;
+  // Rows exit via approve (editor) or override. Sandy-born only since
+  // CoachingTagsSpec §1.2 (the API filters; the origin column is gone).
 
   async function loadReviewQueue() {
     const body = document.getElementById('queue-body');
@@ -779,9 +777,6 @@
       }
       const rows = data.evaluations.map(ev => {
         const ref = ev.dialpad_entry_point_call_id || ev.dialpad_call_id || '';
-        const born = ev.id >= SANDY_ID_BASE
-          ? '<span class="born-pill sandy">sandy</span>'
-          : '<span class="born-pill" title="Resolve on Railway during the shadow period">railway</span>';
         const required = (ev.human_review_required_at || '').slice(0, 10);
         const score = ev.overall_score != null ? ev.overall_score : '—';
         return `<tr>
@@ -789,14 +784,13 @@
           <td>${esc(ev.agent_name_raw || '')}</td>
           <td class="hide-sm">${esc(score)}</td>
           <td class="hide-sm">${esc(required)}</td>
-          <td>${born}</td>
           <td><a class="open-editor-link" href="/scorecard/${TEAM_ID}/${encodeURIComponent(ref)}" target="_blank" rel="noopener">Open</a></td>
         </tr>`;
       }).join('');
       body.innerHTML = `<div style="overflow-x:auto"><table class="queue-table">
         <thead><tr>
           <th>Call</th><th>Agent</th><th class="hide-sm">Score</th>
-          <th class="hide-sm">Queued</th><th>Origin</th><th></th>
+          <th class="hide-sm">Queued</th><th></th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table></div>`;

@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/header.css" />
   <style>
     :root {
       --navy: #15192D; --accent: #1A61D9; --bg: #E7EFFB; --surface: #fff;
@@ -16,10 +17,7 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'DM Mono', monospace; background: var(--bg); color: var(--text); min-height: 100vh; }
     h1, h2, h3 { font-family: 'Fraunces', serif; }
-    .header { background: var(--navy); color: #fff; padding: 18px 24px; display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
-    .header h1 { font-size: 1.25rem; }
-    .header .sub { font-size: .75rem; color: rgba(255,255,255,.65); }
-    .header a { color: #9ec5f4; font-size: .75rem; text-decoration: none; }
+    /* Header = shared QAHeader (/static/header.js, page:'plain'). */
     .container { max-width: 1000px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
     .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
     .card h2 { font-size: 1.05rem; margin-bottom: 14px; color: var(--navy); }
@@ -70,12 +68,7 @@
   </style>
 </head>
 <body>
-  <div class="header">
-    <h1>Coaching</h1>
-    <span class="sub" id="teamLabel"></span>
-    <a id="dashLink" href="#">Team dashboard ›</a>
-    <a id="consoleLink" href="#">Scoring console ›</a>
-  </div>
+  <div id="appHeader"></div>
 
   <div class="container">
     <div class="card">
@@ -114,12 +107,12 @@
     </div>
   </div>
 
+  <script src="/static/header.js"></script>
   <script>
     const TEAM_ID = (location.pathname.match(/^\/coaching\/([^\/]+)/) || [, 'member_support'])[1];
     const API_BASE = `/api/${TEAM_ID}`;
-    document.getElementById('teamLabel').textContent = TEAM_ID.replace(/_/g, ' ');
-    document.getElementById('dashLink').href = `/dashboard/${TEAM_ID}`;
-    document.getElementById('consoleLink').href = `/score/${TEAM_ID}`;
+    const TEAM_LABEL = { member_support: 'Member Support', sales: 'Sales', sofia: 'Sofia AI' }[TEAM_ID] || TEAM_ID;
+    window.QAHeader.init({ page: 'plain', team: TEAM_ID, title: `Coaching — ${TEAM_LABEL}` });
 
     const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
