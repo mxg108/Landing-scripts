@@ -16,9 +16,15 @@ import asyncio
 import importlib.util
 import json
 import pathlib
+import socket
 import subprocess
 import sys
 from datetime import datetime, timezone
+
+# Belt-and-braces against the 2026-08-19 hang class: any socket opened by
+# this process (asyncpg aside — it has its own connect timeout) gives up
+# instead of blocking forever. The CLI subprocesses carry their own caps.
+socket.setdefaulttimeout(120)
 
 _HERE = pathlib.Path(__file__).parent
 spec = importlib.util.spec_from_file_location("pg_to_d1", _HERE / "pg_to_d1.py")
@@ -39,7 +45,12 @@ SANDY_ID_BASE = 10_000_000
 # Value = extra WHERE guard ('' = full wipe, Railway-owned table).
 WIPE_ORDER = {
     "qa_agent_stat_points": f"WHERE evaluation_id < {SANDY_ID_BASE}",
-    "qa_coaching_evaluations": f"WHERE evaluation_id < {SANDY_ID_BASE}",
+    # Scoped by COACHING id, not evaluation id (0007): Sandy-born coachings
+    # may link Railway-born evals (the builder's normal case). The junction
+    # lost its evaluation FK in 0007, so surviving Sandy links to wiped-and-
+    # reimported evals are commit-safe; Railway junctions wipe+reimport with
+    # their coachings.
+    "qa_coaching_evaluations": f"WHERE coaching_id < {SANDY_ID_BASE}",
     # Parents range-scoped like their children (CoachingLoopSpec §2 / CL0):
     # Sandy-born rows (>= SANDY_ID_BASE) survive the child wipes, so an
     # unscoped parent wipe fails the deferred-FK check at COMMIT and D1
