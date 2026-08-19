@@ -6,7 +6,8 @@
 // at Sandy-born high-range ids.
 
 import { loadTeamConfig, type TeamConfig } from "../lib/teamConfig.js";
-import { agentFacts, type AgentFactsWindow } from "../lib/coachingFacts.js";
+import { agentFacts, teamFacts, type AgentFactsWindow } from "../lib/coachingFacts.js";
+import { canCoach, resolveAccess } from "../lib/rbac.js";
 
 const WORKFLOW_NAME = "qa-insights";
 const SANDY_BASE = 10_000_000;
@@ -323,6 +324,115 @@ export async function eomAssessmentBatch(
   };
 }
 
+// ── team insight (CL5) — "what should we coach most" ───────────────────────
+// Surfaced on the /coaching page (the §11.2 home for coach-facing tools).
+
+export function buildTeamPrompts(teamId: string, facts: any) {
+  const system =
+    "You are a QA program analyst for Landing's call teams, advising the " +
+    "human trainers and supervisors who run coaching. You are given a " +
+    "deterministic fact sheet computed from the QA database. Identify the " +
+    "areas of opportunity the team should tackle MOST, judge whether " +
+    "coaching is working (commitment met-rate, post-coaching movement), and " +
+    "call out program hygiene problems (overdue confirmations, uncoached " +
+    "agents). Cite the figures you use; never invent numbers. Be direct.";
+  const prompt =
+    `TEAM FACT SHEET (${teamId}):\n${JSON.stringify(facts, null, 2)}\n\n` +
+    `Respond with ONLY a JSON object (no fences, no prose outside it):\n` +
+    `{"narrative": "<3-6 sentences: is coaching moving the numbers, and ` +
+    `what matters most now>",\n` +
+    ` "top_priorities": [{"title": "<short imperative>", "why": "<1-2 ` +
+    `sentences with figures from the facts>"}]}\n` +
+    `Give 2-4 priorities, most important first.`;
+  return { system, prompt };
+}
+
+export async function teamInsightRequest(
+  request: Request,
+  db: D1Database,
+  teamId: string,
+  url: URL,
+  lookupAllow?: string
+): Promise<Response> {
+  const access = await resolveAccess(request, db, lookupAllow);
+  if (!canCoach(access, teamId))
+    return json({ detail: "Team insights are restricted to QA staff and team managers." }, 403);
+  const days = Math.min(365, Math.max(14, parseInt(url.searchParams.get("days") ?? "90", 10) || 90));
+  const jobId = `insights-team-${teamId}-${days}`;
+
+  const current = await db
+    .prepare(
+      `SELECT * FROM qa_coaching_insights
+       WHERE team_id = ? AND scope = 'team' AND is_current = 1
+       ORDER BY generated_at DESC LIMIT 1`
+    )
+    .bind(teamId)
+    .first<any>();
+  const fresh = current && Date.now() - Date.parse(current.generated_at) < FRESH_MS;
+  const existing = await db
+    .prepare("SELECT status, result FROM workflow_runs WHERE run_id = ?")
+    .bind(jobId)
+    .first<any>();
+  const inFlight = existing && ["queued", "pending", "running"].includes(existing.status);
+
+  const shape = (row: any) => ({
+    ready: true,
+    narrative: row.narrative,
+    facts: row.facts ? JSON.parse(row.facts) : null,
+    generated_at: row.generated_at,
+    window_days: row.window_start && row.window_end
+      ? Math.round((Date.parse(row.window_end) - Date.parse(row.window_start)) / 86_400_000)
+      : null,
+  });
+
+  if (request.method === "GET") {
+    if (inFlight) return json({ ready: false, job_id: jobId, status: "pending" }, 202);
+    if (current) return json(shape(current));
+    if (existing?.status === "error") {
+      let note = "generation failed";
+      try { note = JSON.parse(existing.result)?.note ?? note; } catch {}
+      return json({ ready: false, status: "error", detail: note });
+    }
+    return json({ ready: false, status: "none" });
+  }
+
+  // POST — regenerate (fresh current row within the hour → serve, no spend).
+  if (fresh) return json(shape(current));
+  if (inFlight) return json({ ready: false, job_id: jobId, status: "pending", deduped: true }, 202);
+
+  const config = await loadTeamConfig(db, teamId);
+  const names: Record<string, string> = {};
+  for (const s of config.sections_by_number) names[s.id] = s.name;
+  const facts = await teamFacts(db, teamId, names, days);
+  if (!facts.coaching.sessions)
+    return json({ detail: `No coaching sessions on ${teamId} in the last ${days} days — nothing to analyze yet.` }, 404);
+  const { system, prompt } = buildTeamPrompts(teamId, facts);
+  const ref = {
+    kind: "team",
+    team_id: teamId,
+    days,
+    window_start: new Date(Date.now() - days * 86_400_000).toISOString(),
+    window_end: new Date().toISOString(),
+    facts,
+    job_id: jobId,
+  };
+  const trigger = await triggerInsights(db, request, {
+    mode: "team",
+    model: { model: INSIGHTS_MODEL, max_tokens: 2000 },
+    items: [{ ref, system, prompt }],
+  });
+  if (!trigger.ok)
+    return json({ ready: false, status: "busy", detail: trigger.detail }, 409);
+  await db
+    .prepare(
+      "INSERT INTO workflow_runs (run_id, workflow_name, status, result, created_at) VALUES (?, ?, 'running', ?, strftime('%Y-%m-%dT%H:%M:%fZ','now')) " +
+        "ON CONFLICT(run_id) DO UPDATE SET status='running', result=excluded.result"
+    )
+    .bind(jobId, WORKFLOW_NAME, JSON.stringify({ sandy_run_id: trigger.runId }))
+    .run();
+  return json({ ready: false, job_id: jobId, status: "pending" }, 202);
+}
+
 // ── callback persist ───────────────────────────────────────────────────────
 
 export async function insightsCallback(
@@ -336,6 +446,52 @@ export async function insightsCallback(
     const ref = item.ref ?? {};
     try {
       if (!item.ok) throw new Error(item.error ?? "item failed");
+      if (ref.kind === "team") {
+        const parsed = parseItemJson(item.text ?? "");
+        if (!parsed?.narrative)
+          throw new Error("response is not the expected JSON shape");
+        const prios = Array.isArray(parsed.top_priorities) ? parsed.top_priorities : [];
+        // One displayable text — narrative + numbered priorities; the input
+        // fact sheet persists beside it so every figure stays checkable.
+        const narrative =
+          String(parsed.narrative) +
+          (prios.length
+            ? "\n\nTOP PRIORITIES:\n" +
+              prios
+                .map((p: any, i: number) => `${i + 1}. ${p.title} — ${p.why}`)
+                .join("\n")
+            : "");
+        await db
+          .prepare(
+            "UPDATE qa_coaching_insights SET is_current = 0 WHERE team_id = ? AND scope = 'team' AND is_current = 1"
+          )
+          .bind(ref.team_id)
+          .run();
+        await db
+          .prepare(
+            `INSERT INTO qa_coaching_insights (scope, team_id, window_start,
+              window_end, facts, narrative, models_used)
+             VALUES ('team', ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            ref.team_id, ref.window_start, ref.window_end,
+            JSON.stringify(ref.facts ?? {}), narrative,
+            JSON.stringify({
+              text: { provider: "anthropic", model: item.model ?? INSIGHTS_MODEL },
+              usage: item.usage ?? null,
+              mode: "team",
+            })
+          )
+          .run();
+        persisted++;
+        if (ref.job_id) {
+          await db
+            .prepare("UPDATE workflow_runs SET status='complete', result=? WHERE run_id=?")
+            .bind(JSON.stringify({ ok: true, scope: "team" }), ref.job_id)
+            .run();
+        }
+        continue;
+      }
       if (!["progression", "eom"].includes(ref.kind))
         throw new Error(`unknown ref kind '${ref.kind}'`);
       const config = await loadTeamConfig(db, ref.team_id);

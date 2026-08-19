@@ -166,3 +166,130 @@ export async function agentFacts(
     coachings,
   };
 }
+
+// ── team scope (CL5) — "which areas of opportunity to tackle most" ─────────
+// Takes only (teamId, section-name map) rather than a full TeamConfig so
+// the harness can exercise it without a rubric fixture; the route passes
+// real config-derived names.
+
+export async function teamFacts(
+  db: D1Database,
+  teamId: string,
+  sectionNameById: Record<string, string>,
+  windowDays: number
+): Promise<any> {
+  const fromIso = new Date(Date.now() - windowDays * 86_400_000).toISOString();
+  const secName = (id: string | null) =>
+    id ? (sectionNameById[id] ?? id) : "(no section linked)";
+
+  const base = await db
+    .prepare(
+      `SELECT COUNT(*) AS n, AVG(overall_score) AS avg FROM qa_evaluations
+       WHERE team_id = ? AND state = 'finalized'
+         AND COALESCE(call_connected_at, created_at) >= ?`
+    )
+    .bind(teamId, fromIso)
+    .first<any>();
+
+  const sessions = (
+    await db
+      .prepare(
+        `SELECT c.*, COALESCE(a.canonical_name, a.name, '?') AS agent_name
+         FROM qa_coachings c LEFT JOIN qa_agents a ON a.id = c.agent_id
+         WHERE c.team_id = ? AND c.status != 'cancelled'
+           AND COALESCE(c.completed_at, c.created_at) >= ?`
+      )
+      .bind(teamId, fromIso)
+      .all<any>()
+  ).results;
+
+  const commits = sessions.length
+    ? (
+        await db
+          .prepare(
+            `SELECT k.*, c.agent_id, c.completed_at, c.action_plan_deadline
+             FROM qa_coaching_commitments k JOIN qa_coachings c ON c.id = k.coaching_id
+             WHERE c.team_id = ? AND c.status != 'cancelled'
+               AND COALESCE(c.completed_at, c.created_at) >= ?`
+          )
+          .bind(teamId, fromIso)
+          .all<any>()
+      ).results
+    : [];
+
+  // Most-coached sections + their post-coaching movement: for every
+  // commitment linked to a section, the agent's overall before vs after
+  // that session (windows as everywhere: 30d-in → conduct → deadline/now).
+  const bySection = new Map<string, any>();
+  for (const k of commits) {
+    const key = k.section_id ?? "__none__";
+    let g = bySection.get(key);
+    if (!g)
+      bySection.set(key, (g = {
+        section_id: k.section_id, section: secName(k.section_id),
+        commitments: 0, met: 0, partially_met: 0, not_met: 0, open: 0, waived: 0,
+        deltas: [] as number[],
+      }));
+    g.commitments++;
+    g[k.status] = (g[k.status] ?? 0) + 1;
+    if (k.completed_at) {
+      const preStart = new Date(Date.parse(k.completed_at) - 30 * 86_400_000).toISOString();
+      const postEnd = k.action_plan_deadline
+        ? `${k.action_plan_deadline}T23:59:59Z`
+        : new Date().toISOString();
+      const pre = await evalWindowStat(db, teamId, k.agent_id, preStart, k.completed_at);
+      const post = await evalWindowStat(db, teamId, k.agent_id, k.completed_at, postEnd);
+      if (pre.avg !== null && post.avg !== null) g.deltas.push(r1(post.avg - pre.avg));
+    }
+  }
+  const coachedSections = [...bySection.values()]
+    .map((g) => ({
+      ...g,
+      avg_overall_delta_after_coaching: g.deltas.length ? r1(mean(g.deltas)) : null,
+      deltas: undefined,
+    }))
+    .sort((a, b) => b.commitments - a.commitments);
+
+  // Coverage + hygiene + met-rate.
+  const roster = (
+    await db
+      .prepare("SELECT COALESCE(canonical_name, name) AS n FROM qa_agents WHERE team_id = ? AND active = 1")
+      .bind(teamId)
+      .all<any>()
+  ).results.map((r) => r.n);
+  const coachedAgents = [...new Set(sessions.map((s) => s.agent_name))];
+  const today = new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Los_Angeles" }).format(new Date());
+  const overdue = sessions.filter(
+    (s) => s.status === "completed" && !s.outcome &&
+      s.action_plan_deadline && s.action_plan_deadline <= today
+  ).length;
+  const neverConducted = sessions.filter((s) => s.status === "pending").length;
+  const closed = commits.filter((k) => k.status !== "open" && k.status !== "waived");
+  const metRate = closed.length
+    ? r1((closed.filter((k) => k.status === "met").length / closed.length) * 100)
+    : null;
+
+  return {
+    team_id: teamId,
+    window_days: windowDays,
+    evaluations: { n: base?.n ?? 0, avg: base?.avg != null ? r1(base.avg) : null },
+    coaching: {
+      sessions: sessions.length,
+      confirmed: sessions.filter((s) => s.outcome).length,
+      outcomes: {
+        met: sessions.filter((s) => s.outcome === "met").length,
+        partially_met: sessions.filter((s) => s.outcome === "partially_met").length,
+        not_met: sessions.filter((s) => s.outcome === "not_met").length,
+      },
+      commitment_met_rate_pct: metRate,
+      overdue_confirmations: overdue,
+      pending_never_conducted: neverConducted,
+    },
+    coached_sections: coachedSections,
+    coverage: {
+      active_agents: roster.length,
+      agents_coached: coachedAgents.length,
+      agents_not_coached: roster.filter((n) => !coachedAgents.includes(n)),
+    },
+  };
+}

@@ -89,6 +89,17 @@
     </div>
 
     <div class="card">
+      <h2>Team insights</h2>
+      <div id="insightBody">
+        <div class="empty">Loading…</div>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:10px;align-items:baseline">
+        <button class="act" id="insightBtn" onclick="generateInsight()">Generate</button>
+        <span class="status-line" id="insightStatus"></span>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>All sessions</h2>
       <div class="filters">
         <select id="fStatus" onchange="loadAll()">
@@ -294,8 +305,67 @@
       row.style.display = row.style.display === 'none' ? '' : 'none';
     }
 
+    // ── team insights (CL5 — Claude narrative over the deterministic
+    //    team fact sheet; regenerate = trigger + poll, cached 1h) ─────────
+    function renderInsight(data) {
+      const f = data.facts || {};
+      const c = f.coaching || {};
+      const factsLine = f.evaluations
+        ? `<div class="facts" style="margin:8px 0 0">${f.evaluations.n} evals avg ${f.evaluations.avg} · ` +
+          `${c.sessions ?? 0} sessions (${c.confirmed ?? 0} confirmed) · ` +
+          `commitment met-rate ${c.commitment_met_rate_pct ?? '—'}% · ` +
+          `${c.overdue_confirmations ?? 0} overdue confirmation(s)</div>`
+        : '';
+      document.getElementById('insightBody').innerHTML =
+        `<div class="detail" style="white-space:pre-wrap">${esc(data.narrative)}</div>` +
+        factsLine +
+        `<div class="status-line">generated ${laDay(data.generated_at)} · window ${data.window_days ?? '—'}d — every figure is computable from the stored fact sheet</div>`;
+      document.getElementById('insightBtn').textContent = 'Regenerate';
+    }
+
+    async function loadInsight() {
+      try {
+        const data = await getJSON(`${API_BASE}/insights/team`);
+        if (data.ready) renderInsight(data);
+        else if (data.status === 'pending') pollInsight();
+        else document.getElementById('insightBody').innerHTML =
+          '<div class="empty">No team insight generated yet — Generate builds one from the coaching fact sheet (~15s).</div>';
+      } catch (e) {
+        document.getElementById('insightBody').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+      }
+    }
+
+    async function pollInsight() {
+      const status = document.getElementById('insightStatus');
+      const t0 = Date.now();
+      status.textContent = 'Claude is analyzing…';
+      while (Date.now() - t0 < 150000) {
+        await new Promise(r => setTimeout(r, 4000));
+        const res = await fetch(`${API_BASE}/insights/team`, { cache: 'no-store' });
+        const data = await res.json().catch(() => ({}));
+        if (data.ready) { renderInsight(data); status.textContent = ''; return; }
+        if (data.status === 'error') { status.textContent = `Failed: ${data.detail}`; return; }
+      }
+      status.textContent = 'Timed out — reload to check.';
+    }
+
+    async function generateInsight() {
+      const btn = document.getElementById('insightBtn');
+      const status = document.getElementById('insightStatus');
+      btn.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/insights/team`, { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok && res.status !== 202) throw new Error(data.detail || `HTTP ${res.status}`);
+        if (data.ready) renderInsight(data);
+        else await pollInsight();
+      } catch (e) { status.textContent = `Failed: ${e.message}`; }
+      btn.disabled = false;
+    }
+
     loadQueue();
     loadAll();
+    loadInsight();
   </script>
 </body>
 </html>

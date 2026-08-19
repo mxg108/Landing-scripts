@@ -432,6 +432,11 @@ export async function handleTeamRoutes(
     const { coachingQueue } = await import("./coaching.js");
     return coachingQueue(request, db, m[1], lookupAllow);
   }
+  m = path.match(/^\/api\/([^/]+)\/insights\/team$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && ["GET", "POST"].includes(request.method)) {
+    const { teamInsightRequest } = await import("./insights.js");
+    return teamInsightRequest(request, db, m[1], url, lookupAllow);
+  }
   m = path.match(/^\/api\/([^/]+)\/chiclets$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
     const { listChiclets } = await import("./coaching.js");
