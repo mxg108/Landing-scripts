@@ -111,10 +111,21 @@
       <div class="meta" style="font-size:.72rem;color:var(--muted);margin-bottom:10px">
         The typed vocabulary behind session tags (supertag → tag → subtag).
         Deprecating cascades to a family's subtags; restore is per-node.
-        New tags are created from any session screen.
+        A parent-prefixed name (e.g. <b>dialpad_transfers</b>) files the new
+        tag under its family automatically.
       </div>
-      <div class="filters">
-        <label style="font-size:.75rem;display:flex;align-items:center;gap:6px;margin:0">
+      <div class="filters" style="align-items:baseline">
+        <select id="newTagType">
+          <option value="sop">sop</option>
+          <option value="system_skills">system skills</option>
+          <option value="soft_skills">soft skills</option>
+          <option value="effectiveness">effectiveness</option>
+        </select>
+        <input id="newTagName" type="text" placeholder="new tag name…" maxlength="60"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();adminCreateTag()}">
+        <button class="act" onclick="adminCreateTag()">Add tag</button>
+        <span class="status-line" id="newTagStatus" style="margin-top:0"></span>
+        <label style="font-size:.75rem;display:flex;align-items:center;gap:6px;margin:0 0 0 auto">
           <input type="checkbox" id="tagShowDeprecated" onchange="loadTagAdmin()"> show deprecated
         </label>
       </div>
@@ -290,12 +301,15 @@
     }
 
     // ── tag admin (CoachingTagsSpec §4 — vocabulary lives with coaches) ──
+    let _adminTags = [];
+
     async function loadTagAdmin() {
       const body = document.getElementById('tagAdminBody');
       const showDep = document.getElementById('tagShowDeprecated').checked;
       try {
         const data = await getJSON(`${API_BASE}/coach-tags${showDep ? '?include=deprecated' : ''}`);
         const all = data.tags;
+        _adminTags = all;
         const byId = new Map(all.map(t => [t.id, t]));
         const depth = (t) => { let d = 0, c = t; while (c.parent_tag_id && byId.has(c.parent_tag_id)) { d++; c = byId.get(c.parent_tag_id); } return d; };
         body.innerHTML = `<table><thead><tr>
@@ -309,24 +323,92 @@
               <td class="hide-sm">${t.sessions}</td>
               <td>${esc(t.status)}</td>
               <td>${t.status === 'active'
-                ? `<button class="act secondary" onclick="deprecateTag(${t.id}, '${esc(t.name)}', ${t.active_children})">Deprecate</button>`
+                ? `<button class="act secondary" onclick="toggleDeprecate(${t.id})">Deprecate</button>`
                 : `<button class="act secondary" onclick="restoreTag(${t.id})">Restore</button>`}</td>
-            </tr>`).join('')}</tbody></table>`;
+            </tr>
+            <tr id="dep-${t.id}" style="display:none"><td colspan="6"></td></tr>`).join('')}</tbody></table>`;
       } catch (e) {
         body.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
       }
     }
 
-    async function deprecateTag(id, name, children) {
-      const warn = children ? ` This cascades to ${children} active subtag(s).` : '';
-      const note = prompt(`Deprecate '${name}'?${warn}\nOptional note (cancel to abort):`, '');
-      if (note === null) return;
+    // New tags from the card — same parent inference as the session
+    // picker: the longest existing active name-prefix becomes the parent.
+    async function adminCreateTag() {
+      const st = document.getElementById('newTagStatus');
+      const input = document.getElementById('newTagName');
+      const type = document.getElementById('newTagType').value;
+      const raw = input.value.trim();
+      if (!raw) { st.textContent = 'Name required.'; return; }
+      st.textContent = '…';
+      try {
+        const norm = raw.toLowerCase().trim().replace(/[\s\-]+/g, '_').replace(/[^a-z0-9_]/g, '');
+        const family = _adminTags.filter(t =>
+          t.type === type && t.status === 'active' && norm.startsWith(t.name + '_'));
+        const parent = family.sort((a, b) => b.name.length - a.name.length)[0] || null;
+        const body = { type, name: raw };
+        if (parent) body.parent_tag_id = parent.id;
+        const res = await fetch(`${API_BASE}/coach-tags`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { st.textContent = data.detail || `HTTP ${res.status}`; return; }
+        st.textContent = parent ? `created under ${parent.name}` : 'created';
+        input.value = '';
+        loadTagAdmin();
+      } catch (e) { st.textContent = e.message; }
+    }
+
+    // Inline deprecate panel: optional replacement (rename/merge — the
+    // no_fcr → fcr_missing case) + note. Replacements stay ON-AXIS (same
+    // supertag, matching the inheritance doctrine) and can't come from the
+    // tag's own family (the cascade is about to deprecate those).
+    function toggleDeprecate(id) {
+      const row = document.getElementById(`dep-${id}`);
+      const open = row.style.display !== 'none';
+      document.querySelectorAll('tr[id^="dep-"]').forEach(tr => { tr.style.display = 'none'; });
+      if (open) return;
+      const t = _adminTags.find(x => x.id === id);
+      if (!t) return;
+      const candidates = _adminTags.filter(x =>
+        x.status === 'active' && x.type === t.type && x.id !== id &&
+        !x.name.startsWith(t.name + '_'));
+      const warn = t.active_children
+        ? `<div class="empty" style="padding:4px 0;color:var(--amber)">Cascades to ${t.active_children} active subtag(s).</div>` : '';
+      row.firstElementChild.innerHTML = `
+        <div class="confirm-panel">
+          <div style="font-size:.78rem;margin-bottom:8px">Deprecate <b>${esc(t.name)}</b>${warn}</div>
+          <div class="verdict-row">
+            <select id="depRepl-${id}">
+              <option value="">no replacement</option>
+              ${candidates.map(c => `<option value="${c.id}">replaced by: ${esc(c.name)}</option>`).join('')}
+            </select>
+            <input type="text" id="depNote-${id}" placeholder="note (e.g. 'typo — renamed')" maxlength="200">
+          </div>
+          <div style="display:flex;gap:8px;align-items:baseline">
+            <button class="act" onclick="doDeprecate(${id})">Deprecate</button>
+            <button class="act secondary" onclick="toggleDeprecate(${id})">Cancel</button>
+            <span class="status-line" id="depStatus-${id}"></span>
+          </div>
+        </div>`;
+      row.style.display = '';
+    }
+
+    async function doDeprecate(id) {
+      const st = document.getElementById(`depStatus-${id}`);
+      const repl = document.getElementById(`depRepl-${id}`).value;
+      const note = document.getElementById(`depNote-${id}`).value.trim();
+      st.textContent = '…';
+      const body = {};
+      if (repl) body.replaced_by_tag_id = Number(repl);
+      if (note) body.note = note;
       const res = await fetch(`${API_BASE}/coach-tags/${id}/deprecate`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ note: note.trim() || undefined }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) alert(data.detail || `HTTP ${res.status}`);
+      if (!res.ok) { st.textContent = data.detail || `HTTP ${res.status}`; return; }
       loadTagAdmin();
     }
 
