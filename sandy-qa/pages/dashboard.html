@@ -548,7 +548,7 @@
 
       const windowLabel = customActive ? `${dateFrom} – ${dateTo}` : `Last ${selectedDays} days`;
       document.getElementById('footer').textContent =
-        `Data source: Google Sheets | ${history.length} evaluations | ${windowLabel}`;
+        `Data source: Landing QA database | ${history.length} evaluations | ${windowLabel}`;
 
       // Restore cached AI assessment if available (preset-windows only).
       if (!customActive) {
