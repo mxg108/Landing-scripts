@@ -141,6 +141,11 @@ Each phase names the hard problems (§5) it retires. Estimates assume this runs 
 
 ### Phase 6 — Cutover & decommission *(days + 30-day safety window)*
 - Freeze Railway writes → final delta import → repoint Apps Script/HR/scripts → monitor → Railway kept dormant ~30 days → disconnect.
+- **Roster/Sheets kill list (AgentAddition §7, appended at AA3 2026-08-20 — Sandy is roster-authoritative since AA0):**
+  - Railway `/mails` sheet read + `MailsEntry` + scoring's Mails identity resolve (`backend/routes/team.py:390`, `routes/scoring.py:481–506`, `models/team_stats.py:116`)
+  - Analyst_History projection writes (`backend/services/sheets_projection.py`) + GAS row mode (`qa-automation/src/Main.js` row branch — payload mode stays)
+  - `scripts/import_agents.py` (DEPRECATED header at AA3; emergency-fallback only until here)
+  - `sandy-qa/scripts/shadow_sync.py::sync_agents_upsert` (INSERT-only since AA0; delete the whole arm)
 
 ---
 
