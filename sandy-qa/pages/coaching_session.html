@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Coaching Session</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/header.css" />
+  <style>
+    :root {
+      --navy: #15192D; --accent: #1A61D9; --bg: #E7EFFB; --surface: #fff;
+      --border: #c9d5e8; --text: #15192D; --muted: #5a6478;
+      --green: #28A745; --amber: #E8A317; --red: #D9534F;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'DM Mono', monospace; background: var(--bg); color: var(--text); min-height: 100vh; }
+    h1, h2, h3 { font-family: 'Fraunces', serif; }
+    .container { max-width: 860px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+    .card h2 { font-size: 1.05rem; margin-bottom: 12px; color: var(--navy); }
+    .meta { font-size: .75rem; color: var(--muted); }
+    .pill { font-size: .66rem; font-weight: 500; padding: 2px 9px; border-radius: 999px; color: #fff; text-transform: uppercase; letter-spacing: .04em; }
+    .pill.pending { background: var(--accent); }
+    .pill.completed { background: #6ba87b; }
+    .pill.due { background: var(--red); }
+    .pill.outcome-met { background: var(--green); }
+    .pill.outcome-partially_met { background: var(--amber); }
+    .pill.outcome-not_met { background: var(--red); }
+    label { font-size: .72rem; color: var(--muted); display: block; margin: 10px 0 4px; }
+    input[type="date"], select, textarea {
+      font-family: 'DM Mono', monospace; font-size: .82rem; width: 100%;
+      padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+    }
+    textarea { min-height: 90px; line-height: 1.5; }
+    ul.commits { list-style: none; margin: 6px 0; }
+    ul.commits li { font-size: .82rem; line-height: 1.7; }
+    .links { font-size: .78rem; } .links a { color: var(--accent); }
+    button.act {
+      font-family: 'DM Mono', monospace; font-size: .8rem; padding: 9px 18px;
+      border-radius: 6px; border: 1px solid var(--accent); background: var(--accent);
+      color: #fff; cursor: pointer;
+    }
+    button.act.secondary { background: transparent; color: var(--accent); }
+    button.act:disabled { opacity: .5; cursor: not-allowed; }
+    .status-line { font-size: .75rem; color: var(--muted); }
+    .facts { background: var(--bg); border-radius: 8px; padding: 12px; font-size: .8rem; line-height: 1.55; margin-bottom: 10px; }
+    .facts b { color: var(--navy); }
+    .verdict-row { display: flex; gap: 8px; align-items: baseline; margin-bottom: 8px; flex-wrap: wrap; }
+    .verdict-row .ctext { flex: 2 1 300px; font-size: .82rem; line-height: 1.5; }
+    .verdict-row select { flex: 0 0 160px; width: auto; }
+    .verdict-row input { flex: 1 1 180px; font-family: 'DM Mono', monospace; font-size: .76rem; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; }
+
+    /* Tag picker — four supertag columns; families indent off the flat
+       name-ordered list (the parent-prefix guarantee). */
+    .tag-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
+    .tag-col h3 { font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: 8px; font-family: 'DM Mono', monospace; }
+    .tag-chip {
+      display: block; width: 100%; text-align: left;
+      font-family: 'DM Mono', monospace; font-size: .74rem; padding: 5px 10px;
+      margin-bottom: 4px; border-radius: 6px; border: 1px solid var(--border);
+      background: var(--bg); color: var(--text); cursor: pointer;
+    }
+    .tag-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .tag-chip.deprecated { opacity: .5; text-decoration: line-through; cursor: default; }
+    .tag-chip .depth1 { padding-left: 12px; } /* applied via style attr */
+    .tag-new { display: flex; gap: 6px; margin-top: 6px; }
+    .tag-new input {
+      flex: 1; font-family: 'DM Mono', monospace; font-size: .72rem;
+      padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px;
+    }
+    .tag-new button { font-family: 'DM Mono', monospace; font-size: .72rem; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--accent); color: var(--accent); background: transparent; cursor: pointer; }
+    .tag-hint { font-size: .66rem; color: var(--muted); margin-top: 4px; min-height: 14px; }
+    .chips-ro { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chips-ro .chip {
+      font-size: .72rem; padding: 3px 10px; border-radius: 999px;
+      border: 1px solid var(--border); background: var(--bg);
+    }
+    .chips-ro .chip b { font-weight: 500; color: var(--muted); font-size: .62rem; text-transform: uppercase; margin-right: 5px; }
+  </style>
+</head>
+<body>
+  <div id="appHeader"></div>
+
+  <div class="container">
+    <div class="card" id="headCard">
+      <h2 id="headTitle">Loading…</h2>
+      <div class="meta" id="headMeta"></div>
+    </div>
+    <div id="body"></div>
+  </div>
+
+  <script src="/static/header.js"></script>
+  <script>
+    const M = location.pathname.match(/^\/coaching\/([^\/]+)\/session\/(\d+)/) || [];
+    const TEAM_ID = M[1] || 'member_support';
+    const SESSION_ID = Number(M[2] || 0);
+    const API_BASE = `/api/${TEAM_ID}`;
+    const TEAM_LABEL = { member_support: 'Member Support', sales: 'Sales', sofia: 'Sofia AI' }[TEAM_ID] || TEAM_ID;
+    window.QAHeader.init({ page: 'plain', team: TEAM_ID, title: `Coaching Session — ${TEAM_LABEL}` });
+
+    const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const laDay = iso => iso ? new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Los_Angeles' }).format(new Date(iso)) : '';
+    const OUTCOME_COLORS = { met: 'var(--green)', partially_met: 'var(--amber)', not_met: 'var(--red)' };
+    const GLYPHS = { open: '○', met: '✓', partially_met: '◐', not_met: '✗', waived: '–' };
+
+    async function getJSON(url, opts) {
+      const res = await fetch(url, opts);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      return data;
+    }
+
+    // ── tag picker ─────────────────────────────────────────────────────────
+    // Selection is a Set of tag ids. Vocabulary renders per supertag column;
+    // depth = underscore-steps beyond the family root (prefix guarantee).
+    let _tagsByType = {};
+    let _selected = new Set();
+
+    async function loadVocabulary() {
+      const data = await getJSON(`${API_BASE}/coach-tags`);
+      _tagsByType = data.by_type;
+    }
+
+    function tagDepth(tag, all) {
+      // parent chain length via parent ids present in the same listing
+      let d = 0, cur = tag;
+      const byId = new Map(all.map(t => [t.id, t]));
+      while (cur.parent_tag_id && byId.has(cur.parent_tag_id)) { d++; cur = byId.get(cur.parent_tag_id); }
+      return d;
+    }
+
+    function renderPicker(container) {
+      const wrap = document.getElementById(container);
+      const all = Object.values(_tagsByType).flat();
+      wrap.innerHTML = `<div class="tag-grid">${Object.entries(_tagsByType).map(([type, tags]) => `
+        <div class="tag-col" data-type="${esc(type)}">
+          <h3>${esc(type.replace(/_/g, ' '))}</h3>
+          <div class="tag-list">${tags.map(t => `
+            <button type="button" class="tag-chip${_selected.has(t.id) ? ' on' : ''}"
+              data-tag="${t.id}" style="padding-left:${10 + tagDepth(t, all) * 14}px"
+              onclick="toggleTag(${t.id}, this)">${esc(t.name)}</button>`).join('')}
+          </div>
+          <div class="tag-new">
+            <input type="text" placeholder="+ new ${esc(type.replace(/_/g, ' '))} tag" maxlength="60"
+              onkeydown="if(event.key==='Enter'){event.preventDefault();createTag('${esc(type)}', this)}">
+            <button type="button" onclick="createTag('${esc(type)}', this.previousElementSibling)">Add</button>
+          </div>
+          <div class="tag-hint" data-hint="${esc(type)}"></div>
+        </div>`).join('')}</div>
+      <div class="tag-hint" style="margin-top:6px">Tip: name a subtag with its parent prefix (e.g. <b>dialpad_transfers</b> under <b>dialpad</b>) — existing families show above so duplicates are visible before you type.</div>`;
+    }
+
+    function toggleTag(id, el) {
+      if (_selected.has(id)) { _selected.delete(id); el.classList.remove('on'); }
+      else { _selected.add(id); el.classList.add('on'); }
+    }
+
+    async function createTag(type, input) {
+      const hint = document.querySelector(`[data-hint="${type}"]`);
+      const raw = input.value.trim();
+      if (!raw) return;
+      hint.textContent = '…';
+      try {
+        // Parent inference from the prefix convention: the longest existing
+        // active tag that is a proper name-prefix of the typed name becomes
+        // the parent — typing dialpad_transfers picks parent dialpad.
+        const norm = raw.toLowerCase().trim().replace(/[\s\-]+/g, '_').replace(/[^a-z0-9_]/g, '');
+        const family = (_tagsByType[type] || []).filter(t => norm.startsWith(t.name + '_'));
+        const parent = family.sort((a, b) => b.name.length - a.name.length)[0] || null;
+        const body = { type, name: raw };
+        if (parent) body.parent_tag_id = parent.id;
+        const res = await fetch(`${API_BASE}/coach-tags`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 409) {
+          hint.textContent = data.detail;
+          if (data.status === 'active') { _selected.add(data.tag_id); }
+        } else if (!res.ok) {
+          hint.textContent = data.detail || `HTTP ${res.status}`;
+          return;
+        } else {
+          _selected.add(data.tag.id);
+          hint.textContent = parent ? `created under ${parent.name}` : 'created';
+        }
+        input.value = '';
+        await loadVocabulary();
+        renderPicker('pickerHost');
+      } catch (e) { hint.textContent = e.message; }
+    }
+
+    // ── page states ────────────────────────────────────────────────────────
+    let _session = null;
+
+    function chipRo(tags) {
+      if (!tags.length) return '<span class="meta">no tags</span>';
+      return `<div class="chips-ro">${tags.map(t =>
+        `<span class="chip${t.status === 'deprecated' ? ' deprecated' : ''}"><b>${esc(t.type.replace(/_/g, ' '))}</b>${esc(t.name)}</span>`).join('')}</div>`;
+    }
+
+    function commonHead(s, statePill) {
+      document.getElementById('headTitle').innerHTML =
+        `${esc(s.agent_name)} ${statePill}`;
+      document.getElementById('headMeta').innerHTML =
+        `session #${s.id} · created ${laDay(s.created_at)}` +
+        (s.completed_at ? ` · conducted ${laDay(s.completed_at)}` : '') +
+        (s.action_plan_deadline ? ` · deadline ${esc(s.action_plan_deadline)}` : '') +
+        ` · <a href="/coaching/${TEAM_ID}" style="color:var(--accent)">← all coaching</a>` +
+        ` · <a href="/dashboard/${TEAM_ID}/agent/${encodeURIComponent(s.agent_name)}" style="color:var(--accent)">agent dashboard</a>`;
+    }
+
+    function commitmentsRo(s) {
+      return s.commitments.length
+        ? `<ul class="commits">${s.commitments.map(c =>
+            `<li><span style="color:${OUTCOME_COLORS[c.status] || 'var(--muted)'}">${GLYPHS[c.status] || '○'}</span> ${esc(c.commitment)}${c.confirmation_note ? ` <span class="meta">— ${esc(c.confirmation_note)}</span>` : ''}</li>`).join('')}</ul>`
+        : '<div class="meta">no structured commitments</div>';
+    }
+
+    function callsRo(s) {
+      const links = s.evaluations.map(e => e.ref
+        ? `<a href="/datapoint/${TEAM_ID}/${encodeURIComponent(e.ref)}" target="_blank" rel="noopener">${laDay(e.call_connected_at) || 'call'}${e.overall_score != null ? ` · ${e.overall_score}` : ''}</a>`
+        : '<span class="meta">call removed</span>').join(' · ');
+      return links ? `<div class="links">Calls to review: ${links}</div>` : '';
+    }
+
+    function renderPending(s) {
+      commonHead(s, '<span class="pill pending">pending</span>');
+      document.getElementById('body').innerHTML = `
+        <div class="card">
+          <h2>Conduct the 1:1</h2>
+          ${callsRo(s)}
+          ${commitmentsRo(s)}
+          <label for="fSummary">Coaching summary — what was discussed and agreed</label>
+          <textarea id="fSummary"></textarea>
+          <label for="fAttitude">Agent attitude</label>
+          <select id="fAttitude">
+            ${['receptive','engaged','neutral','defensive','dismissive','mixed'].map(a => `<option>${a}</option>`).join('')}
+          </select>
+          <label for="fDeadline">Commitment deadline</label>
+          <input type="date" id="fDeadline" value="${esc(s.action_plan_deadline || '')}">
+          <label>Session tags (themes for training programs)</label>
+          <div id="pickerHost"></div>
+          <div style="margin-top:14px;display:flex;gap:10px;align-items:baseline">
+            <button class="act" id="goBtn" onclick="submitConduct()">Mark conducted</button>
+            <span class="status-line" id="statusLine"></span>
+          </div>
+        </div>`;
+      renderPicker('pickerHost');
+    }
+
+    function renderConfirm(s, facts) {
+      const due = s.action_plan_deadline <= (window.__today || '9999');
+      commonHead(s, `<span class="pill ${due ? 'due' : 'completed'}">${due ? 'awaiting confirmation' : 'conducted'}</span>`);
+      const f = facts || {};
+      const stat = (x) => x && x.n ? `<b>${x.n}</b> calls avg <b>${x.avg}</b>` : 'no scored calls';
+      document.getElementById('body').innerHTML = `
+        <div class="card">
+          <h2>Session record</h2>
+          ${s.coaching_summary ? `<div style="font-size:.84rem;line-height:1.55;margin-bottom:6px">${esc(s.coaching_summary)}</div>` : ''}
+          ${s.agent_attitude ? `<div class="meta">attitude: ${esc(s.agent_attitude)}</div>` : ''}
+          ${callsRo(s)}
+        </div>
+        <div class="card">
+          <h2>Confirm commitments</h2>
+          <div class="facts">30 days before coaching: ${stat(f.before)} → coaching to deadline: ${stat(f.during)}</div>
+          ${s.commitments.filter(c => c.status === 'open').map(c => `
+            <div class="verdict-row" data-cid="${c.id}">
+              <span class="ctext">${esc(c.commitment)}</span>
+              <select><option value="">— verdict —</option>${['met','partially_met','not_met','waived'].map(v => `<option value="${v}">${v.replace(/_/g, ' ')}</option>`).join('')}</select>
+              <input type="text" placeholder="note (optional)" maxlength="300">
+            </div>`).join('')}
+          <label for="fOutcomeNote">Outcome note (optional)</label>
+          <textarea id="fOutcomeNote" style="min-height:56px"></textarea>
+          <label>Session tags — last edit before they freeze with the record</label>
+          <div id="pickerHost"></div>
+          <div style="margin-top:14px;display:flex;gap:10px;align-items:baseline">
+            <button class="act" id="goBtn" onclick="submitConfirm()">Confirm outcome</button>
+            <span class="status-line" id="statusLine"></span>
+          </div>
+        </div>`;
+      renderPicker('pickerHost');
+    }
+
+    function renderFrozen(s) {
+      commonHead(s, `<span class="pill outcome-${s.outcome}">${esc(s.outcome.replace(/_/g, ' '))}</span>`);
+      document.getElementById('body').innerHTML = `
+        <div class="card">
+          <h2>Session record</h2>
+          ${s.coaching_summary ? `<div style="font-size:.84rem;line-height:1.55;margin-bottom:6px">${esc(s.coaching_summary)}</div>` : ''}
+          ${s.agent_attitude ? `<div class="meta">attitude: ${esc(s.agent_attitude)}</div>` : ''}
+          ${callsRo(s)}
+          ${commitmentsRo(s)}
+          ${s.outcome_note ? `<div class="meta">outcome note: ${esc(s.outcome_note)}</div>` : ''}
+          <div class="meta" style="margin-top:6px">confirmed by ${esc(s.outcome_confirmed_by || '?')} ${laDay(s.outcome_confirmed_at)}</div>
+        </div>
+        <div class="card">
+          <h2>Tags (frozen with the record)</h2>
+          ${chipRo(s.tags)}
+        </div>`;
+    }
+
+    async function submitConduct() {
+      const btn = document.getElementById('goBtn');
+      const st = document.getElementById('statusLine');
+      const body = {
+        coaching_summary: document.getElementById('fSummary').value.trim(),
+        agent_attitude: document.getElementById('fAttitude').value,
+        tag_ids: [..._selected],
+      };
+      const dl = document.getElementById('fDeadline').value;
+      if (dl) body.deadline = dl;
+      if (!body.coaching_summary) { st.textContent = 'Summary is required.'; return; }
+      btn.disabled = true; st.textContent = 'Saving…';
+      try {
+        await getJSON(`${API_BASE}/coachings/${SESSION_ID}/conduct`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        });
+        st.textContent = 'Conducted.';
+        load();
+      } catch (e) { st.textContent = `Failed: ${e.message}`; btn.disabled = false; }
+    }
+
+    async function submitConfirm() {
+      const btn = document.getElementById('goBtn');
+      const st = document.getElementById('statusLine');
+      const verdicts = [...document.querySelectorAll('.verdict-row')].map(v => ({
+        id: Number(v.dataset.cid),
+        status: v.querySelector('select').value,
+        note: v.querySelector('input').value.trim() || undefined,
+      }));
+      if (verdicts.some(v => !v.status)) { st.textContent = 'Every commitment needs a verdict.'; return; }
+      btn.disabled = true; st.textContent = 'Saving…';
+      try {
+        const data = await getJSON(`${API_BASE}/coachings/${SESSION_ID}/confirm`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            commitments: verdicts,
+            outcome_note: document.getElementById('fOutcomeNote').value.trim() || undefined,
+            tag_ids: [..._selected],
+          }),
+        });
+        st.textContent = `Outcome: ${data.outcome.replace(/_/g, ' ')} — chiclet raised on the team dashboard.`;
+        load();
+      } catch (e) { st.textContent = `Failed: ${e.message}`; btn.disabled = false; }
+    }
+
+    async function load() {
+      try {
+        const [detail] = await Promise.all([
+          getJSON(`${API_BASE}/coachings/${SESSION_ID}`),
+          loadVocabulary(),
+        ]);
+        const s = detail.session;
+        _session = s;
+        window.__today = detail.today;
+        _selected = new Set((s.tags || []).map(t => t.id));
+        if (s.status === 'cancelled') {
+          commonHead(s, '<span class="pill" style="background:var(--muted)">cancelled</span>');
+          document.getElementById('body').innerHTML = '<div class="card"><div class="meta">This session was cancelled.</div></div>';
+        } else if (s.status === 'pending') renderPending(s);
+        else if (s.outcome) renderFrozen(s);
+        else renderConfirm(s, detail.facts);
+      } catch (e) {
+        document.getElementById('headTitle').textContent = 'Session unavailable';
+        document.getElementById('headMeta').textContent = e.message;
+      }
+    }
+    load();
+  </script>
+</body>
+</html>

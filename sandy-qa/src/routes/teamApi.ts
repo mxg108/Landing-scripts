@@ -35,6 +35,8 @@ import adminHtml from "../../pages/admin.html?raw";
 // @ts-ignore vite ?raw
 import coachingPageHtml from "../../pages/coaching.html?raw";
 // @ts-ignore vite ?raw
+import coachingSessionHtml from "../../pages/coaching_session.html?raw";
+// @ts-ignore vite ?raw
 import headerCss from "../../pages/static/header.css?raw";
 // @ts-ignore vite ?raw
 import headerJs from "../../pages/static/header.js?raw";
@@ -269,6 +271,12 @@ export async function handleTeamRoutes(
     const access = await resolveAccess(request, db, lookupAllow);
     return canCoach(access, m[1]) ? html(coachingPageHtml) : deniedPage("coaching", m[1]);
   }
+  // Session screen (CoachingTagsSpec §4 — conduct / confirm / frozen record).
+  m = path.match(/^\/coaching\/([^/]+)\/session\/\d+$/);
+  if (m && KNOWN_TEAMS.has(m[1])) {
+    const access = await resolveAccess(request, db, lookupAllow);
+    return canCoach(access, m[1]) ? html(coachingSessionHtml) : deniedPage("coaching", m[1]);
+  }
 
   // ── access admin (roles + request inbox) ─────────────────────────────────
   if (path === "/admin") {
@@ -417,6 +425,10 @@ export async function handleTeamRoutes(
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "PATCH") {
     const { patchCoaching } = await import("./coaching.js");
     return patchCoaching(request, db, m[1], Number(m[2]), lookupAllow);
+  }
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
+    const { getCoaching } = await import("./coaching.js");
+    return getCoaching(request, db, m[1], Number(m[2]), lookupAllow);
   }
   m = path.match(/^\/api\/([^/]+)\/coachings\/(\d+)\/(conduct|cancel|confirm)$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {

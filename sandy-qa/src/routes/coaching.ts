@@ -238,6 +238,39 @@ export async function listAgentCoachings(
   });
 }
 
+// ── GET /api/{t}/coachings/{id} (session screen payload — T2) ──────────────
+// Full session detail: commitments + linked evals + tags, agent identity,
+// and (once conducted, before confirm) the §11.4 verdict facts. Coach-only:
+// the session screen is a coaching tool; the agent self-view stays on the
+// dashboard card.
+
+export async function getCoaching(
+  request: Request,
+  db: D1Database,
+  teamId: string,
+  id: number,
+  lookupAllow?: string
+): Promise<Response> {
+  const access = await resolveAccess(request, db, lookupAllow);
+  if (!canCoach(access, teamId))
+    return json({ detail: "Coaching sessions are restricted to QA staff and team managers." }, 403);
+  const c = await coachingById(db, teamId, id);
+  if (!c) return json({ detail: `no coaching ${id} on ${teamId}` }, 404);
+  if (c.id < SANDY_BASE)
+    return json({ detail: "This coaching is Railway-born — read-only on Sandy." }, 409);
+  const agent = await db
+    .prepare("SELECT id, COALESCE(canonical_name, name) AS name FROM qa_agents WHERE id = ?")
+    .bind(c.agent_id)
+    .first<any>();
+  const session: any = { ...c, sandy_born: true, agent_name: agent?.name ?? "?" };
+  await attachChildren(db, [session]);
+  let facts: any = null;
+  if (c.status === "completed" && !c.outcome && c.completed_at && c.action_plan_deadline) {
+    facts = await verdictFacts(db, teamId, c.agent_id, c.completed_at, c.action_plan_deadline);
+  }
+  return json({ session, facts, today: todayLA() });
+}
+
 // ── POST /api/{t}/coachings (builder create) ───────────────────────────────
 
 export async function createCoaching(
