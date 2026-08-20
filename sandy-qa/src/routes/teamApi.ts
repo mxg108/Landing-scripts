@@ -332,7 +332,7 @@ export async function handleTeamRoutes(
     let body: any = {};
     try { body = await request.json(); } catch { return json({ detail: "JSON body required" }, 422); }
     const reqRow = await db
-      .prepare("SELECT id, email, page, status FROM qa_access_requests WHERE id = ?")
+      .prepare("SELECT id, email, page, team_id, status FROM qa_access_requests WHERE id = ?")
       .bind(Number(m[1]))
       .first<any>();
     if (!reqRow) return json({ detail: "request not found" }, 404);
@@ -341,15 +341,18 @@ export async function handleTeamRoutes(
     if (!["approve", "deny"].includes(action))
       return json({ detail: "action must be approve|deny" }, 422);
     if (action === "approve") {
-      const role = ["admin", "qa"].includes(body.role) ? body.role : "qa";
+      // `manager` = coaching-only, scoped to the team the request came from
+      // (a coaching-page denial carries its team). admin/qa stay global.
+      const role = ["admin", "qa", "manager"].includes(body.role) ? body.role : "qa";
+      const teamScope = role === "manager" ? reqRow.team_id ?? null : null;
       await db
         .prepare(
-          `INSERT INTO qa_roles (email, role, granted_by, note) VALUES (?,?,?,?)
-           ON CONFLICT(email) DO UPDATE SET role=excluded.role,
+          `INSERT INTO qa_roles (email, role, team_id, granted_by, note) VALUES (?,?,?,?,?)
+           ON CONFLICT(email) DO UPDATE SET role=excluded.role, team_id=excluded.team_id,
              granted_by=excluded.granted_by, granted_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),
              note=excluded.note`
         )
-        .bind(reqRow.email, role, access.email, `via access request #${reqRow.id} (${reqRow.page})`)
+        .bind(reqRow.email, role, teamScope, access.email, `via access request #${reqRow.id} (${reqRow.page})`)
         .run();
     }
     await db
