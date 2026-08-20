@@ -320,9 +320,14 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
         // completed platform-side; waitUntil keeps the worker alive past
         // the response without delaying the callback ack (which would keep
         // the run active even longer).
+        // Delays total ~21s: both attempts must land inside the ~30s
+        // waitUntil cap or the second gets cancelled mid-sleep (observed:
+        // an [8s,20s] schedule chained 4/4 sofia jobs on attempt 1 but
+        // missed the follow-up after a 3.5-min MS run — attempt 2 sat at
+        // +28s cumulative, razor-edge under the cap).
         ctx.waitUntil(
           (async () => {
-            for (const delayMs of [8_000, 20_000]) {
+            for (const delayMs of [6_000, 15_000]) {
               await new Promise((r) => setTimeout(r, delayMs));
               try {
                 const started = await drainScoreQueue(env.DB, request);
