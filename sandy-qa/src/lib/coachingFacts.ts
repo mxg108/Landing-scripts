@@ -133,10 +133,23 @@ export async function agentFacts(
       pre = await evalWindowStat(db, config.team_id, agentRow.id, preStart, c.completed_at);
       post = await evalWindowStat(db, config.team_id, agentRow.id, c.completed_at, postEnd);
     }
+    // Typed session tags (T3): the shared theme vocabulary — assessments
+    // name their themes with the same language the team insight uses.
+    const tags = (
+      await db
+        .prepare(
+          `SELECT t.name, t.type FROM qa_coaching_tag_links l
+           JOIN qa_coach_tags t ON t.id = l.tag_id
+           WHERE l.coaching_id = ? ORDER BY t.type, t.name`
+        )
+        .bind(c.id)
+        .all<any>()
+    ).results;
     coachings.push({
       coaching_id: c.id,
       conducted_at: c.completed_at,
       deadline: c.action_plan_deadline,
+      tags,
       outcome: c.outcome, // null = not yet confirmed by the supervisor
       outcome_note: c.outcome_note,
       agent_attitude: c.agent_attitude,
@@ -221,9 +234,24 @@ export async function teamFacts(
       ).results
     : [];
 
-  // Most-coached sections + their post-coaching movement: for every
-  // commitment linked to a section, the agent's overall before vs after
-  // that session (windows as everywhere: 30d-in → conduct → deadline/now).
+  // Per-session movement, computed ONCE (30d-in → conduct → deadline/now)
+  // and reused by the section grouping and the tag rollup alike.
+  const sessionDelta = new Map<number, number | null>();
+  for (const s of sessions) {
+    if (!s.completed_at) { sessionDelta.set(s.id, null); continue; }
+    const preStart = new Date(Date.parse(s.completed_at) - 30 * 86_400_000).toISOString();
+    const postEnd = s.action_plan_deadline
+      ? `${s.action_plan_deadline}T23:59:59Z`
+      : new Date().toISOString();
+    const pre = await evalWindowStat(db, teamId, s.agent_id, preStart, s.completed_at);
+    const post = await evalWindowStat(db, teamId, s.agent_id, s.completed_at, postEnd);
+    sessionDelta.set(
+      s.id,
+      pre.avg !== null && post.avg !== null ? r1(post.avg - pre.avg) : null
+    );
+  }
+
+  // Most-coached sections + their post-coaching movement.
   const bySection = new Map<string, any>();
   for (const k of commits) {
     const key = k.section_id ?? "__none__";
@@ -236,15 +264,8 @@ export async function teamFacts(
       }));
     g.commitments++;
     g[k.status] = (g[k.status] ?? 0) + 1;
-    if (k.completed_at) {
-      const preStart = new Date(Date.parse(k.completed_at) - 30 * 86_400_000).toISOString();
-      const postEnd = k.action_plan_deadline
-        ? `${k.action_plan_deadline}T23:59:59Z`
-        : new Date().toISOString();
-      const pre = await evalWindowStat(db, teamId, k.agent_id, preStart, k.completed_at);
-      const post = await evalWindowStat(db, teamId, k.agent_id, k.completed_at, postEnd);
-      if (pre.avg !== null && post.avg !== null) g.deltas.push(r1(post.avg - pre.avg));
-    }
+    const d = sessionDelta.get(k.coaching_id);
+    if (d !== null && d !== undefined) g.deltas.push(d);
   }
   const coachedSections = [...bySection.values()]
     .map((g) => ({
@@ -253,6 +274,92 @@ export async function teamFacts(
       deltas: undefined,
     }))
     .sort((a, b) => b.commitments - a.commitments);
+
+  // ── tag rollup (CoachingTagsSpec §2.1/§5, T3) ────────────────────────────
+  // A session tagged at a leaf counts under the leaf, EVERY ancestor, and
+  // the supertag — dialpad_transfers_cold feeds the dialpad retraining
+  // aggregate. Deprecated tags follow their replaced_by chain first (the
+  // rename/merge pointer), so old links keep feeding the new name.
+  const vocab = (
+    await db
+      .prepare("SELECT id, name, type, status, parent_tag_id, replaced_by_tag_id FROM qa_coach_tags")
+      .all<any>()
+  ).results;
+  const vById = new Map(vocab.map((t) => [t.id, t]));
+  const resolveEffective = (id: number): any | null => {
+    let cur = vById.get(id), hops = 0;
+    while (cur && cur.status === "deprecated" && cur.replaced_by_tag_id && hops++ < 10)
+      cur = vById.get(cur.replaced_by_tag_id);
+    return cur ?? null;
+  };
+  const links: any[] = [];
+  const sessionIds = sessions.map((s) => s.id);
+  for (let i = 0; i < sessionIds.length; i += 80) {
+    const chunk = sessionIds.slice(i, i + 80);
+    links.push(
+      ...(
+        await db
+          .prepare(
+            `SELECT coaching_id, tag_id FROM qa_coaching_tag_links
+             WHERE coaching_id IN (${chunk.map(() => "?").join(",")})`
+          )
+          .bind(...chunk)
+          .all<any>()
+      ).results
+    );
+  }
+  const sessionById = new Map(sessions.map((s) => [s.id, s]));
+  const nodeAgg = new Map<number, { tag: any; sessions: Set<number>; agents: Set<string> }>();
+  const superAgg = new Map<string, Set<number>>();
+  for (const l of links) {
+    const eff = resolveEffective(l.tag_id);
+    const sess = sessionById.get(l.coaching_id);
+    if (!eff || !sess) continue;
+    let cur: any = eff;
+    let hops = 0;
+    while (cur && hops++ < 12) {
+      let g = nodeAgg.get(cur.id);
+      if (!g) nodeAgg.set(cur.id, (g = { tag: cur, sessions: new Set(), agents: new Set() }));
+      g.sessions.add(sess.id);
+      g.agents.add(sess.agent_name);
+      cur = cur.parent_tag_id ? vById.get(cur.parent_tag_id) : null;
+    }
+    let ss = superAgg.get(eff.type);
+    if (!ss) superAgg.set(eff.type, (ss = new Set()));
+    ss.add(sess.id);
+  }
+  const commitsBySession = new Map<number, any[]>();
+  for (const k of commits) {
+    let g = commitsBySession.get(k.coaching_id);
+    if (!g) commitsBySession.set(k.coaching_id, (g = []));
+    g.push(k);
+  }
+  const tagNodes = [...nodeAgg.values()]
+    .map((g) => {
+      const ks = [...g.sessions].flatMap((sid) => commitsBySession.get(sid) ?? []);
+      const closed = ks.filter((k) => !["open", "waived"].includes(k.status));
+      const deltas = [...g.sessions]
+        .map((sid) => sessionDelta.get(sid))
+        .filter((d): d is number => d !== null && d !== undefined);
+      return {
+        name: g.tag.name,
+        type: g.tag.type,
+        kind: g.tag.parent_tag_id ? "subtag" : "tag",
+        sessions: g.sessions.size,
+        agents: g.agents.size,
+        commitment_met_rate_pct: closed.length
+          ? r1((closed.filter((k) => k.status === "met").length / closed.length) * 100)
+          : null,
+        avg_overall_delta_after_coaching: deltas.length ? r1(mean(deltas)) : null,
+      };
+    })
+    .sort((a, b) => b.sessions - a.sessions);
+  const bySupertag: Record<string, any> = {};
+  for (const [type, set] of superAgg)
+    bySupertag[type] = {
+      sessions: set.size,
+      distinct_tags: tagNodes.filter((t) => t.type === type).length,
+    };
 
   // Coverage + hygiene + met-rate.
   const roster = (
@@ -290,6 +397,7 @@ export async function teamFacts(
       pending_never_conducted: neverConducted,
     },
     coached_sections: coachedSections,
+    tags: { by_supertag: bySupertag, nodes: tagNodes },
     coverage: {
       active_agents: roster.length,
       agents_coached: coachedAgents.length,
