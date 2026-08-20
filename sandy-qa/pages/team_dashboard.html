@@ -205,6 +205,37 @@
     .trend-down { color: var(--red); }
     .trend-flat { color: var(--muted); }
 
+    /* Manage roster (AA2 — AgentAddition §6). Coach-gated card above the
+       analytics table; inline panels (house style, no modals). */
+    .mr-form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .mr-form-row input, .mr-form-row select, .mr-inline input, .mr-inline select {
+      font-family: 'DM Mono', monospace; font-size: 0.78rem; padding: 6px 8px;
+      border: 1px solid var(--border); border-radius: 6px;
+      background: var(--surface); color: var(--text);
+    }
+    .mr-btn {
+      font-family: 'DM Mono', monospace; font-size: 0.75rem; padding: 6px 12px;
+      border-radius: 6px; border: 1px solid var(--accent);
+      background: var(--accent); color: #fff; cursor: pointer;
+    }
+    .mr-btn:hover { filter: brightness(1.08); }
+    .mr-btn.secondary { background: transparent; color: var(--accent); }
+    .mr-btn.danger { border-color: var(--red); background: transparent; color: var(--red); }
+    .mr-btn:disabled { opacity: 0.5; cursor: default; }
+    .mr-notice {
+      font-size: 0.78rem; padding: 8px 12px; border-radius: 8px; margin-bottom: 12px;
+      background: var(--bg); border: 1px solid var(--border);
+    }
+    .mr-notice.err { background: #fee2e2; border-color: #fecaca; color: #991b1b; }
+    .mr-inline td { background: var(--bg); }
+    .mr-note { font-size: 0.72rem; color: var(--muted); margin-top: 12px; }
+    .mr-section-label {
+      font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--muted); margin: 16px 0 6px;
+    }
+    #mrDeparted summary { cursor: pointer; font-size: 0.78rem; color: var(--muted); margin-top: 16px; }
+    #mrDeparted[open] summary { margin-bottom: 6px; }
+
     /* Loading */
     .loading { text-align: center; padding: 60px; color: var(--muted); font-size: 0.9rem; }
 
@@ -351,6 +382,45 @@
 
   <!-- Agent Roster Tab -->
   <div class="tab-panel" id="panel-roster">
+    <!-- Manage roster (AA2) — rendered only for whoami.can_coach; the roster
+         is Sandy-authoritative from AA0 on (the Mails tab is frozen). -->
+    <div class="card" id="manageRosterCard" hidden>
+      <h3>Manage roster</h3>
+      <div class="mr-notice" id="mrNotice" hidden></div>
+      <div class="mr-section-label">Add agent</div>
+      <div class="mr-form-row">
+        <input id="mrAddName" placeholder="Name" size="18" />
+        <input id="mrAddEmail" placeholder="Email" size="24" />
+        <input id="mrAddCanonical" placeholder="Canonical (optional)" size="16" />
+        <input id="mrAddSupervisor" placeholder="Supervisor" size="14" list="mrSupervisorList" />
+        <input id="mrAddDialpad" placeholder="Dialpad id (optional)" size="16" />
+        <button class="mr-btn" onclick="mrAdd(this)">Add agent</button>
+      </div>
+      <datalist id="mrSupervisorList"></datalist>
+      <div id="mrRehireOffer" class="mr-notice" hidden></div>
+      <div class="mr-section-label">Active agents</div>
+      <div style="overflow-x:auto"><table id="mrActiveTable"><thead><tr>
+        <th>Agent</th><th>Email</th><th>Supervisor</th><th>Dialpad</th>
+        <th>Evals</th><th>Since</th><th></th>
+      </tr></thead><tbody></tbody></table></div>
+      <details id="mrDeparted">
+        <summary>Departed (<span id="mrDepartedCount">0</span>)</summary>
+        <div style="overflow-x:auto"><table id="mrDepartedTable"><thead><tr>
+          <th>Agent</th><th>Departed</th><th>Reason</th><th>Note</th><th>Evals</th><th></th>
+        </tr></thead><tbody></tbody></table></div>
+      </details>
+      <div class="mr-section-label">Reassign supervisor</div>
+      <div class="mr-form-row">
+        <select id="mrReassignFrom" onchange="mrReassignPreview()"></select>
+        <span style="color:var(--muted)">&rarr;</span>
+        <input id="mrReassignTo" placeholder="New supervisor" size="14" list="mrSupervisorList" />
+        <button class="mr-btn" onclick="mrReassign(this)">Reassign</button>
+        <span id="mrReassignCount" style="font-size:0.72rem;color:var(--muted)"></span>
+      </div>
+      <div class="mr-note">New supervisor? Grant them the <code>manager</code> role in
+        <a href="/admin">/admin</a> so they can coach. Roster edits stick — Sandy is the
+        roster's system of record now; the Mails sheet is frozen.</div>
+    </div>
     <div class="card">
       <h3>Agent Roster</h3>
       <div style="overflow-x:auto"><table id="rosterTable"><thead><tr id="rosterHeaderRow">
@@ -1437,6 +1507,7 @@ async function loadAlertRail() {
     if (cRes.ok) _chiclets = (await cRes.json()).chiclets || [];
     if (wRes.ok) _canCoach = !!(await wRes.json()).can_coach;
     renderAlertRail();
+    initManageRoster(); // AA2: same whoami answer gates the Manage-roster card
   } catch (e) { console.error('alert rail:', e); }
 }
 
@@ -1471,6 +1542,236 @@ async function ackChiclet(id, btn) {
     btn.disabled = false;
     console.error('acknowledge failed:', e.message);
   }
+}
+
+// ── Manage roster (AA2 — AgentAddition §6) ──────────────────────────────────
+// Coach-gated management card on the Agent Roster tab. The analytics table
+// below it is untouched — historyFrame reads live rows, so stats/charts pick
+// up roster changes on the next fetch (we trigger one after each mutation).
+let _roster = null;
+let _rosterSupervisors = [];
+
+async function initManageRoster() {
+  if (!_canCoach) return; // card stays hidden — invisible to non-coaches
+  document.getElementById('manageRosterCard').hidden = false;
+  await refreshRoster();
+}
+
+async function refreshRoster() {
+  try {
+    const [rRes, sRes] = await Promise.all([
+      fetch(`${API_BASE}/roster`),
+      fetch(`${API_BASE}/roster/supervisors`),
+    ]);
+    if (!rRes.ok) {
+      const err = await rRes.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${rRes.status}`);
+    }
+    _roster = await rRes.json();
+    _rosterSupervisors = sRes.ok ? (await sRes.json()).supervisors || [] : [];
+    renderManageRoster();
+  } catch (e) { mrNotice(`Roster load failed: ${e.message}`, true); }
+}
+
+function mrNotice(msg, isErr) {
+  const el = document.getElementById('mrNotice');
+  el.hidden = !msg;
+  el.className = 'mr-notice' + (isErr ? ' err' : '');
+  el.textContent = msg || '';
+}
+
+const REASON_BADGE = {
+  left_company: 'badge-low', other_team: 'badge-good', on_leave: 'badge-watch',
+  terminated: 'badge-at_risk', other: 'badge-medium',
+};
+
+function renderManageRoster() {
+  if (!_roster) return;
+  document.getElementById('mrSupervisorList').innerHTML =
+    _rosterSupervisors.map(s => `<option value="${escapeHtml(s)}"></option>`).join('');
+
+  const activeBody = document.querySelector('#mrActiveTable tbody');
+  activeBody.innerHTML = _roster.active.map(a => `
+    <tr data-agent="${a.id}">
+      <td>${escapeHtml(a.name)}</td>
+      <td>${escapeHtml(a.email || '')}</td>
+      <td>${escapeHtml(a.supervisor_email || '—')}</td>
+      <td>${escapeHtml(a.dialpad_agent_id || '—')}</td>
+      <td>${a.eval_count}</td>
+      <td>${(a.created_at || '').slice(0, 10)}</td>
+      <td style="white-space:nowrap">
+        <button class="mr-btn secondary" onclick="mrOpenEdit(${a.id})">Edit</button>
+        <button class="mr-btn danger" onclick="mrOpenDepart(${a.id})">Depart</button>
+      </td>
+    </tr>`).join('');
+
+  document.getElementById('mrDepartedCount').textContent = _roster.departed.length;
+  document.querySelector('#mrDepartedTable tbody').innerHTML = _roster.departed.map(a => `
+    <tr data-agent="${a.id}">
+      <td>${escapeHtml(a.name)}</td>
+      <td>${(a.departed_at || '').slice(0, 10) || '—'}</td>
+      <td>${a.departure_reason
+        ? `<span class="badge ${REASON_BADGE[a.departure_reason] || 'badge-medium'}">${escapeHtml(a.departure_reason)}</span>`
+        : '—'}</td>
+      <td>${escapeHtml(a.departure_note || '')}</td>
+      <td>${a.eval_count}</td>
+      <td><button class="mr-btn secondary" onclick="mrRehire(${a.id}, this)">Rehire</button></td>
+    </tr>`).join('');
+
+  const from = document.getElementById('mrReassignFrom');
+  from.innerHTML = '<option value="">From supervisor…</option>' +
+    _rosterSupervisors.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+  mrReassignPreview();
+}
+
+async function mrCall(path, opts, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(`${API_BASE}${path}`, opts);
+    const data = await res.json().catch(() => ({}));
+    return { res, data };
+  } finally { if (btn) btn.disabled = false; }
+}
+
+async function mrAdd(btn) {
+  const val = id => document.getElementById(id).value.trim();
+  const payload = {
+    name: val('mrAddName'), email: val('mrAddEmail'),
+    canonical_name: val('mrAddCanonical'), supervisor_email: val('mrAddSupervisor'),
+    dialpad_agent_id: val('mrAddDialpad'),
+  };
+  const offer = document.getElementById('mrRehireOffer');
+  offer.hidden = true;
+  const { res, data } = await mrCall('/roster', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }, btn);
+  if (res.status === 409 && data.rehire_available) {
+    // Inline rehire offer (§6): departed match found — one click restores.
+    offer.hidden = false;
+    offer.innerHTML = `${escapeHtml(data.detail)}
+      <button class="mr-btn" style="margin-left:8px"
+        onclick="mrRehire(${data.agent.id}, this, document.getElementById('mrAddSupervisor').value.trim())">
+        Rehire ${escapeHtml(data.agent.name)}</button>`;
+    return;
+  }
+  if (!res.ok) return mrNotice(data.detail || `HTTP ${res.status}`, true);
+  ['mrAddName', 'mrAddEmail', 'mrAddCanonical', 'mrAddSupervisor', 'mrAddDialpad']
+    .forEach(id => document.getElementById(id).value = '');
+  mrNotice(`Added ${data.agent.name}.`);
+  await refreshRoster();
+  fetchTeamStats();
+}
+
+function mrCloseInline() {
+  document.querySelectorAll('.mr-inline').forEach(r => r.remove());
+}
+
+function mrInlineRow(afterTr, html) {
+  mrCloseInline();
+  const tr = document.createElement('tr');
+  tr.className = 'mr-inline';
+  tr.innerHTML = `<td colspan="7"><div class="mr-form-row">${html}</div></td>`;
+  afterTr.after(tr);
+}
+
+function mrOpenDepart(id) {
+  const a = _roster.active.find(x => x.id === id);
+  const tr = document.querySelector(`#mrActiveTable tr[data-agent="${id}"]`);
+  if (!a || !tr) return;
+  mrInlineRow(tr, `
+    <span style="font-size:0.78rem">Depart <strong>${escapeHtml(a.name)}</strong>:</span>
+    <select id="mrDepartReason">
+      ${_roster.departure_reasons.map(r => `<option value="${r}">${r.replace(/_/g, ' ')}</option>`).join('')}
+    </select>
+    <input id="mrDepartNote" placeholder="Note (optional)" size="24" />
+    <button class="mr-btn danger" onclick="mrDepart(${id}, this)">Confirm departure</button>
+    <button class="mr-btn secondary" onclick="mrCloseInline()">Cancel</button>`);
+}
+
+async function mrDepart(id, btn) {
+  const { res, data } = await mrCall(`/roster/${id}/depart`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      reason: document.getElementById('mrDepartReason').value,
+      note: document.getElementById('mrDepartNote').value.trim(),
+    }),
+  }, btn);
+  if (!res.ok) return mrNotice(data.detail || `HTTP ${res.status}`, true);
+  // Warnings (open coaching sessions / in-flight scoring) are facts to
+  // surface, never blocks — §5.
+  mrNotice(`${data.agent.name} departed (${data.agent.departure_reason}).` +
+    (data.warnings.length ? ` ⚠ ${data.warnings.join(' ')}` : ''), data.warnings.length > 0);
+  await refreshRoster();
+  fetchTeamStats();
+}
+
+async function mrRehire(id, btn, supervisor) {
+  const { res, data } = await mrCall(`/roster/${id}/rehire`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(supervisor ? { supervisor_email: supervisor } : {}),
+  }, btn);
+  if (!res.ok) return mrNotice(data.detail || `HTTP ${res.status}`, true);
+  document.getElementById('mrRehireOffer').hidden = true;
+  mrNotice(`${data.agent.name} rehired (supervisor: ${data.agent.supervisor_email || '—'}).`);
+  await refreshRoster();
+  fetchTeamStats();
+}
+
+function mrOpenEdit(id) {
+  const a = _roster.active.find(x => x.id === id);
+  const tr = document.querySelector(`#mrActiveTable tr[data-agent="${id}"]`);
+  if (!a || !tr) return;
+  const esc = s => escapeHtml(s || '');
+  mrInlineRow(tr, `
+    <span style="font-size:0.78rem">Edit <strong>${esc(a.name)}</strong>:</span>
+    <input id="mrEditEmail" value="${esc(a.email)}" size="24" placeholder="Email" />
+    <input id="mrEditCanonical" value="${esc(a.canonical_name)}" size="14" placeholder="Canonical" />
+    <input id="mrEditSupervisor" value="${esc(a.supervisor_email)}" size="14" placeholder="Supervisor" list="mrSupervisorList" />
+    <input id="mrEditDialpad" value="${esc(a.dialpad_agent_id)}" size="14" placeholder="Dialpad id" />
+    <button class="mr-btn" onclick="mrEdit(${id}, this)">Save</button>
+    <button class="mr-btn secondary" onclick="mrCloseInline()">Cancel</button>`);
+}
+
+async function mrEdit(id, btn) {
+  const { res, data } = await mrCall(`/roster/${id}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: document.getElementById('mrEditEmail').value.trim(),
+      canonical_name: document.getElementById('mrEditCanonical').value.trim(),
+      supervisor_email: document.getElementById('mrEditSupervisor').value.trim(),
+      dialpad_agent_id: document.getElementById('mrEditDialpad').value.trim(),
+    }),
+  }, btn);
+  if (!res.ok) return mrNotice(data.detail || `HTTP ${res.status}`, true);
+  mrNotice(data.changed.length ? `Updated ${data.agent.name} (${data.changed.join(', ')}).`
+    : 'No changes.');
+  await refreshRoster();
+  fetchTeamStats();
+}
+
+function mrReassignPreview() {
+  const from = document.getElementById('mrReassignFrom').value;
+  const el = document.getElementById('mrReassignCount');
+  if (!from || !_roster) { el.textContent = ''; return; }
+  const n = _roster.active.filter(a =>
+    (a.supervisor_email || '').toLowerCase() === from.toLowerCase()).length;
+  el.textContent = `${n} active agent${n === 1 ? '' : 's'} will move`;
+}
+
+async function mrReassign(btn) {
+  const from = document.getElementById('mrReassignFrom').value;
+  const to = document.getElementById('mrReassignTo').value.trim();
+  if (!from || !to) return mrNotice('Pick a from-supervisor and enter the new one.', true);
+  const { res, data } = await mrCall('/roster/reassign', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from_supervisor: from, to_supervisor: to }),
+  }, btn);
+  if (!res.ok) return mrNotice(data.detail || `HTTP ${res.status}`, true);
+  document.getElementById('mrReassignTo').value = '';
+  mrNotice(`Moved ${data.moved} agent${data.moved === 1 ? '' : 's'} to ${to}.`);
+  await refreshRoster();
+  fetchTeamStats();
 }
 
 function scheduleStatsRefetch() {
