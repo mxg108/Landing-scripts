@@ -335,15 +335,22 @@ export function buildTeamPrompts(teamId: string, facts: any) {
     "areas of opportunity the team should tackle MOST, judge whether " +
     "coaching is working (commitment met-rate, post-coaching movement), and " +
     "call out program hygiene problems (overdue confirmations, uncoached " +
-    "agents). Cite the figures you use; never invent numbers. Be direct.";
+    "agents). The fact sheet's `tags` block is the typed theme vocabulary " +
+    "(supertag → tag → subtag, session counts ROLLED UP to ancestors): a " +
+    "theme coached across MANY agents with a low met-rate or flat/negative " +
+    "post-coaching delta is a FLOOR-WIDE TRAINING PROGRAM candidate; a " +
+    "theme confined to one or two agents is individual re-coaching, not a " +
+    "program. Cite the figures you use; never invent numbers. Be direct.";
   const prompt =
     `TEAM FACT SHEET (${teamId}):\n${JSON.stringify(facts, null, 2)}\n\n` +
     `Respond with ONLY a JSON object (no fences, no prose outside it):\n` +
     `{"narrative": "<3-6 sentences: is coaching moving the numbers, and ` +
     `what matters most now>",\n` +
-    ` "top_priorities": [{"title": "<short imperative>", "why": "<1-2 ` +
-    `sentences with figures from the facts>"}]}\n` +
-    `Give 2-4 priorities, most important first.`;
+    ` "top_priorities": [{"title": "<short imperative>", "scope": ` +
+    `"program"|"individual", "why": "<1-2 sentences with figures from the ` +
+    `facts — name the tag themes involved>"}]}\n` +
+    `Give 2-4 priorities, most important first. Use scope "program" only ` +
+    `when the tag evidence spans several agents.`;
   return { system, prompt };
 }
 
@@ -458,7 +465,8 @@ export async function insightsCallback(
           (prios.length
             ? "\n\nTOP PRIORITIES:\n" +
               prios
-                .map((p: any, i: number) => `${i + 1}. ${p.title} — ${p.why}`)
+                .map((p: any, i: number) =>
+                  `${i + 1}. ${p.scope ? `[${String(p.scope).toUpperCase()}] ` : ""}${p.title} — ${p.why}`)
                 .join("\n")
             : "");
         await db
