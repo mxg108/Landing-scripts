@@ -105,6 +105,21 @@
       </div>
       <div id="allBody"><div class="empty">Loading…</div></div>
     </div>
+
+    <div class="card">
+      <h2>Manage tags</h2>
+      <div class="meta" style="font-size:.72rem;color:var(--muted);margin-bottom:10px">
+        The typed vocabulary behind session tags (supertag → tag → subtag).
+        Deprecating cascades to a family's subtags; restore is per-node.
+        New tags are created from any session screen.
+      </div>
+      <div class="filters">
+        <label style="font-size:.75rem;display:flex;align-items:center;gap:6px;margin:0">
+          <input type="checkbox" id="tagShowDeprecated" onchange="loadTagAdmin()"> show deprecated
+        </label>
+      </div>
+      <div id="tagAdminBody"><div class="empty">Loading…</div></div>
+    </div>
   </div>
 
   <script src="/static/header.js"></script>
@@ -157,9 +172,8 @@
                 <td>${esc(r.action_plan_deadline)}</td>
                 <td class="hide-sm ${overdue ? 'overdue' : ''}">${overdue ? overdue + 'd' : '—'}</td>
                 <td class="hide-sm">${r.open_commitments} open</td>
-                <td><button class="act" onclick="toggleConfirm(${r.id})">Confirm</button></td>
-              </tr>
-              <tr id="confirm-${r.id}" style="display:none"><td colspan="6"></td></tr>`;
+                <td><a class="act" style="text-decoration:none;display:inline-block" href="/coaching/${TEAM_ID}/session/${r.id}">Confirm</a></td>
+              </tr>`;
             }).join('')}</tbody></table>`;
         }
         upBody.innerHTML = data.upcoming.length
@@ -176,66 +190,8 @@
       }
     }
 
-    function toggleConfirm(id) {
-      const row = document.getElementById(`confirm-${id}`);
-      const open = row.style.display !== 'none';
-      document.querySelectorAll('tr[id^="confirm-"]').forEach(tr => { tr.style.display = 'none'; });
-      if (open) return;
-      const r = _due.find(x => x.id === id);
-      if (!r) return;
-      const f = r.facts || {};
-      const factLine = (label, s) => s && s.n
-        ? `<b>${s.n}</b> call${s.n !== 1 ? 's' : ''} avg <b>${s.avg}</b>` : 'no scored calls';
-      const opts = ['met', 'partially_met', 'not_met', 'waived'].map(v =>
-        `<option value="${v}">${v.replace(/_/g, ' ')}</option>`).join('');
-      row.firstElementChild.innerHTML = `
-        <div class="confirm-panel">
-          <div class="facts">
-            30 days before coaching: ${factLine('before', f.before)} →
-            coaching to deadline: ${factLine('during', f.during)}
-          </div>
-          ${(r.commitments || []).filter(c => c.status === 'open').map(c => `
-            <div class="verdict-row" data-cid="${c.id}">
-              <span class="ctext">${esc(c.commitment)}</span>
-              <select><option value="">— verdict —</option>${opts}</select>
-              <input type="text" placeholder="note (optional)" maxlength="300">
-            </div>`).join('')}
-          <textarea id="onote-${id}" placeholder="Outcome note (optional)…"></textarea>
-          <div style="margin-top:10px;display:flex;gap:8px;align-items:baseline">
-            <button class="act" onclick="submitConfirm(${id})">Confirm outcome</button>
-            <span class="status-line" id="cstatus-${id}"></span>
-          </div>
-        </div>`;
-      row.style.display = '';
-    }
-
-    async function submitConfirm(id) {
-      const row = document.getElementById(`confirm-${id}`);
-      const status = document.getElementById(`cstatus-${id}`);
-      const verdicts = [...row.querySelectorAll('.verdict-row')].map(v => ({
-        id: Number(v.dataset.cid),
-        status: v.querySelector('select').value,
-        note: v.querySelector('input').value.trim() || undefined,
-      }));
-      if (verdicts.some(v => !v.status)) {
-        status.textContent = 'Every commitment needs a verdict.';
-        return;
-      }
-      status.textContent = 'Saving…';
-      try {
-        const res = await fetch(`${API_BASE}/coachings/${id}/confirm`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            commitments: verdicts,
-            outcome_note: document.getElementById(`onote-${id}`).value.trim() || undefined,
-          }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
-        status.textContent = `Outcome: ${data.outcome.replace(/_/g, ' ')} — chiclet #${data.chiclet_id} raised on the team dashboard.`;
-        setTimeout(() => { loadQueue(); loadAll(); }, 900);
-      } catch (e) { status.textContent = `Failed: ${e.message}`; }
-    }
+    // (Inline confirm panel removed — Confirm links to the session screen,
+    // /coaching/{team}/session/{id}, CoachingTagsSpec §4.)
 
     // ── all sessions ──────────────────────────────────────────────────────
     let _allTimer = null;
@@ -265,38 +221,15 @@
               <td>${esc(s.action_plan_deadline || '—')}</td>
               <td class="hide-sm">${s.outcome ? `<span class="pill outcome-${s.outcome}">${s.outcome.replace(/_/g, ' ')}</span>` : '—'}</td>
               <td><span class="pill origin">${s.sandy_born ? 'sandy' : 'railway'}</span></td>
-              <td><button class="act secondary" onclick="toggleDetail(${s.id})">Detail</button></td>
-            </tr>
-            <tr id="detail-${s.id}" style="display:none"><td colspan="7">${detailHtml(s)}</td></tr>`).join('')}
+              <td><a class="act secondary" style="text-decoration:none;display:inline-block" href="/coaching/${TEAM_ID}/session/${s.id}">Open</a></td>
+            </tr>`).join('')}
           </tbody></table>`;
       } catch (e) {
         body.innerHTML = `<div class="empty">Could not load sessions: ${esc(e.message)}</div>`;
       }
     }
 
-    function detailHtml(s) {
-      const commits = (s.commitments || []).map(c =>
-        `<li><span style="color:${OUTCOME_COLORS[c.status] || 'var(--muted)'}">${GLYPHS[c.status] || '○'}</span>
-         ${esc(c.commitment)}${c.confirmation_note ? ` <span style="color:var(--muted)">— ${esc(c.confirmation_note)}</span>` : ''}</li>`).join('');
-      const calls = (s.evaluations || []).map(e => e.ref
-        ? `<a href="/datapoint/${TEAM_ID}/${encodeURIComponent(e.ref)}" target="_blank" rel="noopener">${laDay(e.call_connected_at) || 'call'}${e.overall_score != null ? ` · ${e.overall_score}` : ''}</a>`
-        : '<span style="color:var(--muted)">call removed</span>').join(' · ');
-      return `<div class="detail">
-        ${s.coaching_summary ? `<div>${esc(s.coaching_summary)}</div>` : ''}
-        ${s.agent_attitude ? `<div style="color:var(--muted)">attitude: ${esc(s.agent_attitude)}</div>` : ''}
-        ${commits ? `<ul>${commits}</ul>` : '<div style="color:var(--muted)">no structured commitments</div>'}
-        ${calls ? `<div>Calls: ${calls}</div>` : ''}
-        ${s.outcome_note ? `<div style="color:var(--muted)">outcome note: ${esc(s.outcome_note)}</div>` : ''}
-        <div style="color:var(--muted);margin-top:4px">
-          by ${esc(s.conducted_by_email || s.conducted_by_role)}${s.outcome_confirmed_by ? ` · confirmed by ${esc(s.outcome_confirmed_by)} ${laDay(s.outcome_confirmed_at)}` : ''}
-        </div>
-      </div>`;
-    }
-
-    function toggleDetail(id) {
-      const row = document.getElementById(`detail-${id}`);
-      row.style.display = row.style.display === 'none' ? '' : 'none';
-    }
+    // (detailHtml/toggleDetail removed — Open links to the session screen.)
 
     // ── team insights (CL5 — Claude narrative over the deterministic
     //    team fact sheet; regenerate = trigger + poll, cached 1h) ─────────
@@ -356,9 +289,58 @@
       btn.disabled = false;
     }
 
+    // ── tag admin (CoachingTagsSpec §4 — vocabulary lives with coaches) ──
+    async function loadTagAdmin() {
+      const body = document.getElementById('tagAdminBody');
+      const showDep = document.getElementById('tagShowDeprecated').checked;
+      try {
+        const data = await getJSON(`${API_BASE}/coach-tags${showDep ? '?include=deprecated' : ''}`);
+        const all = data.tags;
+        const byId = new Map(all.map(t => [t.id, t]));
+        const depth = (t) => { let d = 0, c = t; while (c.parent_tag_id && byId.has(c.parent_tag_id)) { d++; c = byId.get(c.parent_tag_id); } return d; };
+        body.innerHTML = `<table><thead><tr>
+            <th>Name</th><th>Supertag</th><th class="hide-sm">Kind</th>
+            <th class="hide-sm">Sessions</th><th>Status</th><th></th></tr></thead>
+          <tbody>${all.map(t => `
+            <tr${t.status === 'deprecated' ? ' style="opacity:.55"' : ''}>
+              <td style="padding-left:${8 + depth(t) * 16}px">${esc(t.name)}${t.replaced_by_name ? ` <span class="empty" style="padding:0">→ ${esc(t.replaced_by_name)}</span>` : ''}</td>
+              <td>${esc(t.type.replace(/_/g, ' '))}</td>
+              <td class="hide-sm">${esc(t.kind)}</td>
+              <td class="hide-sm">${t.sessions}</td>
+              <td>${esc(t.status)}</td>
+              <td>${t.status === 'active'
+                ? `<button class="act secondary" onclick="deprecateTag(${t.id}, '${esc(t.name)}', ${t.active_children})">Deprecate</button>`
+                : `<button class="act secondary" onclick="restoreTag(${t.id})">Restore</button>`}</td>
+            </tr>`).join('')}</tbody></table>`;
+      } catch (e) {
+        body.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+      }
+    }
+
+    async function deprecateTag(id, name, children) {
+      const warn = children ? ` This cascades to ${children} active subtag(s).` : '';
+      const note = prompt(`Deprecate '${name}'?${warn}\nOptional note (cancel to abort):`, '');
+      if (note === null) return;
+      const res = await fetch(`${API_BASE}/coach-tags/${id}/deprecate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: note.trim() || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) alert(data.detail || `HTTP ${res.status}`);
+      loadTagAdmin();
+    }
+
+    async function restoreTag(id) {
+      const res = await fetch(`${API_BASE}/coach-tags/${id}/restore`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) alert(data.detail || `HTTP ${res.status}`);
+      loadTagAdmin();
+    }
+
     loadQueue();
     loadAll();
     loadInsight();
+    loadTagAdmin();
   </script>
 </body>
 </html>

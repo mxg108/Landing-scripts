@@ -1159,13 +1159,18 @@
           ? `<a href="/datapoint/${TEAM_ID}/${encodeURIComponent(e.ref)}" target="_blank" rel="noopener">${(e.call_connected_at || '').slice(0, 10) || 'call'}${e.overall_score != null ? ` · ${e.overall_score}` : ''}</a>`
           : '<span class="meta">call removed</span>').join(' · ');
         const readout = selfView ? '' : responseReadout(s);
+        // All conduct/confirm work happens on the session screen
+        // (CoachingTagsSpec §4) — the card links, never prompts.
         let actions = '';
         if (!selfView && data.can_coach && s.sandy_born) {
+          const sessHref = `/coaching/${TEAM_ID}/session/${s.id}`;
           if (s.status === 'pending')
-            actions = `<button class="coach-btn" onclick="conductPrompt(${s.id}, ${s.action_plan_deadline ? 'true' : 'false'})">Mark conducted</button>
+            actions = `<a class="coach-btn" style="text-decoration:none" href="${sessHref}">Conduct session</a>
                        <button class="coach-btn danger" onclick="cancelCoaching(${s.id})">Cancel</button>`;
           else if (due)
-            actions = `<span class="meta">deadline passed — confirm from the <a href="/coaching/${TEAM_ID}" style="color:var(--accent)">coaching queue</a></span>`;
+            actions = `<a class="coach-btn" style="text-decoration:none" href="${sessHref}">Confirm outcome</a>`;
+          else
+            actions = `<a class="coach-btn secondary" style="text-decoration:none" href="${sessHref}">Open session</a>`;
         }
         div.innerHTML = `
           <div class="sess-head">${pills}<span class="meta">${when}${s.action_plan_deadline ? ` · deadline ${s.action_plan_deadline}` : ''}</span></div>
@@ -1250,24 +1255,8 @@
       btn.disabled = false;
     }
 
-    async function conductPrompt(id, hasDeadline) {
-      const summary = prompt('Coaching summary — what was discussed and agreed?');
-      if (summary === null || !summary.trim()) return;
-      const attitude = prompt('Agent attitude: receptive | engaged | neutral | defensive | dismissive | mixed', 'receptive');
-      if (attitude === null) return;
-      const body = { coaching_summary: summary.trim(), agent_attitude: attitude.trim().toLowerCase() };
-      if (!hasDeadline) {
-        const dl = prompt('Commitment deadline (YYYY-MM-DD):');
-        if (dl === null) return;
-        body.deadline = dl.trim();
-      }
-      const res = await fetch(`${API_BASE}/coachings/${id}/conduct`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) alert(data.detail || `HTTP ${res.status}`);
-      loadCoachingLayer(currentAgent);
-    }
+    // (conductPrompt removed — conduct/confirm live on the session screen,
+    // /coaching/{team}/session/{id}, CoachingTagsSpec §4.)
 
     async function cancelCoaching(id) {
       if (!confirm('Cancel this coaching session?')) return;
