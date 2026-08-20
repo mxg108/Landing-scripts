@@ -46,7 +46,7 @@ export interface Env {
 
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const db = createDb(env.DB);
     const url = new URL(request.url);
 
@@ -312,6 +312,30 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
         } catch (err) {
           console.log(`[scoring] queue drain threw: ${String(err).slice(0, 300)}`);
         }
+        // The immediate drain above races the platform slot: this callback
+        // is POSTed from the run's own FINAL STEP, so the platform still
+        // counts the run as ACTIVE and the trigger 409s → silent re-queue.
+        // Observed 2026-08-20: a 15-job overnight backlog drained at exactly
+        // 1/hour (cron pump only). Re-drain after the run has actually
+        // completed platform-side; waitUntil keeps the worker alive past
+        // the response without delaying the callback ack (which would keep
+        // the run active even longer).
+        ctx.waitUntil(
+          (async () => {
+            for (const delayMs of [8_000, 20_000]) {
+              await new Promise((r) => setTimeout(r, delayMs));
+              try {
+                const started = await drainScoreQueue(env.DB, request);
+                if (started) {
+                  console.log(`[scoring] delayed re-drain started ${started}`);
+                  return;
+                }
+              } catch (err) {
+                console.log(`[scoring] delayed re-drain threw: ${String(err).slice(0, 200)}`);
+              }
+            }
+          })()
+        );
       }
       return Response.json({ ok: true });
     }
