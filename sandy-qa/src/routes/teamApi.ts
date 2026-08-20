@@ -491,6 +491,10 @@ export async function handleTeamRoutes(
     const { listSupervisors } = await import("./roster.js");
     return listSupervisors(request, db, m[1], lookupAllow);
   }
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const { addSupervisor } = await import("./roster.js");
+    return addSupervisor(request, db, m[1], lookupAllow);
+  }
   m = path.match(/^\/api\/([^/]+)\/roster\/reassign$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
     const { reassignSupervisor } = await import("./roster.js");

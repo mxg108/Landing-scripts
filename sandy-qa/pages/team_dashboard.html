@@ -409,8 +409,14 @@
           <th>Agent</th><th>Departed</th><th>Reason</th><th>Note</th><th>Evals</th><th></th>
         </tr></thead><tbody></tbody></table></div>
       </details>
-      <div class="mr-section-label">Reassign supervisor</div>
+      <div class="mr-section-label">Supervisors</div>
       <div class="mr-form-row">
+        <input id="mrSupName" placeholder="New supervisor name" size="16" />
+        <input id="mrSupEmail" placeholder="Email (optional)" size="22" />
+        <button class="mr-btn" onclick="mrAddSupervisor(this)">Add supervisor</button>
+        <span id="mrSupPending" style="font-size:0.72rem;color:var(--muted)"></span>
+      </div>
+      <div class="mr-form-row" style="margin-top:8px">
         <select id="mrReassignFrom" onchange="mrReassignPreview()"></select>
         <span style="color:var(--muted)">&rarr;</span>
         <input id="mrReassignTo" placeholder="New supervisor" size="14" list="mrSupervisorList" />
@@ -1550,6 +1556,7 @@ async function ackChiclet(id, btn) {
 // up roster changes on the next fetch (we trigger one after each mutation).
 let _roster = null;
 let _rosterSupervisors = [];
+let _rosterRegistered = []; // 0011 registry rows (explicitly added supervisors)
 
 async function initManageRoster() {
   if (!_canCoach) return; // card stays hidden — invisible to non-coaches
@@ -1568,7 +1575,11 @@ async function refreshRoster() {
       throw new Error(err.detail || `HTTP ${rRes.status}`);
     }
     _roster = await rRes.json();
-    _rosterSupervisors = sRes.ok ? (await sRes.json()).supervisors || [] : [];
+    if (sRes.ok) {
+      const sup = await sRes.json();
+      _rosterSupervisors = sup.supervisors || [];
+      _rosterRegistered = sup.registered || [];
+    } else { _rosterSupervisors = []; _rosterRegistered = []; }
     renderManageRoster();
   } catch (e) { mrNotice(`Roster load failed: ${e.message}`, true); }
 }
@@ -1622,6 +1633,28 @@ function renderManageRoster() {
   from.innerHTML = '<option value="">From supervisor…</option>' +
     _rosterSupervisors.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
   mrReassignPreview();
+
+  // Registered supervisors with no agents yet — visible proof an Add worked
+  // before any agent is assigned to them.
+  const pending = _rosterRegistered.filter(r => r.agents === 0);
+  document.getElementById('mrSupPending').textContent = pending.length
+    ? `No agents yet: ${pending.map(r => r.label).join(', ')}` : '';
+}
+
+async function mrAddSupervisor(btn) {
+  const name = document.getElementById('mrSupName').value.trim();
+  const email = document.getElementById('mrSupEmail').value.trim();
+  if (!name) return mrNotice('Enter the new supervisor\'s name.', true);
+  const { res, data } = await mrCall('/roster/supervisors', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, email }),
+  }, btn);
+  if (!res.ok) return mrNotice(data.detail || `HTTP ${res.status}`, true);
+  document.getElementById('mrSupName').value = '';
+  document.getElementById('mrSupEmail').value = '';
+  mrNotice(`Added supervisor ${data.supervisor.label} — now in every picker.` +
+    (email ? ` To let them coach, grant manager in /admin.` : ''));
+  await refreshRoster();
 }
 
 async function mrCall(path, opts, btn) {

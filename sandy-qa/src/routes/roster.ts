@@ -108,6 +108,11 @@ export async function listRoster(
 }
 
 // ── GET /api/{t}/roster/supervisors ────────────────────────────────────────
+// Union of the DERIVED set (distinct supervisor strings on active agent
+// rows) and the 0011 REGISTRY (explicitly added supervisors — the "new
+// supervisor, no agents yet" case). `supervisors` stays a plain string
+// array (picker back-compat); `registered` carries registry rows with live
+// agent counts so the UI can show who has no agents yet.
 
 export async function listSupervisors(
   request: Request,
@@ -117,18 +122,95 @@ export async function listSupervisors(
 ): Promise<Response> {
   const g = await gate(request, db, teamId, lookupAllow);
   if ("deny" in g) return g.deny;
-  const rows = (
+  const derived = (
     await db
       .prepare(
-        `SELECT DISTINCT supervisor_email AS supervisor FROM qa_agents
+        `SELECT supervisor_email AS label, COUNT(*) AS agents FROM qa_agents
          WHERE team_id = ? AND active = 1
            AND supervisor_email IS NOT NULL AND TRIM(supervisor_email) <> ''
-         ORDER BY LOWER(supervisor_email)`
+         GROUP BY LOWER(supervisor_email)`
       )
       .bind(teamId)
       .all<any>()
-  ).results.map((r) => r.supervisor);
-  return json({ supervisors: rows });
+  ).results;
+  const registry = (
+    await db
+      .prepare(
+        "SELECT label, email, created_by, created_at FROM qa_supervisors WHERE team_id = ? AND active = 1"
+      )
+      .bind(teamId)
+      .all<any>()
+  ).results;
+  const agentCount = new Map(derived.map((d) => [d.label.toLowerCase(), d.agents]));
+  const seen = new Set<string>();
+  const union: string[] = [];
+  for (const s of [...derived.map((d) => d.label), ...registry.map((r) => r.label)]) {
+    const k = s.toLowerCase();
+    if (!seen.has(k)) { seen.add(k); union.push(s); }
+  }
+  union.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+  return json({
+    supervisors: union,
+    registered: registry.map((r) => ({ ...r, agents: agentCount.get(r.label.toLowerCase()) ?? 0 })),
+  });
+}
+
+// ── POST /api/{t}/roster/supervisors — register a NEW supervisor ──────────
+// Owner ask 2026-08-20: reassign alone couldn't introduce a supervisor who
+// has no agents yet. 409s when the label already exists either way (an
+// agent-derived supervisor needs no registration). No auto RBAC: coaching
+// still requires the explicit manager grant in /admin (house doctrine).
+
+export async function addSupervisor(
+  request: Request,
+  db: D1Database,
+  teamId: string,
+  lookupAllow?: string
+): Promise<Response> {
+  const g = await gate(request, db, teamId, lookupAllow);
+  if ("deny" in g) return g.deny;
+  if (!(await teamExists(db, teamId))) return json({ detail: `unknown team ${teamId}` }, 404);
+  let body: any = {};
+  try { body = await request.json(); } catch { return json({ detail: "JSON body required" }, 422); }
+  const label = String(body.name ?? "").trim();
+  if (!label) return json({ detail: "name is required" }, 422);
+  let email = String(body.email ?? "").trim().toLowerCase() || null;
+  if (email && !email.includes("@")) return json({ detail: "email must be valid (or omitted)" }, 422);
+
+  const inRegistry = await db
+    .prepare("SELECT id, label, active FROM qa_supervisors WHERE team_id = ? AND LOWER(label) = LOWER(?)")
+    .bind(teamId, label)
+    .first<any>();
+  if (inRegistry) {
+    if (inRegistry.active !== 1) {
+      // Re-adding a deactivated registry row revives it (registry mirrors
+      // the roster's soft-delete stance).
+      await db
+        .prepare("UPDATE qa_supervisors SET active = 1, email = COALESCE(?, email), created_by = ? WHERE id = ?")
+        .bind(email, g.email, inRegistry.id)
+        .run();
+      return json({ ok: true, supervisor: { label: inRegistry.label, email }, revived: true }, 201);
+    }
+    return json({ detail: `'${inRegistry.label}' is already a registered supervisor on ${teamId}.` }, 409);
+  }
+  const onRoster = await db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM qa_agents
+       WHERE team_id = ? AND active = 1 AND LOWER(COALESCE(supervisor_email,'')) = LOWER(?)`
+    )
+    .bind(teamId, label)
+    .first<any>();
+  if (Number(onRoster?.n ?? 0) > 0)
+    return json(
+      { detail: `'${label}' already supervises ${onRoster.n} agent(s) on ${teamId} — no registration needed.` },
+      409
+    );
+
+  await db
+    .prepare("INSERT INTO qa_supervisors (team_id, label, email, created_by) VALUES (?,?,?,?)")
+    .bind(teamId, label, email, g.email)
+    .run();
+  return json({ ok: true, supervisor: { label, email } }, 201);
 }
 
 // ── POST /api/{t}/roster — add, with rehire detection ─────────────────────

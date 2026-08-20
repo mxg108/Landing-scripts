@@ -219,3 +219,13 @@ as written — Max revisits post-vacation.
 > visible to coaches/managers only — ask Max if you need access. Every
 > change is logged, and departures are always reversible (rehire keeps
 > the agent's full history).
+
+**Addendum (2026-08-20, v0.55–v0.56):** /admin can now grant the
+`manager` role (coaching-only, team-scoped) — grant dropdown + team
+select, request-approve offers it scoped to the request's team (qa
+staff always had coaching: canCoach = privileged). Supervisors are now
+ADDABLE, not just reassignable: migration 0011 `qa_supervisors`
+registry (Sandy-only) unions into every picker; Manage-roster card
+gains an Add-supervisor row + "No agents yet" line; re-adding a
+deactivated label revives it; no auto-RBAC (manager stays an explicit
+/admin grant).
