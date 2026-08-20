@@ -471,6 +471,40 @@ export async function handleTeamRoutes(
     const { teamInsightRequest } = await import("./insights.js");
     return teamInsightRequest(request, db, m[1], url, lookupAllow);
   }
+  // ── roster management (AgentAddition §5 — routes/roster.ts) ──────────────
+  // Sandy is roster-authoritative from AA0 on; gates live inside the module
+  // (`coach` capability, same as the coaching surfaces).
+  m = path.match(/^\/api\/([^/]+)\/roster$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
+    const { listRoster } = await import("./roster.js");
+    return listRoster(request, db, m[1], lookupAllow);
+  }
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const { addAgent } = await import("./roster.js");
+    return addAgent(request, db, m[1], lookupAllow);
+  }
+  m = path.match(/^\/api\/([^/]+)\/roster\/supervisors$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
+    const { listSupervisors } = await import("./roster.js");
+    return listSupervisors(request, db, m[1], lookupAllow);
+  }
+  m = path.match(/^\/api\/([^/]+)\/roster\/reassign$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const { reassignSupervisor } = await import("./roster.js");
+    return reassignSupervisor(request, db, m[1], lookupAllow);
+  }
+  m = path.match(/^\/api\/([^/]+)\/roster\/(\d+)$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "PATCH") {
+    const { patchAgent } = await import("./roster.js");
+    return patchAgent(request, db, m[1], Number(m[2]), lookupAllow);
+  }
+  m = path.match(/^\/api\/([^/]+)\/roster\/(\d+)\/(depart|rehire)$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "POST") {
+    const mod = await import("./roster.js");
+    return (m[3] === "depart" ? mod.departAgent : mod.rehireAgent)(
+      request, db, m[1], Number(m[2]), lookupAllow
+    );
+  }
   m = path.match(/^\/api\/([^/]+)\/chiclets$/);
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
     const { listChiclets } = await import("./coaching.js");
