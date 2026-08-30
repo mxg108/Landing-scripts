@@ -77,10 +77,17 @@
   <div id="roles"><div class="empty">Loading…</div></div>
   <div class="add-row">
     <input type="email" id="new-email" placeholder="person@hellolanding.com" />
-    <select id="new-role">
-      <option value="qa" selected>qa — evaluator (lookup + scoring + actions)</option>
+    <select id="new-role" onchange="document.getElementById('new-team').hidden = this.value !== 'manager'">
+      <option value="qa" selected>qa — evaluator (lookup + scoring + actions + coaching)</option>
       <option value="admin">admin — everything + this page</option>
+      <option value="manager">manager — coaching + roster only (team-scoped)</option>
       <option value="viewer">viewer — dashboards only (revokes privileges)</option>
+    </select>
+    <select id="new-team" hidden>
+      <option value="member_support" selected>member_support</option>
+      <option value="sales">sales</option>
+      <option value="sofia">sofia</option>
+      <option value="">all teams</option>
     </select>
     <button type="button" class="btn go" onclick="addRole()">Grant</button>
   </div>
@@ -128,7 +135,7 @@ function renderRequests(reqs) {
       <td class="note-cell">${esc(r.note || '')}</td>
       <td class="muted">${esc((r.created_at || '').slice(0, 10))}</td>
       <td style="white-space:nowrap">
-        <select id="req-role-${r.id}"><option value="qa" selected>qa</option><option value="admin">admin</option></select>
+        <select id="req-role-${r.id}"><option value="qa" selected>qa</option><option value="manager">manager (coaching${r.team_id ? `, ${esc(r.team_id)}` : ''})</option><option value="admin">admin</option></select>
         <button type="button" class="btn go" onclick="resolveReq(${r.id}, 'approve')">Approve</button>
         <button type="button" class="btn danger" onclick="resolveReq(${r.id}, 'deny')">Deny</button>
       </td>
@@ -147,7 +154,7 @@ function renderRoles(roles) {
     <thead><tr><th>Email</th><th>Role</th><th>Granted by</th><th>When</th><th>Note</th><th></th></tr></thead>
     <tbody>${roles.map(r => `<tr>
       <td>${esc(r.email)}</td>
-      <td><span class="pill ${esc(r.role)}">${esc(r.role)}</span></td>
+      <td><span class="pill ${esc(r.role)}">${esc(r.role)}</span>${r.team_id ? ` <span class="muted">· ${esc(r.team_id)}</span>` : ''}</td>
       <td class="muted">${esc(r.granted_by)}</td>
       <td class="muted">${esc((r.granted_at || '').slice(0, 10))}</td>
       <td class="note-cell">${esc(r.note || '')}</td>
@@ -160,10 +167,14 @@ async function addRole() {
   const email = document.getElementById('new-email').value.trim().toLowerCase();
   const role = document.getElementById('new-role').value;
   if (!email || !email.includes('@')) { flash('Enter a valid email.'); return; }
+  // manager is team-scoped (CoachingLoopSpec §4): send the picked team;
+  // empty = all teams (qa_roles.team_id NULL). Other roles stay global.
+  const team_id = role === 'manager'
+    ? (document.getElementById('new-team').value || null) : null;
   try {
     await api('/api/admin/roles', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, role }),
+      body: JSON.stringify({ email, role, team_id }),
     });
     document.getElementById('new-email').value = '';
     load();

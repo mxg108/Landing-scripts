@@ -197,3 +197,35 @@ up changes automatically (historyFrame reads live rows per request).
 4. **Sofia**: manageable like any row (default) or read-only in the UI?
 5. Should `/team/mails` (console dropdown) also expose supervisor for
    auto-fill? It already does — no change needed; listed for awareness.
+
+## 10. Rollout log + Mails-tab freeze announcement (AA3)
+
+**Shipped 2026-08-20 (AA0–AA3, one session):** AA0 flip live + gated
+(sentinel edit survived a full manual sync; footer relic gone). AA1
+migration 0010 applied to live D1 + `routes/roster.ts` (37-check E2E).
+AA2 Manage-roster card live on the Agent Roster tab (coach-gated). AA3
+markers: `import_agents.py` DEPRECATED header, kill list appended to
+`SandyMigration.md` Phase 6, announcement below. §9 defaults were built
+as written — Max revisits post-vacation.
+
+**Announcement text (paste to supervisors when ready):**
+
+> **Roster management has moved to the QA dashboard.** The "Mails" tab
+> in the team Google Sheet is now frozen — edits there no longer reach
+> the dashboards. To add an agent, record a departure (with reason),
+> rehire, or reassign supervisors, open your team dashboard → **Agent
+> Roster** tab → **Manage roster** card
+> (`qa-scoring.sandy.hellolanding.tech/dashboard/<team>`). The card is
+> visible to coaches/managers only — ask Max if you need access. Every
+> change is logged, and departures are always reversible (rehire keeps
+> the agent's full history).
+
+**Addendum (2026-08-20, v0.55–v0.56):** /admin can now grant the
+`manager` role (coaching-only, team-scoped) — grant dropdown + team
+select, request-approve offers it scoped to the request's team (qa
+staff always had coaching: canCoach = privileged). Supervisors are now
+ADDABLE, not just reassignable: migration 0011 `qa_supervisors`
+registry (Sandy-only) unions into every picker; Manage-roster card
+gains an Add-supervisor row + "No agents yet" line; re-adding a
+deactivated label revives it; no auto-RBAC (manager stays an explicit
+/admin grant).

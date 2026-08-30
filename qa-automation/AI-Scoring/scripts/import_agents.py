@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
-"""One-time (re-runnable) Mails-tab → qa.agents importer.
+"""DEPRECATED (AgentAddition AA3, 2026-08-20) — the roster moved to Sandy.
+
+Roster management now lives on the Sandy team dashboard (Agent Roster tab →
+Manage roster card): add, depart-with-reason, rehire, supervisor reassign,
+all audited in qa_roster_events. shadow_sync's qa_agents arm is INSERT-only
+since AA0, so edits made through this script's Mails-tab flow DO NOT reach
+Sandy and will not appear on any dashboard. The Mails tab is frozen.
+
+Kept runnable ONLY as an emergency fallback during residual shadow: an agent
+must exist in Railway PG to be scored ON RAILWAY (Railway resolves identity
+from the sheet — sandy-qa/references/AgentAddition.md §3). If that edge ever
+fires, add the agent on Sandy FIRST, then here. DELETE at cutover (§7).
+
+Original header follows.
+
+One-time (re-runnable) Mails-tab → qa.agents importer.
 
 CutoverDesign.md §2: post-flip, agent identity comes from qa.agents, never
 the Mails tab at runtime. This script is the sanctioned, operator-run

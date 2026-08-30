@@ -58,8 +58,9 @@ WIPE_ORDER = {
     # 2026-08-16 FAILed on SQLITE_CONSTRAINT_FOREIGNKEY). Same reason
     # qa_agents is NOT in this dict at all — surviving Sandy evals/
     # coachings/assessments reference agent rows, and the sofia roster row
-    # has no Railway counterpart to re-import; agents sync as UPSERTs
-    # (sync_agents_upsert below), never deletes.
+    # has no Railway counterpart to re-import; agents sync INSERT-only
+    # (sync_agents_upsert below) — Sandy is roster-authoritative (AA0),
+    # PG updates/deletes never propagate.
     "qa_coachings": f"WHERE id < {SANDY_ID_BASE}",
     "qa_evaluation_tags": f"WHERE evaluation_id < {SANDY_ID_BASE}",
     "qa_assessment_sections": f"WHERE assessment_id < {SANDY_ID_BASE}",
@@ -110,13 +111,21 @@ def truncate(s, n=280):
 
 
 async def sync_agents_upsert(conn) -> int:
-    """qa_agents: UPSERT by id, never DELETE (the cc_calls pattern — and
-    explicitly NOT ``INSERT OR REPLACE``, whose delete half would cascade).
-    A wipe here is doubly wrong: surviving Sandy-born rows (evals/coachings/
+    """qa_agents: INSERT-only by id, never UPDATE, never DELETE.
+
+    ROSTER IS SANDY-AUTHORITATIVE (AgentAddition §3, AA0 2026-08-19):
+    ``ON CONFLICT(id) DO NOTHING`` — brand-new PG-side agents still arrive
+    (protects the eval FK import, the CL0 failure class), but Sandy roster
+    edits (departures, supervisor changes, email fixes) are never clobbered
+    by PG again. PG-side UPDATEs stop propagating — intended: the Manage
+    roster screen is the roster tool now, the Mails tab is frozen.
+
+    Still explicitly NOT ``INSERT OR REPLACE`` (its delete half cascades),
+    and still no wipe: surviving Sandy-born rows (evals/coachings/
     assessments >= SANDY_ID_BASE) hold agent_id FKs that fail the deferred
     check at commit, and provider-team roster rows Railway doesn't have
     (sofia, seeded by migration 0005) would be destroyed with nothing to
-    re-import. Departures propagate as active=0 UPDATEs from PG."""
+    re-import. Delete this function entirely at cutover."""
     cols = [
         r["column_name"] for r in await conn.fetch(
             """SELECT column_name FROM information_schema.columns
@@ -127,13 +136,12 @@ async def sync_agents_upsert(conn) -> int:
     if not rows:
         return 0
     col_list = ", ".join(cols)
-    updates = ", ".join(f"{c}=excluded.{c}" for c in cols if c != "id")
     stmts = ["PRAGMA defer_foreign_keys = true;"]
     for r in rows:
         vals = ", ".join(pg_to_d1.lit(r[c]) for c in cols)
         stmts.append(
             f"INSERT INTO qa_agents ({col_list}) VALUES ({vals}) "
-            f"ON CONFLICT(id) DO UPDATE SET {updates};"
+            f"ON CONFLICT(id) DO NOTHING;"
         )
         if sum(len(s) for s in stmts) > 300_000:
             pg_to_d1.apply_sql("\n".join(stmts))
@@ -246,7 +254,8 @@ async def main():
                 f"DELETE FROM qa_evaluations WHERE id IN ({ids});"
             )
 
-        # 1. roster upsert (no deletes — see sync_agents_upsert), then wipe +
+        # 1. roster INSERT-only (Sandy-authoritative, AA0 — see
+        #    sync_agents_upsert), then wipe +
         # re-import of the RAILWAY-OWNED qa_* range (updates included)
         await sync_agents_upsert(conn)
         pg_to_d1.apply_sql(
