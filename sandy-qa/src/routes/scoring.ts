@@ -455,6 +455,22 @@ export async function drainScoreQueue(
         .run();
       return null;
     }
+    if (/trigger failed 5\d\d/.test(msg)) {
+      // Platform-side 5xx (observed intermittently 2026-08-31, two
+      // episodes in one night) — not the job's fault, so it must not
+      // burn attempts toward terminal: a callback's +6s/+15s re-drains
+      // during a 5xx window would erode heads to 'error' in minutes.
+      // Silent requeue like the 409 arm; the hourly pump + the next
+      // callback are the natural backoff. Stamp last_error for
+      // observability, leave attempts untouched.
+      await db
+        .prepare(
+          "UPDATE qa_score_queue SET status='queued', triggered_at=NULL, last_error=? WHERE job_id=? AND status='triggering'"
+        )
+        .bind(msg, head.job_id)
+        .run();
+      return null;
+    }
     const attempts = (head.attempts ?? 0) + 1;
     const terminal = attempts >= 5;
     await db
