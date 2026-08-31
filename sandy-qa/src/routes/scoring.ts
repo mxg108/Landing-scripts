@@ -63,9 +63,28 @@ export async function autoScoreTrigger(
     PULPO_MCP_URL?: string;
     PULPO_MCP_TOKEN?: string;
   },
-  opts: { callId: string; agentEmail: string; managerEmail: string }
+  opts: {
+    callId: string;
+    agentEmail: string;
+    managerEmail: string;
+    suppressEmail?: boolean;
+    statsContext?: StatsContext;
+  }
 ): Promise<Response> {
   return scoreTriggerInternal(request, db, teamId, env, opts);
+}
+
+// Stats-CSV grounding fallback (NightlyScoring §5.3): the nightly sweep
+// holds the day's dispositions in hand; when the cc_calls mirror hasn't
+// caught up (sync lag, Railway's end-of-day gap), these feed the grounding
+// block + SOP retrieval instead of scoring ungrounded. A verified D1 row
+// wins wherever present; stats only fill holes. Never fabricates hold
+// truth — has_hold_truth stays false on the synthetic path.
+export interface StatsContext {
+  disposition_category: string | null;
+  disposition: string | null;
+  connected_at: string | null;
+  ended_at: string | null;
 }
 
 export async function scoreTrigger(
@@ -108,6 +127,8 @@ async function scoreTriggerInternal(
     managerEmail: string;
     rescoreOf?: number;
     rescoreSuppressEmail?: boolean;
+    suppressEmail?: boolean;
+    statsContext?: StatsContext;
   }
 ): Promise<Response> {
   const { callId, agentEmail, managerEmail } = opts;
@@ -175,13 +196,38 @@ async function scoreTriggerInternal(
   // CC grounding — mode 'on' for the Sandy pipeline (DispositionDesign §5).
   // Retell teams have no CC rows: the provider supplies the grounding block
   // (call_analysis + latency + dynamic vars) instead.
-  const ccCtx = call.grounding
+  let ccCtx = call.grounding
     ? null
     : await fetchCallContext(db, teamId, {
         entry_point: call.entry_point_call_id ?? "",
         call_id: callId,
         master: call.master_call_id ?? "",
       });
+  // Stats-CSV fallback (NightlyScoring §5.3): D1 row wins where present;
+  // the sweep's in-hand disposition fills holes (missing row, NULL
+  // disposition). Synthetic contexts carry no cc_call_id and no hold truth.
+  if (!call.grounding && opts.statsContext?.disposition_category) {
+    if (!ccCtx) {
+      ccCtx = {
+        cc_call_id: null,
+        matched_by: "stats_csv",
+        disposition_category: opts.statsContext.disposition_category,
+        disposition: opts.statsContext.disposition ?? null,
+        ai_csat: null,
+        total_hold_seconds: 0,
+        connected_at: opts.statsContext.connected_at ?? null,
+        started_at: null,
+        holds: [],
+        has_hold_truth: false,
+      };
+    } else if (!ccCtx.disposition_category) {
+      ccCtx = {
+        ...ccCtx,
+        disposition_category: opts.statsContext.disposition_category,
+        disposition: opts.statsContext.disposition ?? null,
+      };
+    }
+  }
   const callContextText = call.grounding
     ? (call.grounding.context_block ?? "")
     : buildCallContextBlock(ccCtx);
@@ -291,6 +337,10 @@ async function scoreTriggerInternal(
       // S4: the operator's re-send choice rides the queue payload so the
       // callback (which owns the finalize email) can honor it.
       rescore_suppress_email: opts.rescoreSuppressEmail ?? false,
+      // NightlyScoring §0.2: the sweep suppresses per-eval scorecard
+      // emails unconditionally (a consolidated nightly email supersedes
+      // them — future slice). Generic, unlike the rescore-only flag above.
+      suppress_email: opts.suppressEmail ?? false,
     },
   };
 
@@ -1431,7 +1481,12 @@ export async function scoringCallback(
   // don't email — the approve that resolves them does.
   let emailDispatch: any = null;
   if (!flagged) {
-    if (persist.rescore_of && persist.rescore_suppress_email) {
+    if (persist.suppress_email) {
+      emailDispatch = {
+        status: "suppressed",
+        message: "nightly sweep requested suppress_email",
+      };
+    } else if (persist.rescore_of && persist.rescore_suppress_email) {
       emailDispatch = {
         status: "suppressed",
         message: "rescore (manual) requested suppress_email",

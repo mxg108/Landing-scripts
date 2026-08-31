@@ -38,6 +38,17 @@ export async function runHourlyPump(
   } catch (err) {
     sweep = { error: String((err as any)?.message ?? err).slice(0, 200) };
   }
+  // NightlyScoring: the nightly disposition sweep decides per tick whether
+  // it has work (06–12 UTC window / in-flight resume) — cheap no-op on all
+  // other ticks. Runs BEFORE the pump for the same reason as the Retell
+  // sweep: tonight's enqueues start draining on this very tick.
+  let dispositions: any;
+  try {
+    const { sweepDispositions } = await import("./dispositionSweep.js");
+    dispositions = await sweepDispositions(db, request, env);
+  } catch (err) {
+    dispositions = { error: String((err as any)?.message ?? err).slice(0, 200) };
+  }
   const { drainScoreQueue } = await import("../routes/scoring.js");
   const started = await drainScoreQueue(db, request);
   const queued = await db
@@ -47,6 +58,7 @@ export async function runHourlyPump(
     pumped: started ?? null,
     still_queued: queued?.n ?? 0,
     sweep,
+    dispositions,
   });
 }
 
