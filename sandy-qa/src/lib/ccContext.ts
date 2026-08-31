@@ -10,7 +10,9 @@
 // matched yet; the absence path words that case safely.
 
 export interface CallContext {
-  cc_call_id: number;
+  // null when the context was synthesized from the nightly sweep's Stats
+  // CSV (NightlyScoring §5.3) — no cc_calls row existed at enqueue time.
+  cc_call_id: number | null;
   matched_by: string;
   disposition_category: string | null;
   disposition: string | null;
