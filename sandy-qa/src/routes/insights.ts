@@ -562,13 +562,18 @@ export async function insightsCallback(
         )
         .run();
       for (const r of rows) {
+        // Explicit high-range id (aid*100+n, the eval-sections pattern) —
+        // autoincrement handed Sandy-born sections LOW ids (554+) that
+        // PG's own serial then collided with, wedging the shadow sync's
+        // assessments reimport from 2026-08-20 on. Sandy-born rows in a
+        // Railway-parity table must own an id space PG can never reach.
         await db
           .prepare(
-            `INSERT INTO qa_assessment_sections (assessment_id, section_id,
+            `INSERT INTO qa_assessment_sections (id, assessment_id, section_id,
               section_name, section_number, trend, summary, coaching_tip)
-             VALUES (?,?,?,?,?,?,?)`
+             VALUES (?,?,?,?,?,?,?,?)`
           )
-          .bind(aid, r.section_id, r.section_name, r.section_number, r.trend, r.summary, r.coaching_tip)
+          .bind(aid * 100 + r.section_number, aid, r.section_id, r.section_name, r.section_number, r.trend, r.summary, r.coaching_tip)
           .run();
       }
       persisted++;
