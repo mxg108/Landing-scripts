@@ -51,7 +51,7 @@ export async function runHourlyPump(
     dispositions = { error: String((err as any)?.message ?? err).slice(0, 200) };
   }
   const { drainScoreQueue } = await import("../routes/scoring.js");
-  const started = await drainScoreQueue(db, request);
+  const started = await drainScoreQueue(db, request, env);
   const queued = await db
     .prepare("SELECT COUNT(*) AS n FROM qa_score_queue WHERE status = 'queued'")
     .first<any>();
@@ -202,7 +202,7 @@ export async function runDailyMaintenance(
   }
 
   const { drainScoreQueue } = await import("../routes/scoring.js");
-  const started = await drainScoreQueue(db, request);
+  const started = await drainScoreQueue(db, request, env);
   return JSON.stringify({
     pruned: summary, pumped: started ?? null, digest,
     ...(eom ? { eom } : {}),

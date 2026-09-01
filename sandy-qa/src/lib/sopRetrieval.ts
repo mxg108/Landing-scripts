@@ -3,6 +3,11 @@
 // PULPO_MCP_URL via plain fetch: initialize handshake, then tools/call
 // JSON-RPC POSTs, Bearer-authenticated; SSE-or-JSON responses handled;
 // expired session (404) re-initializes once.
+import {
+  renderSopContextBlock,
+  SOP_BLOCK_PLACEHOLDER,
+  type SopBlockParts,
+} from "./scoringPrompts.js";
 //
 // Policy: the verified DISPOSITION is the query (transcript head as the
 // absence fallback) → search → τ threshold → fetch bodies → render the
@@ -349,4 +354,68 @@ export async function fetchSopContext(opts: {
   } catch {
     return empty(query, "provider_error");
   }
+}
+
+// ── trigger-time resolution (v0.64) ─────────────────────────────────────────
+// Retrieval used to run at ENQUEUE, so a nightly sweep built ~58 payloads —
+// and fired ~58 Pulpo retrievals — inside two minutes, blowing the 60/min
+// token limit (14/62 provider_error on the 2026-09-01 supervised night).
+// The SOP block now resolves at TRIGGER, where the one-platform-slot drain
+// serializes jobs minutes apart: natural pacing, no burst. The DISPOSITION
+// (the retrieval key) stays frozen at enqueue — only the Pulpo lookup moves.
+
+// Everything fetchSopContext needs, frozen into the queue payload at
+// enqueue (plus the static block halves, so resolution is config-free).
+export interface DeferredSop {
+  disposition_category: string | null;
+  disposition: string | null;
+  transcript_head: string;
+  summary_query: string | null;
+  scope: RetrievalScope | null;
+  block_parts: SopBlockParts;
+}
+
+const replaceAll = (s: string, from: string, to: string) => s.split(from).join(to);
+
+// Resolves payload.sop_deferred in place: fetch SOP context, substitute
+// {{SOP_BLOCK}} in both prompt strings, stamp persist provenance, drop the
+// marker. NEVER throws and never blocks the trigger: any failure renders
+// the conservative missing-note path (sop_context_missing doctrine). A
+// payload without the marker (pre-v0.64 queue rows) is returned untouched.
+export async function resolveDeferredSop(
+  payload: any,
+  creds: { pulpoUrl?: string; pulpoToken?: string }
+): Promise<any> {
+  const d: DeferredSop | undefined = payload?.sop_deferred;
+  if (!d) return payload;
+  let sop: SopContext;
+  try {
+    sop = await fetchSopContext({
+      pulpoUrl: creds.pulpoUrl,
+      pulpoToken: creds.pulpoToken,
+      dispositionCategory: d.disposition_category ?? null,
+      disposition: d.disposition ?? null,
+      transcriptText: d.transcript_head ?? "",
+      summaryQuery: d.summary_query ?? null,
+      scope: d.scope ?? null,
+    });
+  } catch {
+    sop = empty("", "provider_error"); // belt over fetchSopContext's braces
+  }
+  const block = renderSopContextBlock(d.block_parts, sop.sop_title, sop.block_text);
+  if (payload.judge?.prompt_template)
+    payload.judge.prompt_template = replaceAll(
+      payload.judge.prompt_template, SOP_BLOCK_PLACEHOLDER, block
+    );
+  if (payload.single_stage?.prompt)
+    payload.single_stage.prompt = replaceAll(
+      payload.single_stage.prompt, SOP_BLOCK_PLACEHOLDER, block
+    );
+  if (payload.persist) {
+    payload.persist.sop_used = sop.sop_title || null;
+    payload.persist.pulpo_docs = sop.provenance;
+    payload.persist.sop_skipped_reason = sop.skipped_reason || null;
+  }
+  delete payload.sop_deferred;
+  return payload;
 }

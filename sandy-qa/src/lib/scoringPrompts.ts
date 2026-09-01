@@ -341,6 +341,11 @@ of it, produced by an audio-native annotator. How to read it:
 interface PromptExtras {
   sopTitle?: string;
   sopContent?: string;
+  // Trigger-time SOP retrieval: emit {{SOP_BLOCK}} instead of a rendered
+  // block; drainScoreQueue resolves it via resolveDeferredSop just before
+  // the workflow POST (v0.64 — fixes the enqueue-burst Pulpo rate-limit
+  // class: 14/62 provider_error on the first nightly sweep).
+  sopDeferred?: boolean;
   agentName?: string;
   extraNotes?: string;
   callContextText?: string;
@@ -351,16 +356,42 @@ interface PromptExtras {
   teamContext?: string;
 }
 
-function sopBlock(cfg: PromptConfig, x: PromptExtras): string {
-  if (x.sopContent) {
+export const SOP_BLOCK_PLACEHOLDER = "{{SOP_BLOCK}}";
+
+// The static, per-team halves of the SOP block — frozen into the queue
+// payload at enqueue so trigger-time resolution never needs a TeamConfig
+// load (or a D1 round-trip) inside the drain.
+export interface SopBlockParts {
+  section_refs: string;
+  missing_note: string;
+}
+
+export function sopBlockParts(cfg: PromptConfig): SopBlockParts {
+  return { section_refs: sopSectionRefs(cfg), missing_note: sopMissingNote(cfg) };
+}
+
+// Single source of truth for the block's byte shape — used by the enqueue
+// path (via sopBlock) AND trigger-time resolution, so the two flows cannot
+// drift apart.
+export function renderSopContextBlock(
+  parts: SopBlockParts,
+  sopTitle: string,
+  sopContent: string
+): string {
+  if (sopContent) {
     return (
-      `\n=== SOP CONTEXT (${x.sopTitle ?? ""}) ===\n` +
-      `Use the following Standard Operating Procedure to evaluate ${sopSectionRefs(cfg)}.\n` +
+      `\n=== SOP CONTEXT (${sopTitle}) ===\n` +
+      `Use the following Standard Operating Procedure to evaluate ${parts.section_refs}.\n` +
       "Score these sections against this policy, not general knowledge.\n\n" +
-      `${x.sopContent}\n`
+      `${sopContent}\n`
     );
   }
-  return sopMissingNote(cfg);
+  return parts.missing_note;
+}
+
+function sopBlock(cfg: PromptConfig, x: PromptExtras): string {
+  if (x.sopDeferred) return SOP_BLOCK_PLACEHOLDER;
+  return renderSopContextBlock(sopBlockParts(cfg), x.sopTitle ?? "", x.sopContent ?? "");
 }
 
 // Single-stage user prompt (audio attached) — build_prompt port.
