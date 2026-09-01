@@ -28,9 +28,12 @@ export interface TeamConfig {
   company: string;
   provider: string; // 'dialpad' | 'retell' — call-provider seam (migration 0005)
   provider_config: any; // e.g. retell {agent_ids: [...]}; null for dialpad teams
-  // {tags: [...], match: 'any'|'all'} — per-team doc-retrieval scope
-  // (migration 0006); null = unscoped. Provider-agnostic by design.
-  retrieval_config: { tags?: string[]; match?: string } | null;
+  // Per-team doc-retrieval scope (migrations 0006+0013); null = unscoped.
+  // {tags, match} allow-scopes a team to its doc families (sofia);
+  // {exclude_tags} carves families out of the shared pool (MS/Sales
+  // exclude system:sofia). Enforced on the tags each search hit carries
+  // (sopRetrieval.applyTagScope). Provider-agnostic by design.
+  retrieval_config: { tags?: string[]; match?: string; exclude_tags?: string[] } | null;
   // PromptConfig for the scoring prompt builders — raw rubric sections
   // (score_descriptions / na_applies_when / special_reasoning_instructions
   // included) + the rubric's scoring_prompt block.

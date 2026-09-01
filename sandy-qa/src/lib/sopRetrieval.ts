@@ -37,7 +37,6 @@ const empty = (query = "", reason = ""): SopContext => ({
 // finite disposition label space makes even short-lived caches pay off).
 const searchCache = new Map<string, { exp: number; hits: any[] }>();
 const docCache = new Map<string, { exp: number; doc: any | null }>();
-const tagScopeCache = new Map<string, { exp: number; ids: Set<string> }>();
 const CACHE_TTL_MS = 3600_000;
 
 class PulpoClient {
@@ -146,6 +145,10 @@ function mapHit(raw: any) {
     score: Number(raw.score ?? 0),
     score_kind: raw.score_type ?? "",
     updated_at: String(raw.last_verified ?? raw.updated_at ?? ""),
+    // Pulpo canonicalizes tags server-side (kebab-case slugs, namespaced
+    // facets like system:sofia) — the scope filter keys on these.
+    tags: Array.isArray(raw.tags) ? raw.tags.map(String) : null,
+    body_format: raw.body_format ?? "",
   };
 }
 
@@ -156,6 +159,7 @@ function mapDoc(raw: any) {
     body: raw.body ?? "",
     flags: (raw.open_flags ?? []).map((f: any) => ({ quote: f.quote ?? "" })),
     updated_at: String(raw.last_verified ?? raw.updated_at ?? ""),
+    body_format: raw.body_format ?? "",
   };
 }
 
@@ -182,6 +186,14 @@ export function renderSopBlock(docs: { doc: any; hit: any }[]): string {
   const sections: string[] = [];
   docs.forEach(({ doc }, i) => {
     const lines = [`[SOP ${i + 1}] ${doc.title}`];
+    if ((doc.body_format ?? "") === "flowchart") {
+      lines.push(
+        "  NOTE: this SOP is a process flowchart (Mermaid source). Read it " +
+          'as a decision graph — follow nodes and edges; "%% def <node>:" ' +
+          'comment lines carry the full rule for that node; "%% always:" / ' +
+          '"%% never:" lines are doc-wide guardrails that apply at every step.'
+      );
+    }
     for (const flag of doc.flags ?? []) {
       lines.push(
         `  NOTE: the passage "${(flag.quote ?? "").slice(0, 120)}" is under ` +
@@ -209,36 +221,38 @@ function cacheGet<T>(cache: Map<string, { exp: number } & any>, key: string): T 
   return null;
 }
 
-// Per-team tag scoping (teams.retrieval_config): search_knowledge_base has
-// no tag parameter, so the scope is enforced by filtering hits against the
-// tag-allowed doc-id set from list_documents_by_tag ({results: [...]}, max
-// 50, case-insensitive match). FAIL-CLOSED: if the scope can't be resolved,
-// retrieval is skipped rather than leaking other teams' docs. The shape is
-// deliberately provider-agnostic — a future non-Pulpo RAG provider scopes
-// off the same {tags, match} config.
-async function allowedDocIds(
-  client: PulpoClient,
-  tags: string[],
-  match: string
-): Promise<Set<string> | null> {
-  const key = `${match}|${tags.join(",")}`;
-  const cached = cacheGet<{ ids: Set<string> }>(tagScopeCache, key);
-  if (cached) return cached.ids;
-  try {
-    const payload = await client.toolCall("list_documents_by_tag", {
-      tags,
-      match,
-      limit: 50,
-    });
-    const docs: any[] = Array.isArray(payload)
-      ? payload
-      : (payload?.results ?? payload?.documents ?? payload?.items ?? []);
-    const ids = new Set<string>(docs.map((d: any) => String(d.id ?? "")).filter(Boolean));
-    tagScopeCache.set(key, { exp: Date.now() + CACHE_TTL_MS, ids });
-    return ids;
-  } catch {
-    return null; // fail-closed at the caller
-  }
+// Per-team tag scoping (teams.retrieval_config, migrations 0006+0013),
+// enforced on the tags each search hit itself carries (Pulpo returns
+// canonicalized tags on every hit — verified live 2026-08-31). This
+// replaced the list_documents_by_tag doc-id roundtrip, which cost an extra
+// tool call and silently truncated at 50 docs (system:sofia already
+// exceeds it). Shape stays provider-agnostic: {tags, match} allow-scopes
+// a team to its doc families (sofia); {exclude_tags} carves families out
+// of the shared pool (MS/Sales exclude system:sofia — Sofia's
+// machine-maintained engineering estate). FAIL-CLOSED: under an active
+// scope, a hit with no tags array (unknown tag state) is dropped rather
+// than risk leaking another team's docs.
+export interface RetrievalScope {
+  tags?: string[] | null;
+  match?: string;
+  exclude_tags?: string[] | null;
+}
+
+export function applyTagScope(hits: any[], scope: RetrievalScope | null): any[] {
+  const allow = (scope?.tags ?? []).map((t) => String(t).toLowerCase());
+  const exclude = (scope?.exclude_tags ?? []).map((t) => String(t).toLowerCase());
+  if (!allow.length && !exclude.length) return hits;
+  return hits.filter((h) => {
+    if (!Array.isArray(h.tags)) return false;
+    const tags = h.tags.map((t: string) => String(t).toLowerCase());
+    if (exclude.length && tags.some((t: string) => exclude.includes(t))) return false;
+    if (allow.length) {
+      return scope?.match === "all"
+        ? allow.every((t) => tags.includes(t))
+        : allow.some((t) => tags.includes(t));
+    }
+    return true;
+  });
 }
 
 export async function fetchSopContext(opts: {
@@ -249,8 +263,7 @@ export async function fetchSopContext(opts: {
   disposition: string | null;
   transcriptText: string;
   summaryQuery?: string | null;
-  tags?: string[] | null;
-  tagMatch?: string;
+  scope?: RetrievalScope | null;
 }): Promise<SopContext> {
   const query = buildSopQuery(
     opts.dispositionCategory,
@@ -282,13 +295,10 @@ export async function fetchSopContext(opts: {
     }
 
     // Tag scope filter — applied post-cache so the search cache stays
-    // scope-agnostic. Fail-closed: unresolved scope skips retrieval.
-    if (opts.tags?.length) {
-      const allowed = await allowedDocIds(client, opts.tags, opts.tagMatch ?? "any");
-      if (allowed === null) return empty(query, "tag_scope_unavailable");
-      if (!allowed.size) return empty(query, "no_docs_carry_team_tags");
-      hits = hits.filter((h) => allowed.has(h.id));
-      if (!hits.length) return empty(query, "no_tagged_match");
+    // scope-agnostic. Empty result = conservative sop_context_missing path.
+    if ((opts.scope?.tags?.length ?? 0) > 0 || (opts.scope?.exclude_tags?.length ?? 0) > 0) {
+      hits = applyTagScope(hits, opts.scope ?? null);
+      if (!hits.length) return empty(query, "no_hits_in_team_scope");
     }
 
     const tau = opts.threshold ?? DEFAULT_THRESHOLD;
@@ -307,6 +317,7 @@ export async function fetchSopContext(opts: {
           const raw =
             payload && typeof payload.document === "object" ? payload.document : payload;
           doc = raw?.id ? mapDoc(raw) : null;
+          if (doc && !doc.body_format && hit.body_format) doc.body_format = hit.body_format;
         } catch (e) {
           if (String(e).toLowerCase().includes("not found")) doc = null;
           else throw e;
@@ -328,6 +339,10 @@ export async function fetchSopContext(opts: {
         score_kind: hit.score_kind,
         updated_at: doc.updated_at,
         open_flags: (doc.flags ?? []).length,
+        // Scope-audit stamps (2026-08-31 Sofia-leak analysis was done by
+        // title matching — tags make contamination queries exact).
+        tags: hit.tags ?? [],
+        body_format: doc.body_format || hit.body_format || "",
       })),
       skipped_reason: "",
     };

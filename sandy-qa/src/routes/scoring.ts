@@ -244,10 +244,11 @@ async function scoreTriggerInternal(
     // No disposition on retell teams — call_analysis.call_summary is the
     // retrieval query (better than the transcript-head fallback, §4.3).
     summaryQuery: call.grounding?.sop_query ?? null,
-    // Per-team tag scoping (teams.retrieval_config, migration 0006):
-    // sofia retrieves ONLY Sofia-tagged docs; null = unscoped (MS/Sales).
-    tags: config.retrieval_config?.tags ?? null,
-    tagMatch: config.retrieval_config?.match ?? "any",
+    // Per-team tag scoping (teams.retrieval_config, migrations 0006+0013):
+    // sofia allows only her tag families (sofia + system:sofia); MS/Sales
+    // share the pool minus system:sofia (Sofia's machine-maintained
+    // engineering estate — the 2026-08 score-diff leak); null = unscoped.
+    scope: config.retrieval_config,
   });
 
   const durationMs = call.duration_ms;
@@ -958,10 +959,42 @@ export async function approveEvaluation(
   const existing = await evalSections(db, ev.id);
   const existingById = new Map(existing.map((r: any) => [r.section_id, r]));
 
+  // Formula fetched before the section loop: manual sections whose formula
+  // section declares na_default are NA-LOCKED (MS human_review_required).
+  // Railway never persisted a value there — Stage-1 wrote NA and the NA-
+  // spread rule redistributed the weight; a manually filled score silently
+  // shifts the overall (9 Sandy evals did exactly that, 2026-08 audit).
+  // Editor-sent values for locked sections are coerced back to designed NA.
+  // Sales's manual sections (potential_booking/notes_mc) have no na_default
+  // and stay analyst-editable — that gate is requiresAnalystReview's job.
+  const fvRow = await db
+    .prepare(
+      "SELECT formula_version, formula_json FROM qa_formula_versions WHERE formula_version = ?"
+    )
+    .bind(ev.formula_version)
+    .first<any>();
+  if (!fvRow) return json({ detail: `formula ${ev.formula_version} not archived` }, 500);
+  const formulaJson = JSON.parse(fvRow.formula_json);
+  const naLocked = new Set(
+    (formulaJson.sections ?? [])
+      .filter((s: any) => s?.na_default)
+      .map((s: any) => s.key)
+  );
+
   // sections payload → rows; detect edits (source flip to ai_reviewed)
   const rows: any[] = [];
   let edited = false;
   for (const sec of config.prompt_config.sections) {
+    if (["manual", "manual_yn"].includes(sec.score_type) && naLocked.has(sec.id)) {
+      rows.push({
+        section_id: sec.id, section_number: sec.section_number,
+        score_type: sec.score_type === "manual" ? "manual_numeric" : "manual_binary",
+        numeric_score: null, binary_value: "NA",
+        score_source: "manual_default", ai_provider: null,
+        confidence: null, reasoning: null,
+      });
+      continue;
+    }
     if (sec.auto_value) {
       const prev: any = existingById.get(sec.id);
       rows.push({
@@ -1014,17 +1047,10 @@ export async function approveEvaluation(
     if (r.binary_value !== null) answers[r.section_id] = r.binary_value;
     else if (r.numeric_score !== null) answers[r.section_id] = r.numeric_score;
   }
-  const fvRow = await db
-    .prepare(
-      "SELECT formula_version, formula_json FROM qa_formula_versions WHERE formula_version = ?"
-    )
-    .bind(ev.formula_version)
-    .first<any>();
-  if (!fvRow) return json({ detail: `formula ${ev.formula_version} not archived` }, 500);
   const { evaluateFormula: evalF, quantizeScore: quant } = await import("../lib/ruleEngine.js");
   let overall: number;
   try {
-    overall = quant(evalF(JSON.parse(fvRow.formula_json), answers).final_score);
+    overall = quant(evalF(formulaJson, answers).final_score);
   } catch (err) {
     return json(
       { detail: `formula rejected the edited sections: ${String((err as any)?.message ?? err).slice(0, 300)}` },
