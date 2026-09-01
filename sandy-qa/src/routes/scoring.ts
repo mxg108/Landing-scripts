@@ -23,9 +23,10 @@ import {
   buildLongCallNote,
   buildScoringPrompt,
   buildSystemPrompt,
+  sopBlockParts,
 } from "../lib/scoringPrompts.js";
 import { evaluateFormula, quantizeScore } from "../lib/ruleEngine.js";
-import { fetchSopContext } from "../lib/sopRetrieval.js";
+import { resolveDeferredSop } from "../lib/sopRetrieval.js";
 import {
   getProvider,
   ProviderCallError,
@@ -232,32 +233,33 @@ async function scoreTriggerInternal(
     ? (call.grounding.context_block ?? "")
     : buildCallContextBlock(ccCtx);
 
-  // SOP retrieval (PulpoConnection §4.2, mode=on — v1-essential): the
-  // verified disposition is the query; empty/sub-τ retrieval falls through
-  // to the sop_context_missing conservative path automatically.
-  const sop = await fetchSopContext({
-    pulpoUrl: env.PULPO_MCP_URL,
-    pulpoToken: env.PULPO_MCP_TOKEN,
-    dispositionCategory: ccCtx?.disposition_category ?? null,
+  // SOP retrieval is DEFERRED to trigger time (v0.64): the drain resolves
+  // {{SOP_BLOCK}} via resolveDeferredSop just before the workflow POST.
+  // The disposition — the retrieval key — stays frozen here (enqueue-time-
+  // grounded doctrine, NightlyScoring §1); only the Pulpo lookup moves,
+  // because a sweep's enqueue burst fired ~58 retrievals in two minutes
+  // and blew the 60/min token limit (14/62 provider_error, 2026-09-01).
+  const sopDeferred = {
+    disposition_category: ccCtx?.disposition_category ?? null,
     disposition: ccCtx?.disposition ?? null,
-    transcriptText: call.transcript_text,
+    transcript_head: (call.transcript_text ?? "").trim().slice(0, 600),
     // No disposition on retell teams — call_analysis.call_summary is the
     // retrieval query (better than the transcript-head fallback, §4.3).
-    summaryQuery: call.grounding?.sop_query ?? null,
+    summary_query: call.grounding?.sop_query ?? null,
     // Per-team tag scoping (teams.retrieval_config, migrations 0006+0013):
     // sofia allows only her tag families (sofia + system:sofia); MS/Sales
     // share the pool minus system:sofia (Sofia's machine-maintained
     // engineering estate — the 2026-08 score-diff leak); null = unscoped.
     scope: config.retrieval_config,
-  });
+    block_parts: sopBlockParts(config.prompt_config),
+  };
 
   const durationMs = call.duration_ms;
   const extraNotes = buildLongCallNote(config.prompt_config, durationMs);
   const teamLabel = teamId === "sales" ? "Sales" : "Member Support";
   const teamLine = teamId === "sales" ? "sales line" : "member support line";
   const promptExtras = {
-    sopTitle: sop.sop_title,
-    sopContent: sop.block_text,
+    sopDeferred: true,
     agentName: agentName,
     extraNotes,
     callContextText,
@@ -330,10 +332,11 @@ async function scoreTriggerInternal(
       // persisted into dialpad_call_metadata by the callback.
       provider_stamps: call.grounding?.stamps ?? null,
       flagged_long_call: durationMs > 25 * 60 * 1000,
-      // PulpoConnection §4.2 step 6 — provenance stamped in shadow AND on
-      sop_used: sop.sop_title || null,
-      pulpo_docs: sop.provenance,
-      sop_skipped_reason: sop.skipped_reason || null,
+      // PulpoConnection §4.2 step 6 provenance — placeholders here; the
+      // real stamps land when resolveDeferredSop runs at trigger time.
+      sop_used: null,
+      pulpo_docs: [],
+      sop_skipped_reason: "deferred_to_trigger",
       rescore_of: opts.rescoreOf ?? null,
       // S4: the operator's re-send choice rides the queue payload so the
       // callback (which owns the finalize email) can honor it.
@@ -343,6 +346,10 @@ async function scoreTriggerInternal(
       // them — future slice). Generic, unlike the rescore-only flag above.
       suppress_email: opts.suppressEmail ?? false,
     },
+    // Trigger-time SOP retrieval inputs (v0.64) — consumed and removed by
+    // resolveDeferredSop in drainScoreQueue. Absent on pre-v0.64 queue
+    // rows, whose prompts already carry a rendered block.
+    sop_deferred: sopDeferred,
   };
 
   // Serialize through the D1 queue — the platform allows ONE active
@@ -370,7 +377,7 @@ async function scoreTriggerInternal(
     )
     .bind(jobId, WORKFLOW_NAME, stamp)
     .run();
-  const started = await drainScoreQueue(db, request);
+  const started = await drainScoreQueue(db, request, env);
   if (started === jobId) return json({ job_id: jobId, status: "pending" });
   const ahead = await db
     .prepare(
@@ -391,7 +398,11 @@ const RUNNING_STALE_MS = 25 * 60_000; // callback never arrived
 
 export async function drainScoreQueue(
   db: D1Database,
-  request: Request
+  request: Request,
+  // Pulpo creds for trigger-time SOP resolution (v0.64). Optional so a
+  // caller that cannot supply env still drains: resolution then takes the
+  // conservative no_provider path rather than wedging the queue.
+  env?: { PULPO_MCP_URL?: string; PULPO_MCP_TOKEN?: string }
 ): Promise<string | null> {
   const nowMs = Date.now();
   const iso = (ms: number) => new Date(ms).toISOString();
@@ -431,6 +442,25 @@ export async function drainScoreQueue(
     .run();
   if (!claim.meta.changes) return null;
 
+  // Trigger-time SOP resolution (v0.64): the serialized drain is the
+  // natural pace-limiter Pulpo's 60/min quota needs. resolveDeferredSop
+  // never throws; the resolved payload is written back to the queue row
+  // BEFORE the trigger so a 5xx-requeued job retries with the same SOP
+  // context (no duplicate retrieval, reproducible per job).
+  let payload: any = JSON.parse(head.payload);
+  if (payload?.sop_deferred) {
+    payload = await resolveDeferredSop(payload, {
+      pulpoUrl: env?.PULPO_MCP_URL,
+      pulpoToken: env?.PULPO_MCP_TOKEN,
+    });
+    try {
+      await db
+        .prepare("UPDATE qa_score_queue SET payload=? WHERE job_id=?")
+        .bind(JSON.stringify(payload), head.job_id)
+        .run();
+    } catch {} // audit write only — the trigger proceeds regardless
+  }
+
   const { listTriggerableWorkflows, triggerWorkflowWithCallback } = await import(
     "../workflow.js"
   );
@@ -441,7 +471,7 @@ export async function drainScoreQueue(
       known.find((w: any) => w.name === WORKFLOW_NAME)?.id ??
       "25dec973-c4ab-4122-b2ce-9d3a03c802d8";
     run = await triggerWorkflowWithCallback(
-      wfId, WORKFLOW_NAME, request, JSON.parse(head.payload)
+      wfId, WORKFLOW_NAME, request, payload
     );
   } catch (err) {
     const msg = String((err as any)?.message ?? err).slice(0, 300);
@@ -753,7 +783,9 @@ export async function scorecardPayload(
   db: D1Database,
   teamId: string,
   ref: string,
-  request?: Request
+  request?: Request,
+  // Pulpo creds so the poll pump can resolve deferred SOP blocks (v0.64).
+  pulpoEnv?: { PULPO_MCP_URL?: string; PULPO_MCP_TOKEN?: string }
 ): Promise<Response> {
   const { loadTeamConfig: load } = await import("../lib/teamConfig.js");
   const config = await load(db, teamId);
@@ -778,7 +810,7 @@ export async function scorecardPayload(
       // Poll pump: each 3s status poll is a chance to start the next
       // queued job (recovers lost callbacks via the stale thresholds).
       try {
-        await drainScoreQueue(db, request);
+        await drainScoreQueue(db, request, pulpoEnv);
       } catch {}
       job =
         (await db

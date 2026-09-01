@@ -310,7 +310,7 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
         // A finished run frees the single workflow slot — start the next
         // queued job even when persist failed or the job id was missing.
         try {
-          await drainScoreQueue(env.DB, request);
+          await drainScoreQueue(env.DB, request, env);
         } catch (err) {
           console.log(`[scoring] queue drain threw: ${String(err).slice(0, 300)}`);
         }
@@ -332,7 +332,7 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
             for (const delayMs of [6_000, 15_000]) {
               await new Promise((r) => setTimeout(r, delayMs));
               try {
-                const started = await drainScoreQueue(env.DB, request);
+                const started = await drainScoreQueue(env.DB, request, env);
                 if (started) {
                   console.log(`[scoring] delayed re-drain started ${started}`);
                   return;

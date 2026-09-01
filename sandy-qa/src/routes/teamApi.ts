@@ -616,7 +616,10 @@ export async function handleTeamRoutes(
   }
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
     const { scorecardPayload } = await import("./scoring.js");
-    return scorecardPayload(db, m[1], decodeURIComponent(m[2]), request);
+    return scorecardPayload(db, m[1], decodeURIComponent(m[2]), request, {
+      PULPO_MCP_URL: pulpo?.url,
+      PULPO_MCP_TOKEN: pulpo?.token,
+    });
   }
 
   // ── drill-down + record APIs ─────────────────────────────────────────────

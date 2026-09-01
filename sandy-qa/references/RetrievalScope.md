@@ -81,3 +81,39 @@ Editor-sent values for locked sections are coerced back to NA
   `SELECT COUNT(*) FROM qa_evaluations WHERE id>=10000000 AND
   created_at>='<deploy date>' AND dialpad_call_metadata LIKE '%system:sofia%'`
   (expect 0 for member_support/sales; sofia evals SHOULD carry them).
+  **PASSED 2026-09-01** (supervised night: 62/62 MS evals clean, avg 58.7).
+
+## Trigger-time retrieval (v0.64 — 2026-09-01, owner-directed)
+
+The supervised night exposed an enqueue-burst problem: the sweep builds
+~58 payloads inside two minutes, and enqueue-time retrieval fired ~58
+Pulpo lookups into a 60/min token limit — **14/62 evals (23%) scored on
+the conservative no-SOP path with `provider_error`**.
+
+SOP retrieval now resolves at TRIGGER time, where the one-platform-slot
+drain serializes jobs minutes apart — natural pacing, no burst:
+
+- Enqueue freezes `payload.sop_deferred` = the retrieval INPUTS
+  (disposition — the key stays enqueue-time-grounded per NightlyScoring
+  §1 — transcript head, summary query, team scope, and the static
+  `sopBlockParts` so resolution never loads TeamConfig) and builds
+  prompts with a `{{SOP_BLOCK}}` placeholder.
+- `drainScoreQueue` (now env-threaded from every pump site) calls
+  `resolveDeferredSop` after the CAS claim: fetch → substitute the
+  placeholder in judge + single-stage prompts → stamp
+  `persist.{sop_used,pulpo_docs,sop_skipped_reason}` → drop the marker.
+  The resolved payload is written back to the queue row BEFORE the
+  workflow POST, so a 5xx-requeued job retries with the same SOP context
+  (no duplicate retrieval; reproducible per job).
+- Never blocks a trigger: any failure renders the missing-note path.
+  Pre-v0.64 queue rows (no marker) pass through untouched.
+- `renderSopContextBlock` is the single byte-shape source for both flows;
+  `tests/sop_deferred.test.mjs` proves resolved prompts are
+  BYTE-IDENTICAL to what the legacy enqueue path would have built.
+- Until resolution runs, persist carries `sop_skipped_reason:
+  "deferred_to_trigger"` — seeing that value on a FINALIZED eval is the
+  failure signature that resolution was skipped.
+
+**Future (owner-endorsed, gated on MS SOP corpus + tag hygiene):**
+per-label SOP cache (D1) — the disposition label space is ~50 entries;
+one day of cache eliminates most repeat retrievals entirely.
