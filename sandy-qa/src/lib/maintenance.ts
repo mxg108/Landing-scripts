@@ -22,6 +22,7 @@ export interface CronEnv {
   PULPO_MCP_URL?: string;
   PULPO_MCP_TOKEN?: string;
   GAS_WEBAPP_URL_SOFIA?: string;
+  GAS_WEBAPP_URL_HR?: string;
 }
 
 export async function runHourlyPump(
@@ -161,6 +162,7 @@ export async function runDailyMaintenance(
   const laDay = new Intl.DateTimeFormat("sv-SE", {
     timeZone: "America/Los_Angeles",
   }).format(new Date());
+  let hrBonus: any = null;
   if (laDay.endsWith("-01")) {
     const [y, m] = laDay.slice(0, 7).split("-").map(Number);
     const closed = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
@@ -172,6 +174,31 @@ export async function runDailyMaintenance(
     } catch (err) {
       eom = { triggered: false, error: String((err as any)?.message ?? err).slice(0, 200) };
     }
+    // HR bonus workbook (HRBonusSheet §6, Sandy-era transport): compute
+    // the closed month's payload and push it to the GAS renderer. The
+    // Railway GAS trigger is retired — this branch IS the monthly export.
+    // Re-runs are safe (tabs rewrite in place); secret absent → skipped.
+    try {
+      const teams = await db
+        .prepare("SELECT id, hr_export FROM teams WHERE hr_export IS NOT NULL")
+        .all<any>();
+      const { hrExportFor, fetchMonthPayload, dispatchHrBonus } = await import("./hrBonus.js");
+      const { loadTeamConfig } = await import("./teamConfig.js");
+      for (const t of teams.results) {
+        const hr = hrExportFor(t.hr_export);
+        if (!hr) continue;
+        const config = await loadTeamConfig(db, t.id);
+        const payload = await fetchMonthPayload(db, config, hr, closed);
+        const receipt = await dispatchHrBonus(payload, env.GAS_WEBAPP_URL_HR);
+        (hrBonus ??= {})[t.id] = {
+          month: closed,
+          agents: payload.agents.length,
+          gas_receipt: receipt,
+        };
+      }
+    } catch (err) {
+      hrBonus = { error: String((err as any)?.message ?? err).slice(0, 200) };
+    }
   }
 
   const { drainScoreQueue } = await import("../routes/scoring.js");
@@ -179,5 +206,6 @@ export async function runDailyMaintenance(
   return JSON.stringify({
     pruned: summary, pumped: started ?? null, digest,
     ...(eom ? { eom } : {}),
+    ...(hrBonus ? { hr_bonus: hrBonus } : {}),
   });
 }
