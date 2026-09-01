@@ -7,3 +7,4 @@ parity/fixture.json
 parity/lib.mjs
 parity/parity.log
 scripts/shadow_sync.log
+tests/.build/
