@@ -197,7 +197,7 @@ export async function handleTeamRoutes(
   dialpadKey?: string,
   lookupAllow?: string,
   pulpo?: { url?: string; token?: string },
-  gasUrls?: { member_support?: string; sales?: string; sofia?: string },
+  gasUrls?: { member_support?: string; sales?: string; sofia?: string; hr?: string },
   retellKey?: string
 ): Promise<Response | null> {
   const path = url.pathname;
@@ -405,6 +405,40 @@ export async function handleTeamRoutes(
   if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
     const { reviewQueue } = await import("./scoring.js");
     return reviewQueue(db, m[1]);
+  }
+
+  // ── HR bonus export (HRBonusSheet §5 — lib/hrBonus.ts) ───────────────────
+  // GET = the month payload (Railway route parity; browser/sast_-era pull).
+  // POST /dispatch = compute + push to the GAS webapp (the Sandy-era
+  // transport — the EOM cron uses the same seam). Both privileged: the
+  // payload carries every agent's monthly numbers.
+  m = path.match(/^\/api\/([^/]+)\/hr-bonus\/(\d{4}-(?:0[1-9]|1[0-2]))(\/dispatch)?$/);
+  if (m && KNOWN_TEAMS.has(m[1])) {
+    const wantsDispatch = m[3] === "/dispatch";
+    if ((wantsDispatch && request.method !== "POST") || (!wantsDispatch && request.method !== "GET"))
+      return json({ detail: "method not allowed" }, 405);
+    const denied = await requirePrivileged();
+    if (denied) return denied;
+    const teamRow = await db
+      .prepare("SELECT hr_export FROM teams WHERE id = ?")
+      .bind(m[1])
+      .first<any>();
+    const { hrExportFor, fetchMonthPayload, dispatchHrBonus } = await import(
+      "../lib/hrBonus.js"
+    );
+    const hr = hrExportFor(teamRow?.hr_export ?? null);
+    if (!hr)
+      return json({ detail: `Team '${m[1]}' has no HR export configured` }, 404);
+    const config = await loadTeamConfig(db, m[1]);
+    const payload = await fetchMonthPayload(db, config, hr, m[2]);
+    if (!wantsDispatch) return json(payload);
+    const receipt = await dispatchHrBonus(payload, gasUrls?.hr);
+    return json({
+      month: m[2],
+      agents: payload.agents.length,
+      evaluations: payload.agents.reduce((n: number, a: any) => n + a.evaluations.length, 0),
+      gas_receipt: receipt,
+    });
   }
 
   // ── coaching loop (CoachingLoopSpec §4 — routes/coaching.ts) ─────────────

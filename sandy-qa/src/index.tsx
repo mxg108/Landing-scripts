@@ -70,6 +70,7 @@ export default {
           member_support: env.GAS_WEBAPP_URL_MS,
           sales: env.GAS_WEBAPP_URL_SALES,
           sofia: env.GAS_WEBAPP_URL_SOFIA,
+          hr: env.GAS_WEBAPP_URL_HR,
         },
         env.RETELL_API_KEY
       );
@@ -197,6 +198,7 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
         PULPO_MCP_URL: env.PULPO_MCP_URL,
         PULPO_MCP_TOKEN: env.PULPO_MCP_TOKEN,
         GAS_WEBAPP_URL_SOFIA: env.GAS_WEBAPP_URL_SOFIA,
+        GAS_WEBAPP_URL_HR: env.GAS_WEBAPP_URL_HR,
       };
       let note: string;
       try {
