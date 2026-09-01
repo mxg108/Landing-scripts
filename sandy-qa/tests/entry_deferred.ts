@@ -2,7 +2,9 @@
 // prompt builders + trigger-time resolver (parity-harness pattern).
 export {
   buildJudgePromptTemplate,
+  buildJudgeSystemPrompt,
   buildScoringPrompt,
+  buildSystemPrompt,
   sopBlockParts,
   renderSopContextBlock,
   SOP_BLOCK_PLACEHOLDER,

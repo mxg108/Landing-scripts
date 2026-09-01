@@ -26,7 +26,9 @@ execFileSync(
 );
 const {
   buildJudgePromptTemplate,
+  buildJudgeSystemPrompt,
   buildScoringPrompt,
+  buildSystemPrompt,
   sopBlockParts,
   SOP_BLOCK_PLACEHOLDER,
   fetchSopContext,
@@ -190,6 +192,23 @@ await test("pre-v0.64 payload (no marker) passes through untouched", async () =>
   const before = JSON.stringify(legacy);
   const out = await resolveDeferredSop(legacy, CREDS);
   assert.equal(JSON.stringify(out), before);
+});
+
+// ── judge calibration block (v0.65) ─────────────────────────────────────────
+
+await test("judge system prompt carries the SCORING CALIBRATION anchors", () => {
+  const sys = buildJudgeSystemPrompt(CFG);
+  assert.ok(sys.includes("=== SCORING CALIBRATION ==="));
+  assert.ok(sys.includes("a 3 is a competent, acceptable handling"));
+  assert.ok(sys.includes("Reserve 1 and 2 for clear failures with member impact"));
+  assert.ok(sys.includes("MUST name what was\n  specifically missing to earn the 5"));
+  // {company} substitution still applies
+  assert.ok(sys.startsWith("You are a QA evaluator at Landing Living LLC."));
+});
+
+await test("single-stage system prompt is unchanged (judge-only tweak)", () => {
+  const sys = buildSystemPrompt(CFG);
+  assert.ok(!sys.includes("SCORING CALIBRATION"));
 });
 
 if (failures.length) {

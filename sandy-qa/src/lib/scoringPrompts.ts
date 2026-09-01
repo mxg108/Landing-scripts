@@ -168,7 +168,13 @@ const JUDGE_GENERAL_INSTRUCTIONS = `
   account of the call. It was produced by an audio-native annotator
   that listened to the full recording — including for non-English
   calls, where the annotator re-transcribed from the audio. Score from
-  the record; there is no separate transcript to consult.`.replace(/\n$/, "");
+  the record; there is no separate transcript to consult.
+
+=== SCORING CALIBRATION ===
+- On 1-5 sections, a 3 is a competent, acceptable handling of the call.
+  Reserve 1 and 2 for clear failures with member impact.
+- If you give a section a 4, that section's reasoning MUST name what was
+  specifically missing to earn the 5.`.replace(/\n$/, "");
 
 export interface PromptConfig {
   company: string;
