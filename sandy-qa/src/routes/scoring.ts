@@ -991,14 +991,6 @@ export async function approveEvaluation(
   const existing = await evalSections(db, ev.id);
   const existingById = new Map(existing.map((r: any) => [r.section_id, r]));
 
-  // Formula fetched before the section loop: manual sections whose formula
-  // section declares na_default are NA-LOCKED (MS human_review_required).
-  // Railway never persisted a value there — Stage-1 wrote NA and the NA-
-  // spread rule redistributed the weight; a manually filled score silently
-  // shifts the overall (9 Sandy evals did exactly that, 2026-08 audit).
-  // Editor-sent values for locked sections are coerced back to designed NA.
-  // Sales's manual sections (potential_booking/notes_mc) have no na_default
-  // and stay analyst-editable — that gate is requiresAnalystReview's job.
   const fvRow = await db
     .prepare(
       "SELECT formula_version, formula_json FROM qa_formula_versions WHERE formula_version = ?"
@@ -1007,26 +999,21 @@ export async function approveEvaluation(
     .first<any>();
   if (!fvRow) return json({ detail: `formula ${ev.formula_version} not archived` }, 500);
   const formulaJson = JSON.parse(fvRow.formula_json);
-  const naLocked = new Set(
-    (formulaJson.sections ?? [])
-      .filter((s: any) => s?.na_default)
-      .map((s: any) => s.key)
-  );
+
+  // na_default doctrine (owner, 2026-09-01): the formula's na_default
+  // governs the CREATION default only — the callback writes NA and the
+  // NA-spread rule redistributes the weight (sectionRowsFromScorecard).
+  // At approval, an analyst's explicit values on ANY section — manual
+  // ones included — persist and feed the formula. The v0.62 NA-LOCK that
+  // coerced na_default manual sections back to NA here was an overreach
+  // (it also dropped the analyst's reasoning/confidence) and is removed;
+  // score_source='manual' + qa_score_audit remain the accountability
+  // trail for deliberate fills.
 
   // sections payload → rows; detect edits (source flip to ai_reviewed)
   const rows: any[] = [];
   let edited = false;
   for (const sec of config.prompt_config.sections) {
-    if (["manual", "manual_yn"].includes(sec.score_type) && naLocked.has(sec.id)) {
-      rows.push({
-        section_id: sec.id, section_number: sec.section_number,
-        score_type: sec.score_type === "manual" ? "manual_numeric" : "manual_binary",
-        numeric_score: null, binary_value: "NA",
-        score_source: "manual_default", ai_provider: null,
-        confidence: null, reasoning: null,
-      });
-      continue;
-    }
     if (sec.auto_value) {
       const prev: any = existingById.get(sec.id);
       rows.push({

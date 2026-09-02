@@ -62,15 +62,19 @@ team tag) + dedicated MS SOPs; revisit the exclude set then.
   `%% always/never` are doc-wide guardrails). Required by the sofia scope
   widening — her SOP suite is largely flowchart-form.
 
-## human_review_required NA-lock (same PR)
+## human_review_required NA-lock (same PR) — SUPERSEDED 2026-09-01
 
-The approve path NA-locks manual sections whose formula section declares
-`na_default` (MS `human_review_required`, weight 10): Railway never
-persisted a value there (Stage-1 NA + NA-spread redistribution); the Sandy
-editor let manual numerics through on 9 evals, silently shifting overalls.
-Editor-sent values for locked sections are coerced back to NA
-(`score_source='manual_default'`). Sales's manual sections (no
-`na_default`) stay analyst-editable.
+~~The approve path NA-locks manual sections whose formula section declares
+`na_default`~~ **Reverted (owner doctrine, 2026-09-01, v0.66):**
+`na_default` governs the CREATION default only — the callback writes NA
+and NA-spread redistributes the weight. At approval, an analyst's
+explicit values on ANY section (manual ones included: scores, reasoning,
+confidence) persist and drive the formula. The v0.62 lock was an
+overreach — it also silently dropped the analyst's reasoning/confidence
+on the locked section. Accountability for deliberate fills =
+`score_source='manual'` + `qa_score_audit`; the "9 hrr-manual evals"
+flagged in the August audit were legitimate analyst actions, no repair
+needed. Guarded by `tests/approve_persist.test.mjs`.
 
 ## Verification
 
