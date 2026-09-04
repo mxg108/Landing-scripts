@@ -21,6 +21,10 @@ export interface Env {
   // Dashboard-set app secret: Retell.ai (Sofia AI's call provider). Absent →
   // scoring sofia returns 503 with instructions; dialpad teams unaffected.
   RETELL_API_KEY?: string;
+  // Dashboard-set app secret: Google service-account JSON (ShiftReport §10 —
+  // EOD Member Support report → Google Sheet). Absent → the daily job
+  // computes, then rows go `error` "no sheets credentials" (never silent).
+  GSHEETS_SA_JSON?: string;
   // Dashboard-set app secret: Sofia's GAS webapp (scorecard emails deliver
   // to Jackson via the overlay's EMAIL.TO_OVERRIDE — Sofia has no inbox).
   GAS_WEBAPP_URL_SOFIA?: string;
@@ -199,6 +203,7 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
         PULPO_MCP_TOKEN: env.PULPO_MCP_TOKEN,
         GAS_WEBAPP_URL_SOFIA: env.GAS_WEBAPP_URL_SOFIA,
         GAS_WEBAPP_URL_HR: env.GAS_WEBAPP_URL_HR,
+        GSHEETS_SA_JSON: env.GSHEETS_SA_JSON,
       };
       let note: string;
       try {

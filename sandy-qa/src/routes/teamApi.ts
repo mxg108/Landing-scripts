@@ -285,6 +285,32 @@ export async function handleTeamRoutes(
       return new Response("Admins only.", { status: 403 });
     return html(adminHtml);
   }
+  // ShiftReport §10: EOD Google-Sheet report latch rows (read-only JSON for
+  // the console / NightWatch tier-0). Aggregates only — no caller numbers.
+  m = path.match(/^\/api\/([^/]+)\/eod-reports$/);
+  if (m && KNOWN_TEAMS.has(m[1]) && request.method === "GET") {
+    const access = await resolveAccess(request, db, lookupAllow);
+    if (!access.privileged) return json({ detail: "Privileged (admin|qa) only." }, 403);
+    const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? 14) || 14, 1), 90);
+    const rows = await db
+      .prepare(
+        "SELECT id, report_date, status, export_ids, report, created_at, updated_at FROM qa_eod_reports WHERE team_id = ? ORDER BY report_date DESC LIMIT ?"
+      )
+      .bind(m[1], limit)
+      .all<any>();
+    const parse = (s: string | null) => {
+      try {
+        return s ? JSON.parse(s) : null;
+      } catch {
+        return null;
+      }
+    };
+    return json({
+      team_id: m[1],
+      reports: rows.results.map((r: any) => ({ ...r, export_ids: parse(r.export_ids), report: parse(r.report) })),
+    });
+  }
+
   if (path === "/api/admin/overview" && request.method === "GET") {
     const access = await resolveAccess(request, db, lookupAllow);
     if (access.role !== "admin") return json({ detail: "Admins only." }, 403);
