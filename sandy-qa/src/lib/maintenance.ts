@@ -23,6 +23,8 @@ export interface CronEnv {
   PULPO_MCP_TOKEN?: string;
   GAS_WEBAPP_URL_SOFIA?: string;
   GAS_WEBAPP_URL_HR?: string;
+  // ShiftReport §10: Google service-account JSON for the EOD sheet sink.
+  GSHEETS_SA_JSON?: string;
 }
 
 export async function runHourlyPump(
@@ -50,6 +52,16 @@ export async function runHourlyPump(
   } catch (err) {
     dispositions = { error: String((err as any)?.message ?? err).slice(0, 200) };
   }
+  // ShiftReport §10: the EOD Google-Sheet report decides per tick whether
+  // it has work (13–19 UTC window / in-flight resume) — cheap no-op on
+  // all other ticks. Human-facing, so it runs BEFORE the queue drain.
+  let eod: any;
+  try {
+    const { runEodReports } = await import("./eodReport.js");
+    eod = await runEodReports(db, env);
+  } catch (err) {
+    eod = { error: String((err as any)?.message ?? err).slice(0, 200) };
+  }
   const { drainScoreQueue } = await import("../routes/scoring.js");
   const started = await drainScoreQueue(db, request, env);
   const queued = await db
@@ -60,6 +72,7 @@ export async function runHourlyPump(
     still_queued: queued?.n ?? 0,
     sweep,
     dispositions,
+    eod,
   });
 }
 

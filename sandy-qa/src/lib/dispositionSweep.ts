@@ -13,13 +13,21 @@
 // failures degrade to a report, never a throw — the cron handler stays up.
 
 import type { StatsContext } from "../routes/scoring.js";
+import {
+  initiateExport as initiateStatsExport,
+  localDay,
+  naiveLocalToIso,
+  parseCsv,
+  pollAndDownload,
+} from "./dialpadStats.js";
 
-const DIALPAD_BASE = "https://dialpad.com/api/v2";
+// SR1 (ShiftReport §10.3): the Stats client + CSV/tz helpers now live in
+// dialpadStats.ts; re-exported so existing importers/tests keep working.
+export { localDay, naiveLocalToIso, parseCsv } from "./dialpadStats.js";
+
 // Sandy-born id space (PR #174) — the evals disposition back-fill is scoped
 // to rows the shadow sync can never fill (Railway fills its own via PG).
 const SANDY_BASE = 10_000_000;
-const POLL_ATTEMPTS = 4; // ~12s budget per tick; next tick resumes
-const POLL_SPACING_MS = 3_000;
 const CATCHUP_WINDOW_HOURS = 6; // §6: retries until local_hour_utc + 6
 const ID_CHUNK = 20; // triple-key + link = 4 params/id; D1 param cap ~100
 
@@ -49,42 +57,6 @@ export interface StatsRow {
 
 // ── pure helpers (harness-tested) ──────────────────────────────────────────
 
-// RFC4180-ish scanner: quoted fields, escaped quotes, \r\n. Disposition
-// labels are free text ("Reservation & Stay Changes~Locker / package
-// access code") and the note column can carry anything — split(',') is
-// not an option.
-export function parseCsv(text: string): string[][] {
-  const rows: string[][] = [];
-  let field = "";
-  let row: string[] = [];
-  let inQuotes = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inQuotes) {
-      if (c === '"') {
-        if (text[i + 1] === '"') {
-          field += '"';
-          i++;
-        } else inQuotes = false;
-      } else field += c;
-    } else if (c === '"') {
-      inQuotes = true;
-    } else if (c === ",") {
-      row.push(field);
-      field = "";
-    } else if (c === "\n" || c === "\r") {
-      if (c === "\r" && text[i + 1] === "\n") i++;
-      row.push(field);
-      field = "";
-      if (row.length > 1 || row[0] !== "") rows.push(row);
-      row = [];
-    } else field += c;
-  }
-  row.push(field);
-  if (row.length > 1 || row[0] !== "") rows.push(row);
-  return rows;
-}
-
 // `Category~Subdisposition` → pair; bare category → (category, null).
 // (Port of disposition_pull.py::split_disposition.)
 export function splitDisposition(label: string): [string | null, string | null] {
@@ -95,56 +67,6 @@ export function splitDisposition(label: string): [string | null, string | null] 
   const category = trimmed.slice(0, idx).trim();
   const sub = trimmed.slice(idx + 1).trim();
   return [category || null, sub || null];
-}
-
-// What UTC-rendered wall time does `atMs` read as in `tz`? Fixed-offset
-// zones (America/Mexico_City, UTC-6 since DST abolition) make this exact.
-function tzOffsetMs(tz: string, atMs: number): number {
-  const parts: Record<string, string> = {};
-  new Intl.DateTimeFormat("en-US", {
-    timeZone: tz,
-    hour12: false,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  })
-    .formatToParts(new Date(atMs))
-    .forEach((p) => (parts[p.type] = p.value));
-  const rendered = Date.UTC(
-    Number(parts.year),
-    Number(parts.month) - 1,
-    Number(parts.day),
-    Number(parts.hour === "24" ? "0" : parts.hour),
-    Number(parts.minute),
-    Number(parts.second)
-  );
-  return rendered - Math.trunc(atMs / 1000) * 1000;
-}
-
-// Export timestamps are NAIVE in the row's own timezone column (verified
-// on the live CSV + disposition_pull.py::_row_ts) — localize to UTC ISO.
-export function naiveLocalToIso(naive: string, tz: string): string | null {
-  const m = (naive || "")
-    .trim()
-    .match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?$/);
-  if (!m) return null;
-  const ms = m[7] ? Math.round(Number(`0.${m[7]}`) * 1000) : 0;
-  const asUtc = Date.UTC(
-    Number(m[1]), Number(m[2]) - 1, Number(m[3]),
-    Number(m[4]), Number(m[5]), Number(m[6]), ms
-  );
-  try {
-    return new Date(asUtc - tzOffsetMs(tz, asUtc)).toISOString();
-  } catch {
-    return null;
-  }
-}
-
-export function localDay(tz: string, d: Date): string {
-  return new Intl.DateTimeFormat("sv-SE", { timeZone: tz }).format(d);
 }
 
 // Rows without a call_id drop (unjoinable); rows without a disposition are
@@ -248,68 +170,6 @@ export function pickForAgent(
     }
   }
   return picked;
-}
-
-// ── Stats API (initiate / poll / download) ─────────────────────────────────
-
-async function initiateExport(
-  apiKey: string,
-  callcenterId: string,
-  timezone: string,
-  daysAgo: number
-): Promise<string> {
-  const res = await fetch(`${DIALPAD_BASE}/stats`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({
-      export_type: "records",
-      stat_type: "dispositions",
-      timezone,
-      target_type: "callcenter",
-      target_id: Number(callcenterId),
-      days_ago_start: daysAgo,
-      days_ago_end: daysAgo,
-    }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!res.ok) throw new Error(`stats initiate HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const body: any = await res.json();
-  const requestId = body?.request_id;
-  if (!requestId) throw new Error(`stats initiate: no request_id in ${JSON.stringify(body).slice(0, 200)}`);
-  return String(requestId);
-}
-
-// One bounded poll pass. Returns the CSV text when the export is ready,
-// null when still processing (the next hourly tick resumes), throws when
-// Dialpad reports the export failed.
-async function pollAndDownload(apiKey: string, requestId: string): Promise<string | null> {
-  for (let attempt = 0; attempt < POLL_ATTEMPTS; attempt++) {
-    if (attempt > 0) await new Promise((r) => setTimeout(r, POLL_SPACING_MS));
-    const res = await fetch(`${DIALPAD_BASE}/stats/${requestId}`, {
-      headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!res.ok) throw new Error(`stats poll HTTP ${res.status}`);
-    const body: any = await res.json();
-    if (body?.status === "failed") throw new Error(`stats export failed: ${JSON.stringify(body).slice(0, 200)}`);
-    if (body?.status === "complete" && body?.download_url) {
-      const url = String(body.download_url);
-      // Signed storage links need no auth; only send the key back to Dialpad.
-      const isDialpad = url.startsWith("https://dialpad.com/");
-      const dl = await fetch(url, {
-        headers: isDialpad ? { Authorization: `Bearer ${apiKey}` } : {},
-        redirect: "follow",
-        signal: AbortSignal.timeout(60_000),
-      });
-      if (!dl.ok) throw new Error(`stats download HTTP ${dl.status}`);
-      return await dl.text();
-    }
-  }
-  return null;
 }
 
 // ── D1 fills (§5.2 — UPDATE-only during shadow) ────────────────────────────
@@ -517,7 +377,13 @@ async function sweepTeam(
 
   let requestId: string | null = pull.request_id ?? null;
   if (!requestId) {
-    requestId = await initiateExport(env.DIALPAD_API_KEY!, callcenterId, tz, daysAgo);
+    requestId = await initiateStatsExport(env.DIALPAD_API_KEY!, {
+      exportType: "records",
+      statType: "dispositions",
+      timezone: tz,
+      targetId: callcenterId,
+      daysAgo: [daysAgo, daysAgo],
+    });
     await db
       .prepare(
         "UPDATE qa_disposition_pulls SET status = 'fetching', request_id = ?, updated_at = ? WHERE id = ?"

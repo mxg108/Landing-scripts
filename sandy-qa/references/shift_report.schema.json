@@ -1,0 +1,238 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qa-scoring.sandy.hellolanding.tech/schemas/shift_report.schema.json",
+  "title": "ShiftReport",
+  "description": "Payload stored in qa_shift_reports.report and rendered to Slack (ShiftReport.md §3/§4). Every section is either data or {error}; the renderer prints 'unavailable: <error>' for the latter.",
+  "type": "object",
+  "required": ["version", "team_id", "shift", "window", "generated_at", "calls", "staffing", "tickets", "mentions", "notes", "sources"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "team_id": { "type": "string" },
+    "shift": {
+      "type": "object",
+      "required": ["key", "label", "shift_date", "timezone"],
+      "properties": {
+        "key": { "enum": ["morning", "afternoon", "night"] },
+        "label": { "type": "string" },
+        "shift_date": { "type": "string", "format": "date", "description": "local date the shift STARTED" },
+        "timezone": { "type": "string" }
+      }
+    },
+    "window": {
+      "type": "object",
+      "required": ["start", "end", "start_local", "end_local"],
+      "properties": {
+        "start": { "type": "string", "format": "date-time" },
+        "end": { "type": "string", "format": "date-time" },
+        "start_local": { "type": "string", "pattern": "^\\d{2}:\\d{2}$" },
+        "end_local": { "type": "string", "pattern": "^\\d{2}:\\d{2}$" }
+      }
+    },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "delayed_ticks": { "type": "integer", "minimum": 0, "description": "how many hourly ticks after the shift end the report completed" },
+
+    "calls": {
+      "oneOf": [
+        { "$ref": "#/$defs/error" },
+        {
+          "type": "object",
+          "required": ["callcenter_id", "inbound", "abandoned", "rate", "definition", "by_hour"],
+          "additionalProperties": false,
+          "properties": {
+            "callcenter_id": { "type": "string" },
+            "inbound": { "type": "integer", "minimum": 0, "description": "inbound entry-point calls on the line in the window" },
+            "abandoned": { "type": "integer", "minimum": 0 },
+            "rate": { "type": "number", "minimum": 0, "maximum": 100, "description": "abandoned / inbound × 100, one decimal" },
+            "answered": { "type": "integer", "minimum": 0 },
+            "voicemail": { "type": "integer", "minimum": 0 },
+            "avg_wait_abandoned_s": { "type": ["number", "null"] },
+            "longest_wait_s": { "type": ["number", "null"] },
+            "definition": { "type": "string", "description": "which export column / rule produced `abandoned` (ShiftReport.md §4.1)" },
+            "by_hour": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["hour_local", "inbound", "abandoned"],
+                "properties": {
+                  "hour_local": { "type": "integer", "minimum": 0, "maximum": 23 },
+                  "inbound": { "type": "integer" },
+                  "abandoned": { "type": "integer" },
+                  "on_duty": { "type": "integer", "description": "operators on duty at any point in the hour (SR4)" }
+                }
+              }
+            },
+            "reconciliation": {
+              "type": "object",
+              "description": "night report only: yesterday's full-day check against the daily stats export",
+              "required": ["day", "official_abandoned", "derived_abandoned"],
+              "properties": {
+                "day": { "type": "string", "format": "date" },
+                "official_abandoned": { "type": "integer" },
+                "derived_abandoned": { "type": "integer" }
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "staffing": {
+      "oneOf": [
+        { "$ref": "#/$defs/error" },
+        {
+          "type": "object",
+          "required": ["roster_configured", "on_duty", "flags"],
+          "additionalProperties": false,
+          "properties": {
+            "roster_configured": { "type": "boolean" },
+            "expected": { "type": "integer", "minimum": 0 },
+            "on_duty": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["email", "name", "first_on_duty", "last_off_duty", "on_duty_min"],
+                "properties": {
+                  "email": { "type": "string" },
+                  "name": { "type": "string" },
+                  "first_on_duty": { "type": ["string", "null"], "format": "date-time" },
+                  "last_off_duty": { "type": ["string", "null"], "format": "date-time" },
+                  "on_duty_min": { "type": "integer" },
+                  "unavailable_min": { "type": "integer" }
+                }
+              }
+            },
+            "flags": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["kind"],
+                "properties": {
+                  "kind": { "enum": ["absent", "late", "left_early", "coverage_gap", "thin_hour"] },
+                  "email": { "type": "string" },
+                  "name": { "type": "string" },
+                  "at": { "type": "string", "format": "date-time" },
+                  "from": { "type": "string", "format": "date-time" },
+                  "to": { "type": "string", "format": "date-time" },
+                  "minutes": { "type": "integer" },
+                  "abandoned_in_range": { "type": "integer" },
+                  "hour_local": { "type": "integer" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "tickets": {
+      "oneOf": [
+        { "$ref": "#/$defs/error" },
+        {
+          "type": "object",
+          "required": ["source", "queue_id", "as_of", "categories"],
+          "additionalProperties": false,
+          "properties": {
+            "source": { "const": "snowflake:LANDING.MISSION_CONTROL" },
+            "queue_id": { "type": "integer" },
+            "as_of": { "type": "string", "format": "date-time", "description": "MAX(_SDC_BATCHED_AT) — replica freshness" },
+            "categories": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["label", "new", "working", "need_action"],
+                "properties": {
+                  "label": { "type": "string" },
+                  "type_id": { "type": "integer" },
+                  "reason_id": { "type": "integer" },
+                  "new": { "type": "integer", "minimum": 0 },
+                  "working": { "type": "integer", "minimum": 0 },
+                  "need_action": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "mentions": {
+      "oneOf": [
+        { "$ref": "#/$defs/error" },
+        {
+          "type": "object",
+          "required": ["subteams", "scanned", "count", "items"],
+          "additionalProperties": false,
+          "properties": {
+            "subteams": { "type": "object", "additionalProperties": { "type": "string" } },
+            "scanned": { "type": "integer", "minimum": 0, "description": "mentions in the window before the unattended filter" },
+            "count": { "type": "integer", "minimum": 0 },
+            "truncated": { "type": "boolean", "description": "search_cap reached" },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["permalink", "channel_id", "channel_name", "author", "ts", "subteams"],
+                "properties": {
+                  "permalink": { "type": "string", "format": "uri" },
+                  "channel_id": { "type": "string" },
+                  "channel_name": { "type": "string" },
+                  "author": { "type": "string" },
+                  "ts": { "type": "string", "format": "date-time" },
+                  "subteams": { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "notes": { "type": "array", "items": { "type": "string" } },
+
+    "sources": {
+      "type": "object",
+      "description": "audit trail: what was fetched to build this report",
+      "properties": {
+        "dialpad_exports": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["stat_type", "request_id", "rows"],
+            "properties": {
+              "stat_type": { "enum": ["calls", "onduty"] },
+              "export_type": { "enum": ["records", "stats"] },
+              "selector": { "type": "string", "description": "is_today | days_ago=1" },
+              "request_id": { "type": "string" },
+              "rows": { "type": "integer" }
+            }
+          }
+        },
+        "snowflake_query_ids": { "type": "array", "items": { "type": "string" } },
+        "slack_search_pages": { "type": "integer" }
+      }
+    },
+
+    "slack": {
+      "type": "object",
+      "description": "filled after posting",
+      "properties": {
+        "channel_id": { "type": "string" },
+        "ts": { "type": "string" },
+        "posted_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "$defs": {
+    "error": {
+      "type": "object",
+      "required": ["error"],
+      "additionalProperties": false,
+      "properties": {
+        "error": { "type": "string", "maxLength": 300 },
+        "http_status": { "type": "integer" }
+      }
+    }
+  }
+}
