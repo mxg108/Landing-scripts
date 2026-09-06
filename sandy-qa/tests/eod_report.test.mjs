@@ -205,11 +205,31 @@ await test("officialDay + slPct match Dialpad Analytics on the probe days (74 % 
 
 await test("neededExports: today-pair for days_ago 1, collapsed range afterwards", () => {
   assert.deepEqual(Object.keys(E.neededExports(1, "1", "UTC")).sort(),
-    ["calls:1-1", "calls:today", "daily:1-1", "onduty:1-1", "onduty:today", "users:1-1"]);
+    ["calls:1-1", "calls:today", "daily:1-2", "onduty:1-2", "onduty:today", "users:1-2"]);
   const later = E.neededExports(3, "1", "UTC");
-  assert.deepEqual(Object.keys(later).sort(), ["calls:2-3", "daily:3-3", "onduty:2-3", "users:3-3"]);
+  assert.deepEqual(Object.keys(later).sort(), ["calls:2-3", "daily:3-4", "onduty:2-4", "users:3-4"]);
   assert.deepEqual(later["calls:2-3"].daysAgo, [2, 3]);
-  assert.equal(later["daily:3-3"].groupBy, "date");
+  assert.deepEqual(later["users:3-4"].daysAgo, [3, 4]);       // never a single-day stats range (hourly rows)
+  assert.deepEqual(later["onduty:2-4"].daysAgo, [2, 4]);      // one day of look-back for the 00:00 state
+  assert.equal(later["daily:3-4"].groupBy, "date");
+});
+
+await test("per-user stats: finer (hourly) rows for one agent are summed into a daily figure", () => {
+  const hourly = [
+    { ...USERS[0], all_calls: "2", inbound_calls: "2", outbound_calls: "0", answered: "2", missed: "0", talk_duration: "3.5", hold_duration: "0.25" },
+    { ...USERS[0], all_calls: "5", inbound_calls: "3", outbound_calls: "2", answered: "1", missed: "2", talk_duration: "10.1", hold_duration: "1" },
+  ];
+  const rep = E.buildReport("2026-09-01", { records: RECORDS_D, duty: DUTY_D, daily: DAILY, users: hourly }, OPTS);
+  const A = E.AGENTS_HEADER;
+  const a = rep.agentRows.find((r) => r[2] === "a@x.com");
+  assert.equal(a[col(A, "all_calls")], 7);
+  assert.equal(a[col(A, "answered")], 3);
+  assert.equal(a[col(A, "missed")], 2);
+  assert.equal(a[col(A, "talk_min")], 13.6);
+  assert.equal(a[col(A, "hold_min")], 1.25);
+  // duplicate daily rows are flagged, never silently picked
+  const rep2 = E.buildReport("2026-09-01", { records: RECORDS_D, duty: DUTY_D, daily: [...DAILY, ...DAILY], users: USERS }, OPTS);
+  assert.match(rep2.summaryRows[0][col(E.SUMMARY_HEADER, "reconciliation")], /^CHECK: daily export returned 2 rows/);
 });
 
 // ── 2 + 3. state machine on sqlite + Sheets stub ───────────────────────────
@@ -249,12 +269,14 @@ const CSV_BY_KEY = {
   "onduty:1-1": toCsv(DUTY_COLS, DUTY_D),
   "onduty:today": toCsv(DUTY_COLS, []),
   "daily:1-1": toCsv(DAILY_COLS, DAILY),
-  "users:1-1": toCsv(USER_COLS, USERS),
+  "users:1-2": toCsv(USER_COLS, USERS),
+  "daily:1-2": toCsv(DAILY_COLS, DAILY),
+  "onduty:1-2": toCsv(DUTY_COLS, DUTY_D),
   // collapsed range used when a row is resumed after another midnight (days_ago 2)
   "calls:1-2": toCsv(CALL_COLS, [...RECORDS_D, ...RECORDS_TODAY]),
-  "onduty:1-2": toCsv(DUTY_COLS, DUTY_D),
-  "daily:2-2": toCsv(DAILY_COLS, DAILY),
-  "users:2-2": toCsv(USER_COLS, USERS),
+  "onduty:1-3": toCsv(DUTY_COLS, DUTY_D),
+  "daily:2-3": toCsv(DAILY_COLS, DAILY),
+  "users:2-3": toCsv(USER_COLS, USERS),
 };
 const keyFor = (body) => {
   const sel = body.is_today ? "today" : `${body.days_ago_start}-${body.days_ago_end}`;
@@ -338,7 +360,7 @@ await test("tick 1: exports initiated (6 selectors), not ready → fetching; ids
   const r = row();
   assert.equal(r.status, "fetching");
   const ids = JSON.parse(r.export_ids);
-  assert.deepEqual(Object.keys(ids).sort(), ["calls:1-1", "calls:today", "daily:1-1", "onduty:1-1", "onduty:today", "users:1-1"]);
+  assert.deepEqual(Object.keys(ids).sort(), ["calls:1-1", "calls:today", "daily:1-2", "onduty:1-2", "onduty:today", "users:1-2"]);
   assert.equal(Object.values(state.exports).sort().join(), Object.keys(ids).sort().join());
   assert.equal(state.n, 6);
 });
@@ -394,7 +416,7 @@ await test("a stale row from another day is resumed before any new gate decision
   assert.equal(out.member_support.report_date, "2026-08-30");
   assert.equal(out.member_support.status, "completed");
   const ids = JSON.parse(raw.prepare("SELECT export_ids FROM qa_eod_reports WHERE report_date='2026-08-30'").get().export_ids);
-  assert.deepEqual(Object.keys(ids).sort(), ["calls:1-2", "daily:2-2", "onduty:1-2", "users:2-2"]); // today-local = Sep 1 21:07 → days_ago 2
+  assert.deepEqual(Object.keys(ids).sort(), ["calls:1-2", "daily:2-3", "onduty:1-3", "users:2-3"]); // today-local = Sep 1 21:07 → days_ago 2
 });
 
 console.log(`${pass} passed, ${failures.length} failed`);

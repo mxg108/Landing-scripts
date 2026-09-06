@@ -483,11 +483,18 @@ disposition sweep still uses plain store-and-resume — it normally completes
 inside one tick — and moving it onto `fetchExports` is a follow-up.
 
 Exports per report date D (today-local = D+1): `calls` records
-`days_ago 1..1` + `is_today`; `onduty` records same pair; `calls` stats
-`group_by date` and per-user `days_ago 1..1`. Resumed after another
-midnight (today = D+n): the pair collapses to one `days_ago (n−1)..n`
-records export and no `is_today`; selector keys make the stored ids
-self-describing so stale ids are simply ignored.
+`days_ago 1..1` + `is_today`; `onduty` records `days_ago 1..2` + `is_today`
+(one day of look-back — the export only carries transitions, so the state
+at 00:00 of D is only known from D−1's rows); `calls` stats `group_by date`
+and per-user `days_ago 1..2` — **never a single-day range**: a `stats`
+export whose range is one day comes back per user per HOUR (an extra `hour`
+column, many rows per user; probed 2026-09-06 — the first Sandy parity run
+kept one random hour per agent). The report filters by `date` and, should
+finer rows ever arrive anyway, sums them per agent. Resumed after another
+midnight (today = D+n): the records pair collapses to one
+`days_ago (n−1)..n` export, onduty to `(n−1)..(n+1)`, stats to `n..(n+1)`;
+selector keys make the stored ids self-describing so stale ids are simply
+ignored.
 
 ### 10.3 Modules
 

@@ -86,6 +86,12 @@ export const AGENTS_HEADER = [
   "on_duty_min", "first_on_duty", "last_off_duty", "shifts_on_duty",
 ];
 
+// per-user stats columns that may be summed when Dialpad returns finer rows
+const USER_SUM_COLS = [
+  "all_calls", "inbound_calls", "outbound_calls", "answered", "missed", "abandoned",
+  "ring_no_answer", "talk_duration", "hold_duration", "wrapup_duration",
+];
+
 // ── time helpers (naive local frame: epoch-ms AS IF UTC) ───────────────────
 
 const r1 = (x: number) => Math.round(x * 10) / 10;
@@ -463,7 +469,8 @@ export function buildReport(dateIso: string, inputs: ReportInputs, opts: ReportO
   const summaryRows: CellValue[][] = [];
   const summary: Record<string, any> = { date: dateIso, windows: {} };
   const derived = summarizeWindow(calls, legs, intervals, dayS, dayE);
-  const officialRow = inputs.daily.find((r) => r.date === dateIso);
+  const dailyRows = inputs.daily.filter((r) => r.date === dateIso);
+  const officialRow = dailyRows[0];
   let full: Parts;
   let source: string;
   let recon: string;
@@ -475,6 +482,7 @@ export function buildReport(dateIso: string, inputs: ReportInputs, opts: ReportO
     full.longest_wait_abandoned_s = derived.longest_wait_abandoned_s;
     source = "dialpad daily stats";
     recon = reconcile(full, derived);
+    if (dailyRows.length > 1) recon = `CHECK: daily export returned ${dailyRows.length} rows for the date; ` + recon;
   } else {
     full = derived;
     source = "records (no daily stats row)";
@@ -507,9 +515,24 @@ export function buildReport(dateIso: string, inputs: ReportInputs, opts: ReportO
   for (const d of duty) names.set(d.email, d.name);
   const handled = new Map<string, number>();
   for (const l of legs) if (isoDate(l.started) === dateIso) handled.set(l.email, (handled.get(l.email) ?? 0) + 1);
+  // One row per (date, user) is the contract; if Dialpad ever hands back
+  // finer rows (hourly — the single-day-range quirk) they are SUMMED so the
+  // agent still gets a daily figure instead of a random slice.
   const users = new Map<string, Record<string, string>>();
-  for (const u of inputs.users)
-    if (u.date === dateIso && (u.type || "user") === "user" && u.email) users.set(u.email.toLowerCase(), u);
+  for (const u of inputs.users) {
+    if (u.date !== dateIso || (u.type || "user") !== "user" || !u.email) continue;
+    const email = u.email.toLowerCase();
+    const prev = users.get(email);
+    if (!prev) {
+      users.set(email, { ...u });
+      continue;
+    }
+    for (const k of USER_SUM_COLS) {
+      const a = Number(prev[k] || 0);
+      const b = Number(u[k] || 0);
+      prev[k] = String(Math.round((a + b) * 100) / 100);
+    }
+  }
   const emails = new Set<string>([...handled.keys(), ...users.keys()]);
   for (const [email, ivs] of intervals) if (overlaps(ivs, dayS, dayE)) emails.add(email);
   const gi = (u: Record<string, string> | undefined, k: string): CellValue =>
@@ -553,30 +576,37 @@ export interface EodTestOpts {
   pollSpacingMs?: number;
 }
 
-/** Selector keys → export options for report date D given today = D + daysAgo. */
+/**
+ * Selector keys → export options for report date D given today = D + daysAgo.
+ *
+ * Two Dialpad quirks shape the ranges (probed 2026-09-06):
+ *  - a `stats` export whose range is a SINGLE day comes back per user per
+ *    HOUR (an extra column, many rows per user) instead of per day — so the
+ *    daily and per-user stats exports always ask for two days and the report
+ *    filters by `date`;
+ *  - the `onduty` records only carry transitions, so the state at 00:00 of D
+ *    is only known from D−1's rows — one day of look-back is fetched.
+ */
 export function neededExports(
   daysAgo: number,
   callcenterId: string,
   tz: string
 ): Record<string, Parameters<typeof initiateExport>[1]> {
   const base = { timezone: tz, targetId: callcenterId } as const;
-  if (daysAgo === 1) {
-    return {
-      "calls:1-1": { ...base, exportType: "records", statType: "calls", daysAgo: [1, 1] },
-      "calls:today": { ...base, exportType: "records", statType: "calls", isToday: true },
-      "onduty:1-1": { ...base, exportType: "records", statType: "onduty", daysAgo: [1, 1] },
-      "onduty:today": { ...base, exportType: "records", statType: "onduty", isToday: true },
-      "daily:1-1": { ...base, exportType: "stats", statType: "calls", daysAgo: [1, 1], groupBy: "date" },
-      "users:1-1": { ...base, exportType: "stats", statType: "calls", daysAgo: [1, 1] },
-    };
-  }
   const d = daysAgo;
-  return {
-    [`calls:${d - 1}-${d}`]: { ...base, exportType: "records", statType: "calls", daysAgo: [d - 1, d] },
-    [`onduty:${d - 1}-${d}`]: { ...base, exportType: "records", statType: "onduty", daysAgo: [d - 1, d] },
-    [`daily:${d}-${d}`]: { ...base, exportType: "stats", statType: "calls", daysAgo: [d, d], groupBy: "date" },
-    [`users:${d}-${d}`]: { ...base, exportType: "stats", statType: "calls", daysAgo: [d, d] },
-  };
+  const out: Record<string, Parameters<typeof initiateExport>[1]> = {};
+  if (d === 1) {
+    out["calls:1-1"] = { ...base, exportType: "records", statType: "calls", daysAgo: [1, 1] };
+    out["calls:today"] = { ...base, exportType: "records", statType: "calls", isToday: true };
+    out["onduty:1-2"] = { ...base, exportType: "records", statType: "onduty", daysAgo: [1, 2] };
+    out["onduty:today"] = { ...base, exportType: "records", statType: "onduty", isToday: true };
+  } else {
+    out[`calls:${d - 1}-${d}`] = { ...base, exportType: "records", statType: "calls", daysAgo: [d - 1, d] };
+    out[`onduty:${d - 1}-${d + 1}`] = { ...base, exportType: "records", statType: "onduty", daysAgo: [d - 1, d + 1] };
+  }
+  out[`daily:${d}-${d + 1}`] = { ...base, exportType: "stats", statType: "calls", daysAgo: [d, d + 1], groupBy: "date" };
+  out[`users:${d}-${d + 1}`] = { ...base, exportType: "stats", statType: "calls", daysAgo: [d, d + 1] };
+  return out;
 }
 
 export async function runEodReports(

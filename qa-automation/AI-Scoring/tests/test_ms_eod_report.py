@@ -198,3 +198,24 @@ def test_report_rows_are_shaped_like_headers():
     assert spec[eod.AGENTS_HEADER.index("on_duty_min")] == 540.0
     assert spec[eod.AGENTS_HEADER.index("shifts_on_duty")] == "Morning, Afternoon"
     assert all(len(r) == len(eod.AGENTS_HEADER) for r in rep.agent_rows)
+
+
+def test_hourly_user_rows_are_summed_into_a_daily_figure():
+    base = {"date": "2026-09-01", "email": "a@x.com", "name": "A", "type": "user",
+            "abandoned": "0", "ring_no_answer": "0", "wrapup_duration": "0"}
+    hourly = [
+        {**base, "all_calls": "2", "inbound_calls": "2", "outbound_calls": "0", "answered": "2",
+         "missed": "0", "talk_duration": "3.5", "hold_duration": "0.25"},
+        {**base, "all_calls": "5", "inbound_calls": "3", "outbound_calls": "2", "answered": "1",
+         "missed": "2", "talk_duration": "10.1", "hold_duration": "1"},
+    ]
+    cc = {"name": "MS", "sl_seconds": 30.0, "sl_target_pct": 80.0}
+    rep = eod.build_report([date(2026, 9, 1)], RECORDS, DUTY, [], hourly, cc)
+    a = next(r for r in rep.agent_rows if r[2] == "a@x.com")
+    H = eod.AGENTS_HEADER
+    assert a[H.index("all_calls")] == 7 and a[H.index("answered")] == 3 and a[H.index("missed")] == 2
+    assert a[H.index("talk_min")] == 13.6 and a[H.index("hold_min")] == 1.25
+
+
+def test_rounding_is_half_up_like_the_typescript_port():
+    assert eod._r1(30.05) == 30.1 and eod._r1(85.35) == 85.4 and eod._r1(1.7999999) == 1.8

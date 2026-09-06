@@ -56,6 +56,7 @@ Usage (from qa-automation/AI-Scoring, .env loaded):
 from __future__ import annotations
 
 import argparse
+import math
 import asyncio
 import csv
 import io
@@ -94,7 +95,17 @@ SL_DENOMINATOR_EXCLUDES = ("short_abandoned", "missed")   # confirmed vs Dialpad
 POLL_INTERVAL_S = 5
 POLL_TIMEOUT_S = 600
 
+
+def _r1(x: float) -> float:
+    """Round half UP to one decimal — matches the TypeScript port
+    (Math.round(x*10)/10); Python's round() is half-even on binary floats
+    and produced 0.1 s parity diffs."""
+    return math.floor(x * 10 + 0.5) / 10
+
+
 ON_DUTY_STATES = {"available", "occupied", "wrapup", "busy"}
+USER_SUM_COLS = ("all_calls", "inbound_calls", "outbound_calls", "answered", "missed",
+                 "abandoned", "ring_no_answer", "talk_duration", "hold_duration", "wrapup_duration")
 
 # (key, label, start "HH:MM", end "HH:MM"); end <= start ⇒ crosses midnight.
 SHIFTS = (
@@ -254,18 +265,18 @@ class Call:
         """Caller wait: answered → time_to_answer; otherwise ended − first of
         queued / first_rang (falls back to started)."""
         if self.answered:
-            return None if self.time_to_answer_min is None else round(self.time_to_answer_min * 60, 1)
+            return None if self.time_to_answer_min is None else _r1(self.time_to_answer_min * 60)
         if self.ended is None:
             return None
         anchors = [t for t in (self.queued, self.first_rang) if t]
         anchor = min(anchors) if anchors else self.started
-        return round((self.ended - anchor).total_seconds(), 1)
+        return _r1((self.ended - anchor).total_seconds())
 
     @property
     def duration_s(self) -> Optional[float]:
         if self.connected is None or self.ended is None:
             return None
-        return round((self.ended - self.connected).total_seconds(), 1)
+        return _r1((self.ended - self.connected).total_seconds())
 
     def within_sl(self, sl_seconds: float) -> Optional[bool]:
         if not (self.inbound and self.answered) or self.time_to_answer_min is None:
@@ -403,12 +414,12 @@ def overlap_minutes(intervals: list[tuple[datetime, datetime]], start: datetime,
         lo, hi = max(a, start), min(b, end)
         if hi > lo:
             total += (hi - lo).total_seconds() / 60
-    return round(total, 1)
+    return _r1(total)
 
 
 def sl_pct(sl_count: int, parts: dict) -> Optional[float]:
     den = parts.get("inbound", 0) - sum(parts.get(k, 0) for k in SL_DENOMINATOR_EXCLUDES)
-    return round(100 * sl_count / den, 1) if den > 0 else None
+    return _r1(100 * sl_count / den) if den > 0 else None
 
 
 def sl_formula() -> str:
@@ -441,11 +452,11 @@ def summarize_window(
     }
     parts["sl_count"] = sum(1 for c in answered if c.within_sl(sl_seconds))
     parts["sl_pct"] = sl_pct(parts["sl_count"], parts)
-    parts["abandon_pct"] = round(100 * len(abandoned) / len(inbound), 1) if inbound else None
+    parts["abandon_pct"] = _r1(100 * len(abandoned) / len(inbound)) if inbound else None
     tta = [c.time_to_answer_min * 60 for c in answered if c.time_to_answer_min is not None]
-    parts["asa_s"] = round(sum(tta) / len(tta), 1) if tta else None
+    parts["asa_s"] = _r1(sum(tta) / len(tta)) if tta else None
     waits = [c.wait_s for c in abandoned if c.wait_s is not None]
-    parts["avg_wait_abandoned_s"] = round(sum(waits) / len(waits), 1) if waits else None
+    parts["avg_wait_abandoned_s"] = _r1(sum(waits) / len(waits)) if waits else None
     parts["longest_wait_abandoned_s"] = max(waits) if waits else None
     parts["agents_handled"] = len({l.email for l in legs if in_window(l.started, start, end)})
     parts["agents_on_duty"] = sum(
@@ -465,9 +476,9 @@ def official_day(stats_row: dict) -> dict:
         "sl_count": g("service_level"),
     }
     parts["sl_pct"] = sl_pct(parts["sl_count"], parts)
-    parts["abandon_pct"] = round(100 * parts["abandoned"] / parts["inbound"], 1) if parts["inbound"] else None
+    parts["abandon_pct"] = _r1(100 * parts["abandoned"] / parts["inbound"]) if parts["inbound"] else None
     asa = minutes(stats_row.get("asa"))
-    parts["asa_s"] = round(asa * 60, 1) if asa is not None else None
+    parts["asa_s"] = _r1(asa * 60) if asa is not None else None
     return parts
 
 
@@ -629,8 +640,19 @@ def build_report(dates: list[date], records: list[dict], duty_rows: list[dict],
     handled_by_day: dict[tuple[str, str], int] = defaultdict(int)
     for l in legs:
         handled_by_day[(l.started.date().isoformat(), l.email)] += 1
-    users_by_day = {(r.get("date"), (r.get("email") or "").lower()): r
-                    for r in user_stats if (r.get("type") or "user") == "user"}
+    # One row per (date, user) is the contract; finer rows (the hourly quirk)
+    # are SUMMED so an agent gets a daily figure, never a random slice.
+    users_by_day: dict[tuple[str, str], dict] = {}
+    for r in user_stats:
+        if (r.get("type") or "user") != "user" or not r.get("email"):
+            continue
+        k = (r.get("date"), r["email"].lower())
+        prev = users_by_day.get(k)
+        if prev is None:
+            users_by_day[k] = dict(r)
+            continue
+        for c in USER_SUM_COLS:
+            prev[c] = str(round((minutes(prev.get(c)) or 0) + (minutes(r.get(c)) or 0), 2))
     for day in dates:
         d_iso = day.isoformat()
         start, end = day_window(day)
@@ -767,6 +789,13 @@ async def main() -> int:
     dates = [args.start + timedelta(days=i) for i in range((end - args.start).days + 1)]
     # The night shift of the last date ends at 06:00 the next day.
     record_dates = dates + [end + timedelta(days=1)]
+    # Dialpad quirks (probed 2026-09-06): a `stats` export whose range is a
+    # SINGLE day comes back per user per HOUR (an `hour` column) instead of
+    # per day — always span two days and filter by date. The `onduty` export
+    # only carries transitions, so the 00:00 state needs one day of look-back.
+    day_before = args.start - timedelta(days=1)
+    stats_dates = [day_before] + dates
+    duty_dates = [day_before] + record_dates
 
     print(f"→ Member Support EOD report {dates[0]} … {dates[-1]} ({TZ}); today={today}")
     async with httpx.AsyncClient(headers=_headers(), timeout=60) as client:
@@ -774,9 +803,9 @@ async def main() -> int:
         print(f"  call center: {cc['name']} — service level {cc['sl_target_pct']:g}% ≤ {cc['sl_seconds']:g}s")
         records, duty, daily, users = await asyncio.gather(
             fetch_for_dates(client, "records", "calls", record_dates, today),
-            fetch_for_dates(client, "records", "onduty", record_dates, today),
-            fetch_for_dates(client, "stats", "calls", dates, today, group_by="date"),
-            fetch_for_dates(client, "stats", "calls", dates, today),
+            fetch_for_dates(client, "records", "onduty", duty_dates, today),
+            fetch_for_dates(client, "stats", "calls", stats_dates, today, group_by="date"),
+            fetch_for_dates(client, "stats", "calls", stats_dates, today),
         )
 
     report = build_report(dates, records, duty, daily, users, cc)
