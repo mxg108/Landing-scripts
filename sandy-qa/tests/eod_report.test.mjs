@@ -266,7 +266,11 @@ const reply = (json, status = 200) => ({
   json: async () => json,
   text: async () => (typeof json === "string" ? json : JSON.stringify(json)),
 });
-const fetchStub = async (url, init = {}) => {
+// A real `function` so `this` is observable: Workers throw "Illegal invocation"
+// when fetch is called as a method of some other object (live 2026-09-06).
+async function fetchStub(url, init = {}) {
+  if (this !== undefined && this !== globalThis)
+    throw new TypeError("Illegal invocation: function called with incorrect `this` reference");
   url = String(url);
   const method = init.method ?? "GET";
   state.log.push(`${method} ${url}`);
@@ -314,7 +318,7 @@ const fetchStub = async (url, init = {}) => {
     }
   }
   throw new Error(`unexpected fetch ${method} ${url}`);
-};
+}
 
 const NOW_OPEN = Date.UTC(2026, 8, 2, 13, 7);   // 07:07 Mexico City, Sep 2 → report 2026-09-01
 const env = { DIALPAD_API_KEY: "K", GSHEETS_SA_JSON: SA };

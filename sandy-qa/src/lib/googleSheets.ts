@@ -94,13 +94,16 @@ export async function openSpreadsheet(
   nowMs?: number
 ): Promise<SheetsClient> {
   const token = await getAccessToken(serviceAccountJson, fetchImpl, nowMs);
-  return { spreadsheetId, token, fetchImpl };
+  // Workers reject `fetch` invoked as a method of another object ("Illegal
+  // invocation", seen live 2026-09-06) — keep a detached wrapper on the client.
+  const detached: FetchLike = (input, init) => fetchImpl(input, init);
+  return { spreadsheetId, token, fetchImpl: detached };
 }
 
 // ── REST helpers ───────────────────────────────────────────────────────────
 
 async function api(client: SheetsClient, path: string, init: RequestInit = {}): Promise<any> {
-  const res = await client.fetchImpl(`${SHEETS}/${client.spreadsheetId}${path}`, {
+  const res = await (0, client.fetchImpl)(`${SHEETS}/${client.spreadsheetId}${path}`, {
     ...init,
     headers: {
       Authorization: `Bearer ${client.token}`,
