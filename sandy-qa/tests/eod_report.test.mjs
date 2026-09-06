@@ -242,7 +242,7 @@ const { privateKey } = generateKeyPairSync("rsa", {
 const SA = JSON.stringify({ client_email: "sa@test.iam.gserviceaccount.com", private_key: privateKey });
 
 // URL-routed fetch stub: records every call; `state.ready` gates the exports.
-const state = { ready: true, exports: {}, n: 0, puts: {}, log: [] };
+const state = { ready: true, exports: {}, n: 0, puts: {}, log: [], expired: new Set() };
 const CSV_BY_KEY = {
   "calls:1-1": toCsv(CALL_COLS, RECORDS_D),
   "calls:today": toCsv(CALL_COLS, RECORDS_TODAY),
@@ -276,6 +276,8 @@ const fetchStub = async (url, init = {}) => {
     return reply({ request_id: id });
   }
   let m = url.match(/^https:\/\/dialpad\.com\/api\/v2\/stats\/(req-\d+)$/);
+  if (m && state.expired.has(m[1]))
+    return { ok: false, status: 400, json: async () => ({}), text: async () => "Results have expired" };
   if (m) return state.ready
     ? reply({ status: "complete", download_url: `https://storage.test/${m[1]}.csv` })
     : reply({ status: "processing" });
@@ -339,10 +341,13 @@ await test("tick 1: exports initiated (6 selectors), not ready → fetching; ids
 
 await test("tick 2 (resume): no re-initiate; credentials missing → error row keeps the aggregates", async () => {
   state.ready = true;
+  // an hour later Dialpad has expired every stored id (live behaviour, 2026-09-06)
+  for (const id of Object.values(JSON.parse(row().export_ids))) state.expired.add(id);
   const out = await E.runEodReports(db, { DIALPAD_API_KEY: "K" }, opts(Date.UTC(2026, 8, 2, 14, 7)));
   assert.equal(out.member_support.status, "error");
   assert.match(out.member_support.error, /GSHEETS_SA_JSON/);
-  assert.equal(state.n, 6);                                  // resumed the stored ids
+  assert.equal(state.n, 12);                                 // every expired id re-initiated on the spot
+  assert.ok(Object.values(JSON.parse(row().export_ids)).every((id) => !state.expired.has(id))); // new ids persisted
   const rep = JSON.parse(row().report);
   assert.equal(rep.summary.windows["Full day"].inbound, 4);
   assert.equal(rep.summary.windows["Full day"].reconciliation, "OK");
@@ -352,7 +357,7 @@ await test("tick 3 (retry inside catch-up): fresh exports, sheet written, comple
   const out = await E.runEodReports(db, env, opts(Date.UTC(2026, 8, 2, 15, 7)));
   assert.equal(out.member_support.status, "completed", JSON.stringify(out));
   assert.deepEqual(out.member_support.sheet, { summary_rows: 4, calls_rows: 5, agents_rows: 4 });
-  assert.equal(state.n, 12);                                 // error retry re-initiates
+  assert.equal(state.n, 18);                                 // error retry re-initiates
   assert.deepEqual(state.puts.Summary[0], E.SUMMARY_HEADER);
   assert.deepEqual(state.puts.Calls[0], E.CALLS_HEADER);
   assert.deepEqual(state.puts.Agents_Daily[0], E.AGENTS_HEADER);

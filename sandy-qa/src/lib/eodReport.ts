@@ -20,10 +20,10 @@
 import {
   csvRecords,
   DIALPAD_BASE,
+  fetchExports,
   initiateExport,
   localDay,
   naiveToMs,
-  pollMany,
   type FetchLike,
 } from "./dialpadStats.js";
 import { listTabs, openSpreadsheet, upsertTab, type CellValue } from "./googleSheets.js";
@@ -699,43 +699,44 @@ async function eodTeam(
   if (daysAgo < 1 || daysAgo > 20)
     return await markError(`report_date ${row.report_date} out of export range (days_ago=${daysAgo})`);
 
-  // 1) initiate whatever this tick still needs; store ids by selector key
+  // 1+2) resolve every export this report needs inside one bounded budget.
+  // Stored ids are polled first; Dialpad expires ids after ~1 h, and the
+  // shared client re-initiates an expired one on the spot (results are
+  // cached by parameters, so that normally completes immediately).
   const needed = neededExports(daysAgo, callcenterId, tz);
-  let exportIds: Record<string, string> = {};
+  let stored: Record<string, string> = {};
   try {
-    exportIds = row.export_ids ? JSON.parse(row.export_ids) : {};
+    stored = row.export_ids ? JSON.parse(row.export_ids) : {};
   } catch {
-    exportIds = {};
+    stored = {};
   }
-  let initiated = 0;
+  let fetched: Awaited<ReturnType<typeof fetchExports>>;
   try {
-    for (const [key, opts] of Object.entries(needed)) {
-      if (exportIds[key]) continue;
-      exportIds[key] = await initiateExport(env.DIALPAD_API_KEY!, opts, fetchImpl);
-      initiated++;
-    }
+    fetched = await fetchExports(
+      env.DIALPAD_API_KEY!, needed, stored, fetchImpl, testOpts.pollAttempts, testOpts.pollSpacingMs
+    );
   } catch (err) {
-    return await markError(`initiate: ${String((err as any)?.message ?? err)}`, { export_ids: exportIds });
+    return await markError(`export: ${String((err as any)?.message ?? err)}`, { export_ids: stored });
   }
-  if (initiated || row.status !== "fetching") {
+  // persist only the selectors this report still needs (stale keys from a
+  // previous days_ago drop out) — the resume handle for the next tick
+  const exportIds: Record<string, string> = {};
+  for (const key of Object.keys(needed)) if (fetched.ids[key]) exportIds[key] = fetched.ids[key];
+  if (JSON.stringify(exportIds) !== JSON.stringify(stored) || row.status !== "fetching") {
     await db
       .prepare("UPDATE qa_eod_reports SET status = 'fetching', export_ids = ?, updated_at = ? WHERE id = ?")
       .bind(JSON.stringify(exportIds), nowIso, row.id)
       .run();
   }
-
-  // 2) one bounded poll pass over everything still needed
-  const wanted: Record<string, string> = {};
-  for (const key of Object.keys(needed)) wanted[key] = exportIds[key];
-  let csvs: Record<string, string>;
-  try {
-    csvs = await pollMany(env.DIALPAD_API_KEY!, wanted, fetchImpl, testOpts.pollAttempts, testOpts.pollSpacingMs);
-  } catch (err) {
-    return await markError(`export: ${String((err as any)?.message ?? err)}`, { export_ids: exportIds });
-  }
+  const csvs = fetched.csvs;
   const missing = Object.keys(needed).filter((k) => !(k in csvs));
   if (missing.length)
-    return { report_date: row.report_date, status: "fetching", note: `export not ready (${missing.join(",")}) — next tick resumes` };
+    return {
+      report_date: row.report_date,
+      status: "fetching",
+      note: `export not ready (${missing.join(",")}) — next tick resumes`,
+      ...(fetched.reinitiated.length ? { reinitiated: fetched.reinitiated } : {}),
+    };
 
   // 3) compute
   const pick = (prefix: string) =>
@@ -756,6 +757,7 @@ async function eodTeam(
     summary: report.summary,
     service_level: cc,
     export_ids: exportIds,
+    reinitiated: fetched.reinitiated,
     generated_at: generatedAt,
   };
 

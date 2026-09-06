@@ -257,3 +257,69 @@ export async function pollMany(
   }
   return done;
 }
+
+/** HTTP status carried by a pollOnce failure (`stats poll HTTP nnn`), else null. */
+export function pollErrorStatus(err: unknown): number | null {
+  const m = String((err as any)?.message ?? err).match(/stats poll HTTP (\d{3})/);
+  return m ? Number(m[1]) : null;
+}
+
+export interface ExportFetchResult {
+  /** CSV text per key for the exports that completed inside this budget */
+  csvs: Record<string, string>;
+  /** current request id per key — persist these for the next tick */
+  ids: Record<string, string>;
+  /** keys whose stored id had expired and were re-initiated this pass */
+  reinitiated: string[];
+}
+
+/**
+ * Resolve several exports inside ONE bounded budget, tick after tick.
+ *
+ * Dialpad expires a request id roughly an hour after it was issued
+ * ("Results have expired" → HTTP 400; later 404), so an id stored on the
+ * previous hourly tick usually cannot be polled again — the naive
+ * store-and-resume pattern errors on the second tick. Results, however, are
+ * cached by PARAMETERS (probed 2026-09-06: re-initiating identical options
+ * returns a new id that is complete within a second). So: a stored id is
+ * polled first; on 400/404 the export is re-initiated on the spot and the new
+ * id polled; keys without an id are initiated first. Callers persist `ids`.
+ */
+export async function fetchExports(
+  apiKey: string,
+  needed: Record<string, ExportOpts>,
+  storedIds: Record<string, string>,
+  fetchImpl: FetchLike = fetch,
+  attempts: number = POLL_ATTEMPTS,
+  spacingMs: number = POLL_SPACING_MS
+): Promise<ExportFetchResult> {
+  const ids: Record<string, string> = { ...storedIds };
+  const csvs: Record<string, string> = {};
+  const reinitiated: string[] = [];
+  const pending = Object.keys(needed);
+  const resolveOne = async (key: string): Promise<string | null> => {
+    if (!ids[key]) ids[key] = await initiateExport(apiKey, needed[key], fetchImpl);
+    try {
+      return await pollOnce(apiKey, ids[key], fetchImpl);
+    } catch (err) {
+      const status = pollErrorStatus(err);
+      if (status !== 400 && status !== 404) throw err;
+      ids[key] = await initiateExport(apiKey, needed[key], fetchImpl);
+      if (!reinitiated.includes(key)) reinitiated.push(key);
+      return await pollOnce(apiKey, ids[key], fetchImpl);
+    }
+  };
+  for (let attempt = 0; attempt < attempts && pending.length; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, spacingMs));
+    const results = await Promise.all(
+      pending.map((key) => resolveOne(key).then((csv) => [key, csv] as const))
+    );
+    for (const [key, csv] of results) {
+      if (csv !== null) {
+        csvs[key] = csv;
+        pending.splice(pending.indexOf(key), 1);
+      }
+    }
+  }
+  return { csvs, ids, reinitiated };
+}
