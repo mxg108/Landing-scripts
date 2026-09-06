@@ -469,6 +469,19 @@ tables refresh every 30 minutes — at 06:07 the 05:30–06:00 calls can be
 missing. One tick later they are complete. A slow export still resumes on
 the following tick (≤ 1 h late, visible in `cron_runs`).
 
+**Request ids expire (live finding 2026-09-06).** Dialpad answers
+`400 Results have expired` for a request id roughly an hour after it was
+issued (404 a day later), so an id stored on one tick usually cannot be
+polled on the next — the first three production mornings (Sep 4–6) ended
+`error: stats poll HTTP 400` and nothing reached the sheet. Results ARE
+cached by parameters: re-initiating identical options returns a new id that
+is complete within a second. `dialpadStats.fetchExports()` (v0.69) therefore
+polls the stored id first and re-initiates on 400/404 inside the same
+bounded budget; `export_ids` remains the audit trail and the fast path while
+an id is still alive (`is_today` ids were observed alive after 90 min). The
+disposition sweep still uses plain store-and-resume — it normally completes
+inside one tick — and moving it onto `fetchExports` is a follow-up.
+
 Exports per report date D (today-local = D+1): `calls` records
 `days_ago 1..1` + `is_today`; `onduty` records same pair; `calls` stats
 `group_by date` and per-user `days_ago 1..1`. Resumed after another
@@ -503,8 +516,9 @@ did not get written is the failure, never a silent skip.
 |---|---|---|
 | **E0** design | this section | owner read |
 | **E1** SR1 lift | `dialpadStats.ts`; sweep imports; `tests/dialpad_stats.test.mjs` (csv/tz helpers pinned by fixture; initiate/poll against a fetch stub) | existing sweep tests green; version bump |
-| **E2** EOD job | `googleSheets.ts`, `eodReport.ts`, 0016, pump hook, `GET /api/{team}/eod-reports`; `tests/eod_report.test.mjs` (same synthetic day as the Python test → identical numbers; gate + latch + resume on node:sqlite; Sheets calls asserted on a fetch stub) | numbers match the Python reference; push v0.67; migration applied; secret set; one manual tick verified against the sheet |
+| **E2** EOD job | `googleSheets.ts`, `eodReport.ts`, 0016, pump hook, `GET /api/{team}/eod-reports`; v0.68 shipped 2026-09-03, **v0.69 (id-expiry fix) 2026-09-06**; `tests/eod_report.test.mjs` (same synthetic day as the Python test → identical numbers; gate + latch + resume on node:sqlite; Sheets calls asserted on a fetch stub) | numbers match the Python reference; push v0.67; migration applied; secret set; one manual tick verified against the sheet |
 | **E3** supervised | 3 mornings watched (NightWatch tier-0 on `qa_eod_reports` + `cron_runs`), reconciliation `OK` or explained; Python script retired to backfill-only | 3 clean days |
 
 Not in scope here: Slack posting (SR3), staffing flags (SR4), monthly tab
-rotation of `Calls` (~500 rows/day; revisit when the tab passes ~50k rows).
+rotation of `Calls` (~500 rows/day; revisit when the tab passes ~50k rows),
+moving the disposition sweep onto `fetchExports`.
