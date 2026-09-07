@@ -171,6 +171,34 @@ await test("pollMany completes ready exports and leaves the rest for the next ti
   assert.deepEqual(got, { a: "A" });
 });
 
+await test("fetchExports: stored id expired (400) → re-initiate → cached result; missing id → initiate", async () => {
+  const log = [];
+  const ok = (json, text) => ({ ok: true, status: 200, json: async () => json, text: async () => text ?? JSON.stringify(json) });
+  const routed = async (url, init = {}) => {
+    url = String(url); log.push(`${init.method ?? "GET"} ${url}`);
+    if (url.endsWith("/api/v2/stats") && init.method === "POST") { const b = JSON.parse(init.body); return ok({ request_id: b.is_today ? "new-b" : "new-a" }); }
+    if (url.endsWith("/stats/stale-a")) return { ok: false, status: 400, json: async () => ({}), text: async () => "Results have expired" };
+    if (url.endsWith("/stats/new-a")) return ok({ status: "complete", download_url: "https://storage.googleapis.com/a.csv" });
+    if (url.endsWith("/stats/new-b")) return ok({ status: "processing" });
+    if (url === "https://storage.googleapis.com/a.csv") return ok("A", "A");
+    throw new Error(`unexpected ${url}`);
+  };
+  const needed = {
+    a: { exportType: "records", statType: "calls", timezone: "UTC", targetId: 1, daysAgo: [1, 1] },
+    b: { exportType: "records", statType: "calls", timezone: "UTC", targetId: 1, isToday: true },
+  };
+  const r = await S.fetchExports("K", needed, { a: "stale-a" }, routed, 2, 0);
+  assert.deepEqual(r.csvs, { a: "A" });
+  assert.deepEqual(r.ids, { a: "new-a", b: "new-b" });
+  assert.deepEqual(r.reinitiated, ["a"]);
+  assert.equal(log.filter((l) => l.startsWith("POST")).length, 2);   // re-initiate a + initiate b, never twice
+  assert.equal(S.pollErrorStatus(new Error("stats poll HTTP 404")), 404);
+  assert.equal(S.pollErrorStatus(new Error("boom")), null);
+  // a non-expiry poll failure still propagates
+  await assert.rejects(S.fetchExports("K", { a: needed.a }, { a: "x" },
+    async () => ({ ok: false, status: 500, json: async () => ({}), text: async () => "" }), 1, 0), /stats poll HTTP 500/);
+});
+
 // ── the sweep still exposes what it used to own ────────────────────────────
 
 await test("dispositionSweep re-exports parseCsv / naiveLocalToIso / localDay and keeps parseExportCsv", () => {
