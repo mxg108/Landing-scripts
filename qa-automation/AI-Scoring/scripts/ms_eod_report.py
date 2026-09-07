@@ -143,14 +143,18 @@ AGENTS_HEADER = [
 
 
 def parse_ts(raw: Optional[str]) -> Optional[datetime]:
-    """'2026-09-01 00:05:19.528115' (naive, export tz) → datetime; None on blank/junk."""
+    """'2026-09-01 00:05:19.528115' (naive, export tz) → datetime; None on blank/junk.
+
+    Rounded to MILLISECONDS: the TypeScript port (JS Date) carries ms only,
+    and microsecond deltas produced 0.1 s parity differences on ~1 % of calls."""
     raw = (raw or "").strip()
     if not raw:
         return None
     try:
-        return datetime.fromisoformat(raw)
+        dt = datetime.fromisoformat(raw)
     except ValueError:
         return None
+    return dt.replace(microsecond=0) + timedelta(milliseconds=round(dt.microsecond / 1000))
 
 
 def minutes(raw: Optional[str]) -> Optional[float]:

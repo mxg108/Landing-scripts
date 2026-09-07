@@ -219,3 +219,9 @@ def test_hourly_user_rows_are_summed_into_a_daily_figure():
 
 def test_rounding_is_half_up_like_the_typescript_port():
     assert eod._r1(30.05) == 30.1 and eod._r1(85.35) == 85.4 and eod._r1(1.7999999) == 1.8
+
+
+def test_timestamps_are_rounded_to_milliseconds_like_the_worker():
+    assert eod.parse_ts("2026-09-01 00:05:19.528115") == datetime(2026, 9, 1, 0, 5, 19, 528000)
+    assert eod.parse_ts("2026-09-01 00:05:19.9996") == datetime(2026, 9, 1, 0, 5, 20, 0)
+    assert eod.parse_ts("2026-09-01 00:05:19") == datetime(2026, 9, 1, 0, 5, 19)
