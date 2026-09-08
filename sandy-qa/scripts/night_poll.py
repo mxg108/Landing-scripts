@@ -26,7 +26,10 @@ Events (one per invocation):
   eod_row          qa_eod_reports status changed (pending/fetching)
   eod_completed    Daily Service Level report written — terminal (clean)
   eod_error        EOD report errored — terminal (escalate)
-  eod_missing      14:30 UTC passed without a terminal EOD row — escalate
+  eod_missing      15:45 UTC passed without a terminal EOD row — escalate
+                   (the report legitimately takes 2-3 hourly resume ticks
+                   on slow-Dialpad days: 13:07 initiate, 14:07/15:07 resume
+                   + v0.69 re-initiate of ~1h-expired export ids)
   query_error      sandy.py db query failed (consecutive count included)
 
 Read-only: every statement is a SELECT."""
@@ -210,7 +213,7 @@ while True:
                 emit("eod_row", status=eod)
         now_utc = dt.datetime.now(dt.timezone.utc)
         hm_now = now_utc.hour * 100 + now_utc.minute
-        if hm_now >= 1430 and eod not in ("completed", "error") and not st.get("eod_missing_emitted"):
+        if hm_now >= 1545 and eod not in ("completed", "error") and not st.get("eod_missing_emitted"):
             st["eod_missing_emitted"] = 1
             save_state(st)
             emit("eod_missing", status=eod, at_utc=hm_now)

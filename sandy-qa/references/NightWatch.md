@@ -34,7 +34,7 @@ edit files, run other commands, or write to the database.
 | `eod_row` | continue; no push |
 | `eod_completed` | push "Daily SL report written" + the report brief; EXIT `CLEAN <drained summary + eod brief>` |
 | `eod_error` | push + EXIT `ESCALATE eod_error` |
-| `eod_missing` (14:30 UTC, no terminal row) | push + EXIT `ESCALATE eod_missing` |
+| `eod_missing` (15:45 UTC, no terminal row — the report legitimately takes 2-3 hourly resume ticks on slow-Dialpad days) | push + EXIT `ESCALATE eod_missing` |
 | anything else / malformed | EXIT `ESCALATE unknown_event` |
 
 The `drained` summary's per-team `cost_null` count (evals missing their
