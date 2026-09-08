@@ -298,15 +298,27 @@ export async function fetchExports(
   const reinitiated: string[] = [];
   const pending = Object.keys(needed);
   const resolveOne = async (key: string): Promise<string | null> => {
-    if (!ids[key]) ids[key] = await initiateExport(apiKey, needed[key], fetchImpl);
     try {
-      return await pollOnce(apiKey, ids[key], fetchImpl);
+      if (!ids[key]) ids[key] = await initiateExport(apiKey, needed[key], fetchImpl);
+      try {
+        return await pollOnce(apiKey, ids[key], fetchImpl);
+      } catch (err) {
+        const status = pollErrorStatus(err);
+        if (status !== 400 && status !== 404) throw err;
+        ids[key] = await initiateExport(apiKey, needed[key], fetchImpl);
+        if (!reinitiated.includes(key)) reinitiated.push(key);
+        return await pollOnce(apiKey, ids[key], fetchImpl);
+      }
     } catch (err) {
-      const status = pollErrorStatus(err);
-      if (status !== 400 && status !== 404) throw err;
-      ids[key] = await initiateExport(apiKey, needed[key], fetchImpl);
-      if (!reinitiated.includes(key)) reinitiated.push(key);
-      return await pollOnce(apiKey, ids[key], fetchImpl);
+      // Dialpad rate pressure (live 2026-09-08: one `stats poll HTTP 429`
+      // errored the whole 15:07 EOD tick): a 429 on initiate, poll, or the
+      // re-initiate retry means "not ready THIS attempt" — the key stays
+      // pending for the next spaced attempt or the hourly resume tick,
+      // exactly like a still-processing export. Never a row error. (The
+      // parallel per-attempt poll burst is itself rate pressure; treating
+      // 429 as not-ready also self-throttles the burst.)
+      if (/HTTP 429/.test(String((err as any)?.message ?? err))) return null;
+      throw err;
     }
   };
   for (let attempt = 0; attempt < attempts && pending.length; attempt++) {
