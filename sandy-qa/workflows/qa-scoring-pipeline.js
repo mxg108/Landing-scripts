@@ -138,16 +138,40 @@ function extractJson(text) {
 function finishDiag(genJson) {
   const cand = (genJson.candidates ?? [])[0] ?? {};
   const usage = genJson.usageMetadata ?? {};
+  const audioDetail = (usage.promptTokensDetails ?? []).find(
+    (d) => d.modality === "AUDIO"
+  );
   return {
     finish_reason: cand.finishReason ?? null,
     prompt_tokens: usage.promptTokenCount ?? null,
+    // modality split — audio tokens bill at a different rate than text
+    // (app-side estimateEvalCost); null on text-only prompts.
+    prompt_tokens_audio: audioDetail ? (audioDetail.tokenCount ?? null) : null,
     output_tokens: usage.candidatesTokenCount ?? null,
     thoughts_tokens: usage.thoughtsTokenCount ?? null,
   };
 }
 
+// Transient-status backoff: 429 (quota bursts — five jobs died on
+// gemini-upload-start 429 inside one hour on 2026-09-06, killing their
+// evals for the night), 503/529 (overload). Retries the SAME request
+// in-step with growing waits; every other status returns to the caller's
+// own ok-check unchanged. Platform step RETRY (limit 1 / 10s) sits on top,
+// so worst-case absorption is ~2 chains of ~105s — enough for per-minute
+// quota windows; a sustained quota outage still fails the run, and the
+// app requeues transient failures with attempts++ (index.tsx callback).
+async function fetchWithBackoff(url, init) {
+  const waits = [15000, 30000, 60000];
+  for (let i = 0; ; i++) {
+    const res = await fetch(url, init);
+    if (![429, 503, 529].includes(res.status) || i >= waits.length) return res;
+    try { await res.text(); } catch {}
+    await new Promise((r) => setTimeout(r, waits[i]));
+  }
+}
+
 async function geminiGenerate(gmKey, model, parts, genConfig, system) {
-  const res = await fetch(`${GEMINI}/v1beta/models/${model}:generateContent`, {
+  const res = await fetchWithBackoff(`${GEMINI}/v1beta/models/${model}:generateContent`, {
     method: "POST",
     headers: { "x-goog-api-key": gmKey, "content-type": "application/json" },
     body: JSON.stringify({
@@ -188,6 +212,10 @@ export class TenantWorkflow extends WorkflowEntrypoint {
       annotate_diag: null,
       scorecard_raw: null,
       timings_ms: {},
+      // usage stamps for app-side cost estimation (v0.4)
+      judge_usage: null,
+      judge_diag: null,
+      single_diag: null,
       error: null,
       // echoed through for the app's persist step
       persist: p.persist ?? null,
@@ -234,9 +262,9 @@ export class TenantWorkflow extends WorkflowEntrypoint {
         out.audio_bytes = audioBuf.byteLength;
         out.timings.download = Date.now() - t;
 
-        // Gemini Files resumable upload
+        // Gemini Files resumable upload (429-backoff on both halves)
         t = Date.now();
-        const startRes = await fetch(`${GEMINI}/upload/v1beta/files`, {
+        const startRes = await fetchWithBackoff(`${GEMINI}/upload/v1beta/files`, {
           method: "POST",
           headers: {
             "x-goog-api-key": gmKey,
@@ -251,7 +279,7 @@ export class TenantWorkflow extends WorkflowEntrypoint {
         const uploadUrl = startRes.headers.get("x-goog-upload-url");
         if (!startRes.ok || !uploadUrl)
           throw new Error(`gemini-upload-start HTTP ${startRes.status}`);
-        const upRes = await fetch(uploadUrl, {
+        const upRes = await fetchWithBackoff(uploadUrl, {
           method: "POST",
           headers: {
             "X-Goog-Upload-Offset": "0",
@@ -321,9 +349,11 @@ export class TenantWorkflow extends WorkflowEntrypoint {
             const prompt = p.judge.prompt_template.replace(
               "{{ANNOTATION_TEXT}}", renderAnnotatedTranscript(result.annotation));
             let text;
+            let usage = null;
+            let diag = null;
             if (p.judge.provider === "anthropic") {
               if (!aigKey) throw new Error("AI_GATEWAY_TOKEN missing");
-              const res = await fetch(AIG_ANTHROPIC, {
+              const res = await fetchWithBackoff(AIG_ANTHROPIC, {
                 method: "POST",
                 headers: {
                   "cf-aig-authorization": aigKey,
@@ -340,21 +370,25 @@ export class TenantWorkflow extends WorkflowEntrypoint {
               });
               if (!res.ok)
                 throw new Error(`gateway ${res.status}: ${(await res.text()).slice(0, 200)}`);
-              text = ((await res.json()).content ?? [])
-                .map((b) => b.text ?? "").join("");
+              const rjson = await res.json();
+              usage = rjson.usage ?? null; // cost stamp (app estimateEvalCost)
+              text = (rjson.content ?? []).map((b) => b.text ?? "").join("");
             } else {
               const g = await geminiGenerate(
                 gmKey, p.judge.model, [{ text: prompt }],
                 { temperature: 0.2, maxOutputTokens: p.judge.max_tokens ?? 16384 },
                 p.judge.system);
               text = g.text;
+              diag = g.diag;
             }
-            return { scorecard: extractJson(text), ms: Date.now() - t };
+            return { scorecard: extractJson(text), ms: Date.now() - t, usage, diag };
           });
           result.scorecard_raw = judged.scorecard;
           result.scorer_provider = p.judge.provider;
           result.scorer_model = p.judge.model;
           result.timings_ms.judge = judged.ms;
+          result.judge_usage = judged.usage ?? null;
+          result.judge_diag = judged.diag ?? null;
         } catch (e) {
           result.pipeline_fallback_reason = "text_scorer_failed";
         }
@@ -383,6 +417,7 @@ export class TenantWorkflow extends WorkflowEntrypoint {
         result.scorer_provider = "gemini";
         result.scorer_model = p.single_stage.model;
         result.timings_ms.single_stage = single.ms;
+        result.single_diag = single.diag ?? null;
       }
 
       if (!result.scorecard_raw) throw new Error("no scorecard produced by any path");

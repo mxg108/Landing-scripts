@@ -261,7 +261,8 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
       }
       // qa-scoring-pipeline: persist the evaluation (draft/finalize + toast)
       if (workflowName === "qa-scoring-pipeline") {
-        const { scoringCallback, drainScoreQueue } = await import("./routes/scoring.js");
+        const { scoringCallback, drainScoreQueue, isTransientProviderError } =
+          await import("./routes/scoring.js");
         const jobId = (body as any).persist
           ? `score-${(body as any).team_id}-${(body as any).call_id}-${String((body as any).persist.agent_name ?? "")
               .toLowerCase()
@@ -274,21 +275,42 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
             sofia: env.GAS_WEBAPP_URL_SOFIA,
           });
           if (jobId) {
+            // Transient provider failure (Gemini 429 burst, 503/529,
+            // gateway rate limit): requeue with attempts++ (cap 3 extra
+            // tries via the CAS WHERE) instead of terminal error — a
+            // quota blip must not consume the sweep's one auto attempt
+            // (2026-09-06: five MS evals went missing exactly this way).
+            // Spacing comes from the delayed re-drains + hourly pump;
+            // workflow v0.4's in-step backoff absorbs bursts first.
+            let requeued = false;
+            if (!outcome.ok && isTransientProviderError(outcome.note ?? "")) {
+              const r = await env.DB.prepare(
+                "UPDATE qa_score_queue SET status='queued', attempts=attempts+1, last_error=?, triggered_at=NULL, sandy_run_id=NULL WHERE job_id=? AND status IN ('running','triggering') AND attempts < 3"
+              )
+                .bind(outcome.note, jobId)
+                .run();
+              requeued = !!r.meta.changes;
+            }
             await env.DB.prepare(
               "UPDATE workflow_runs SET status = ?, result = ? WHERE run_id = ?"
             )
-              .bind(outcome.ok ? "complete" : "error", JSON.stringify(outcome), jobId)
-              .run();
-            await env.DB.prepare(
-              "UPDATE qa_score_queue SET status = ?, last_error = ?, finished_at = ? WHERE job_id = ?"
-            )
               .bind(
-                outcome.ok ? "done" : "error",
-                outcome.ok ? null : outcome.note,
-                new Date().toISOString(),
+                outcome.ok ? "complete" : requeued ? "queued" : "error",
+                JSON.stringify(requeued ? { ...outcome, requeued: true } : outcome),
                 jobId
               )
               .run();
+            if (!requeued)
+              await env.DB.prepare(
+                "UPDATE qa_score_queue SET status = ?, last_error = ?, finished_at = ? WHERE job_id = ?"
+              )
+                .bind(
+                  outcome.ok ? "done" : "error",
+                  outcome.ok ? null : outcome.note,
+                  new Date().toISOString(),
+                  jobId
+                )
+                .run();
           }
           console.log(`[scoring] ${outcome.ok ? "OK" : "FAIL"}: ${outcome.note}`);
         } catch (err) {
