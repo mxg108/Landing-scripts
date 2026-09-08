@@ -21,7 +21,12 @@ Events (one per invocation):
   stall_persistent >=75 min no progress (a pump tick passed without rescue)
   deferred_stuck   finalized evals carrying sop_skipped_reason
                    'deferred_to_trigger' (trigger-time resolution skipped)
-  drained          pull completed + queue empty + stable — final summary
+  drained          pull completed + queue empty + stable — summary (with
+                   --eod-date the watch continues to the EOD report phase)
+  eod_row          qa_eod_reports status changed (pending/fetching)
+  eod_completed    Daily Service Level report written — terminal (clean)
+  eod_error        EOD report errored — terminal (escalate)
+  eod_missing      14:30 UTC passed without a terminal EOD row — escalate
   query_error      sandy.py db query failed (consecutive count included)
 
 Read-only: every statement is a SELECT."""
@@ -45,6 +50,7 @@ ap.add_argument("--state", required=True)
 ap.add_argument("--pull-date", required=True)
 ap.add_argument("--baseline", required=True, help="eval created_at floor (deploy ts)")
 ap.add_argument("--window-start", default="0555", help="UTC HHMM to start watching")
+ap.add_argument("--eod-date", default="", help="qa_eod_reports.report_date to supervise (empty = sweep only)")
 args = ap.parse_args()
 
 POLL_SQL = (
@@ -60,6 +66,11 @@ POLL_SQL = (
     "SUM(CASE WHEN status IN ('triggering','running') THEN 1 ELSE 0 END) inflight "
     "FROM qa_score_queue"
 )
+if args.eod_date:
+    POLL_SQL += (
+        "; SELECT status, substr(report,1,220) report FROM qa_eod_reports "
+        f"WHERE team_id='member_support' AND report_date='{args.eod_date}'"
+    )
 LEAK_SQL = (
     "SELECT id, team_id, overall_score, "
     "json_extract(dialpad_call_metadata,'$.pulpo_docs') pd "
@@ -70,6 +81,7 @@ LEAK_SQL = (
 FINAL_SQL = (
     "SELECT team_id, COUNT(*) n, "
     "SUM(CASE WHEN dialpad_call_metadata LIKE '%system:sofia%' THEN 1 ELSE 0 END) sysofia, "
+    "SUM(CASE WHEN estimated_cost_usd IS NULL THEN 1 ELSE 0 END) cost_null, "
     "ROUND(AVG(overall_score),1) avg_score FROM qa_evaluations WHERE id>=10000000 "
     f"AND created_at >= '{args.baseline}' AND source IN ('ai','ai_reviewed') "
     "GROUP BY team_id; "
@@ -119,7 +131,9 @@ if now.hour * 100 + now.minute < int(args.window_start):
 
 while True:
     try:
-        pulls, evals, queue = q(POLL_SQL)
+        blocks = q(POLL_SQL)
+        pulls, evals, queue = blocks[0], blocks[1], blocks[2]
+        eod_rows = blocks[3] if args.eod_date and len(blocks) > 3 else None
         st["qerr"] = 0
     except Exception as e:  # noqa: BLE001
         st["qerr"] = st.get("qerr", 0) + 1
@@ -183,19 +197,54 @@ while True:
         emit("evals_progress", total=n, delta=delta, clean=n - leaked,
              leaked=leaked, queued=queued, inflight=inflight)
 
+    if eod_rows is not None:
+        eod = eod_rows[0]["status"] if eod_rows else None
+        if eod != st.get("eod"):
+            st["eod"] = eod
+            save_state(st)
+            if eod == "completed":
+                emit("eod_completed", report=(eod_rows[0].get("report") or "")[:220])
+            elif eod == "error":
+                emit("eod_error", report=(eod_rows[0].get("report") or "")[:220])
+            elif eod is not None:
+                emit("eod_row", status=eod)
+        now_utc = dt.datetime.now(dt.timezone.utc)
+        hm_now = now_utc.hour * 100 + now_utc.minute
+        if hm_now >= 1430 and eod not in ("completed", "error") and not st.get("eod_missing_emitted"):
+            st["eod_missing_emitted"] = 1
+            save_state(st)
+            emit("eod_missing", status=eod, at_utc=hm_now)
+
     quiet_min = (time.time() - st.get("last_change", time.time())) / 60
-    if pull == "completed" and queued == 0 and inflight == 0:
+    if st.get("drained_emitted") and pull == "completed":
+        # post-drain phase: daytime sofia/manual jobs churn the queue —
+        # stall clocks and re-drained summaries stay off; only eod events
+        # (above), eval deltas, and leaks still emit.
+        pass
+    elif pull == "completed" and queued == 0 and inflight == 0:
         st["stable"] = st.get("stable", 0) + 1
         save_state(st)
-        if st["stable"] >= 2:
+        if st["stable"] >= 2 and not st.get("drained_emitted"):
+            st["drained_emitted"] = 1
+            save_state(st)
+            payload: dict
             try:
                 teams, skips = q(FINAL_SQL)
+                payload = {
+                    "teams": [
+                        {k: r[k] for k in ("team_id", "n", "sysofia", "cost_null", "avg_score")}
+                        for r in teams
+                    ],
+                    "ms_skip_histogram": {r["r"]: r["n"] for r in skips},
+                }
             except Exception as e:  # noqa: BLE001
-                emit("drained", summary_error=str(e)[:200])
-            emit("drained",
-                 teams=[{k: r[k] for k in ("team_id", "n", "sysofia", "avg_score")}
-                        for r in teams],
-                 ms_skip_histogram={r["r"]: r["n"] for r in skips})
+                payload = {"summary_error": str(e)[:200]}
+            if args.eod_date:
+                # sweep phase done; keep polling for the EOD report — print
+                # the event without emit()'s exit
+                print(json.dumps({"event": "drained", **payload}), flush=True)
+            else:
+                emit("drained", **payload)
     elif queued > 0 and inflight == 0 and quiet_min >= STALL_PERSISTENT_MIN:
         if st.get("stall_emitted", 0) < 2:
             st["stall_emitted"] = 2

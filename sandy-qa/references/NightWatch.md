@@ -30,8 +30,16 @@ edit files, run other commands, or write to the database.
 | `deferred_stuck` (finalized eval still carrying `sop_skipped_reason: deferred_to_trigger`) | EXIT `ESCALATE deferred_stuck` (trigger-time SOP resolution was skipped — v0.64 failure signature) |
 | `sweep_error` | push + EXIT `ESCALATE sweep_error` |
 | `query_error` with `consecutive >= 3` | EXIT `ESCALATE auth` (Sandy token likely expired) |
-| `drained` | push the final verdict; EXIT `CLEAN <summary>` |
+| `drained` | push the sweep verdict. WITHOUT `--eod-date`: EXIT `CLEAN <summary>`. WITH it: continue — the watch enters the EOD-report phase (the 13:07 UTC Daily Service Level report) |
+| `eod_row` | continue; no push |
+| `eod_completed` | push "Daily SL report written" + the report brief; EXIT `CLEAN <drained summary + eod brief>` |
+| `eod_error` | push + EXIT `ESCALATE eod_error` |
+| `eod_missing` (14:30 UTC, no terminal row) | push + EXIT `ESCALATE eod_missing` |
 | anything else / malformed | EXIT `ESCALATE unknown_event` |
+
+The `drained` summary's per-team `cost_null` count (evals missing their
+v0.72 `estimated_cost_usd` stamp) rides the exit report for tier 2 — the
+watcher does not act on it.
 
 Exit report format (first line is the contract):
 `ESCALATE <type> | last_event=<the JSON line> | counts=<total/clean/leaked/queued>`
@@ -47,7 +55,9 @@ routine ticks and exactly 4 moments worth a phone buzz.
 
 Spawn the watcher agent (model: haiku) with the runbook prompt, passing:
 `--state <scratch>/nightwatch-<date>.json --pull-date <yesterday local
-(America/Mexico_City)> --baseline <last publish ts> --window-start 0555`.
+(America/Mexico_City)> --baseline <last publish ts> --window-start 0555
+--eod-date <yesterday local>` (the EOD flag extends the watch through the
+13:07 UTC Daily Service Level report; omit it for sweep-only nights).
 Every watcher Bash call sets `timeout: 580000` (the poller's budget is
 9 min; the default 120 s would kill it mid-block). Delete the state file
 before the first invocation of a new night.
