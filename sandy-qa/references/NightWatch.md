@@ -70,6 +70,14 @@ Every watcher Bash call sets `timeout: 580000` (the poller's budget is
 9 min; the default 120 s would kill it mid-block). Delete the state file
 before the first invocation of a new night.
 
+**Run the poller from a scratchpad COPY, never the working tree** (live
+2026-09-08: a branch checkout mid-watch reverted `night_poll.py` to a
+pre-`--eod-date` version and the watch loop spun on argparse errors —
+same footgun class as the shadow_sync checkout incident). Copy with
+`git show <branch>:sandy-qa/scripts/night_poll.py > <scratch>/…` at arm
+time, and give any shell-loop wrapper a break arm for crash signatures
+(`error: unrecognized`, `Traceback`) so a broken poller can never spin.
+
 ## Future
 
 - Cron-spawned watcher (schedule skill / routines) instead of manual arm.
