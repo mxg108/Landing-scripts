@@ -58,6 +58,14 @@ Spawn the watcher agent (model: haiku) with the runbook prompt, passing:
 (America/Mexico_City)> --baseline <last publish ts> --window-start 0555
 --eod-date <yesterday local>` (the EOD flag extends the watch through the
 13:07 UTC Daily Service Level report; omit it for sweep-only nights).
+
+Watchdog loop budget: **≥250 for a two-phase night** (110 proved too
+small on 2026-09-08 — the watcher starved at 13:31 UTC mid-drain: a
+7.5h+ watch emits ~50 heartbeats alone, and post-drain daytime console
+scoring keeps generating evals_progress ticks). If the watcher exits
+`watchdog_budget`, tier 2 re-arms a bounded shell-loop Monitor over the
+SAME state file (it survives the watcher) rather than a fresh agent —
+`while true; do night_poll…; done` breaking on `eod_*` terminals.
 Every watcher Bash call sets `timeout: 580000` (the poller's budget is
 9 min; the default 120 s would kill it mid-block). Delete the state file
 before the first invocation of a new night.
