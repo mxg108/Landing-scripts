@@ -27,6 +27,7 @@ import {
 } from "../lib/scoringPrompts.js";
 import { evaluateFormula, quantizeScore } from "../lib/ruleEngine.js";
 import { resolveDeferredSop } from "../lib/sopRetrieval.js";
+import { estimateEvalCost } from "../lib/modelCosts.js";
 import {
   getProvider,
   ProviderCallError,
@@ -388,6 +389,17 @@ async function scoreTriggerInternal(
   return json({ job_id: jobId, status: "queued", queue_position: (ahead?.n ?? 0) + 1 });
 }
 
+// Transient PROVIDER failures inside a workflow run (Gemini 429 quota
+// bursts — five MS jobs killed on 2026-09-06, their evals missing next
+// morning; 503/529 overload; gateway rate limits). The error callback
+// handler requeues these with attempts++ instead of terminalizing, so the
+// one-auto-attempt sweep rule doesn't eat a call over a quota blip.
+// Workflow v0.4's in-step backoff absorbs bursts first; this is the seam
+// for the ones that outlast it.
+export function isTransientProviderError(msg: string): boolean {
+  return /HTTP 429|HTTP 503|HTTP 529|rate.?limit|overloaded/i.test(msg);
+}
+
 // ── queue drain — one platform slot, CAS-claimed head job ──────────────────
 // Pumped from: enqueue (starts immediately when idle), the scoring callback
 // (a finished run frees the slot), and non-terminal status polls (recovers
@@ -470,9 +482,25 @@ export async function drainScoreQueue(
     const wfId =
       known.find((w: any) => w.name === WORKFLOW_NAME)?.id ??
       "25dec973-c4ab-4122-b2ce-9d3a03c802d8";
-    run = await triggerWorkflowWithCallback(
-      wfId, WORKFLOW_NAME, request, payload
-    );
+    // Platform 5xx on the trigger endpoint runs in bursts (chronic by
+    // 2026-09-02: nine callback-chain breaks in one night degraded the
+    // drain to pump cadence — a 47-job sweep took 13h). This inline
+    // backoff absorbs momentary blips only; sustained bursts still fall
+    // to the 5xx-requeue arm below + the hourly pump. Engineering owns
+    // the endpoint fix (escalation filed with last_error receipts).
+    let lastErr: any = null;
+    for (const delayMs of [0, 1500, 4000]) {
+      if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+      try {
+        run = await triggerWorkflowWithCallback(wfId, WORKFLOW_NAME, request, payload);
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (!/trigger failed 5\d\d/.test(String((err as any)?.message ?? err))) break;
+      }
+    }
+    if (lastErr) throw lastErr;
   } catch (err) {
     const msg = String((err as any)?.message ?? err).slice(0, 300);
     if (msg.includes("trigger failed 409")) {
@@ -1430,6 +1458,10 @@ export async function scoringCallback(
       run_id: body.run_id,
       timings_ms: p.timings_ms,
       annotate_diag: p.annotate_diag,
+      // v0.72 cost forensics (workflow v0.4 stamps these)
+      ...(p.judge_usage ? { judge_usage: p.judge_usage } : {}),
+      ...(p.judge_diag ? { judge_diag: p.judge_diag } : {}),
+      ...(p.single_diag ? { single_diag: p.single_diag } : {}),
     },
   };
 
@@ -1443,7 +1475,7 @@ export async function scoringCallback(
     "ai_provider_primary", "sampling_status", "scoring_status",
     "human_review_required_at", "created_at", "approved_at", "finalized_at",
     "dialpad_disposition_category", "dialpad_disposition", "ai_csat",
-    "command_center_call_id", "dialpad_call_metadata",
+    "command_center_call_id", "dialpad_call_metadata", "estimated_cost_usd",
   ];
   const evalVals = [
     teamId, persist.agent_id, persist.agent_name, persist.agent_email,
@@ -1474,6 +1506,9 @@ export async function scoringCallback(
     persist.cc_stamps?.ai_csat ?? null,
     persist.cc_stamps?.cc_call_id ?? null,
     JSON.stringify(meta),
+    // Railway left this NULL forever ("until the cost-dashboard work");
+    // Sandy stamps it from the pipeline's usage (modelCosts.ts price table).
+    estimateEvalCost(p),
   ];
   if (persist.rescore_of) {
     // §4.2 REPLACE-on-same-id via UPDATE — coaching-receipt FKs stay valid.
