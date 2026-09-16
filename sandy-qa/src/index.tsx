@@ -279,8 +279,11 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
       if (workflowName === "qa-cron-ticker") {
         if (body.status !== "running") {
           try {
-            await env.DB.prepare("UPDATE workflow_runs SET result = ? WHERE run_id = ?")
-              .bind(JSON.stringify({ final: body, at: new Date().toISOString() }), body.run_id)
+            await env.DB.prepare(
+              "INSERT INTO workflow_runs (run_id, workflow_name, status, result) VALUES (?, 'qa-cron-ticker', ?, ?) " +
+                "ON CONFLICT(run_id) DO UPDATE SET status = excluded.status, result = excluded.result"
+            )
+              .bind(body.run_id, body.status === "complete" ? "complete" : "error", JSON.stringify({ final: body, at: new Date().toISOString() }))
               .run();
           } catch {}
           return Response.json({ ok: true, done: true });
@@ -295,10 +298,15 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
           step = { done: true, sleep_s: 30, summary: { error: String((err as any)?.message ?? err).slice(0, 300) } };
         }
         try {
-          await env.DB.prepare("UPDATE workflow_runs SET status = 'running', result = ? WHERE run_id = ?")
+          // Upsert: a run triggered by hand (sandy.py workflows trigger) has
+          // no row from triggerTicker — it should still leave its trail.
+          await env.DB.prepare(
+            "INSERT INTO workflow_runs (run_id, workflow_name, status, result) VALUES (?, 'qa-cron-ticker', 'running', ?) " +
+              "ON CONFLICT(run_id) DO UPDATE SET status = 'running', result = excluded.result"
+          )
             .bind(
-              JSON.stringify({ tick: (body as any).tick ?? null, at: new Date().toISOString(), done: step.done, sleep_s: step.sleep_s, summary: step.summary }),
-              body.run_id
+              body.run_id,
+              JSON.stringify({ tick: (body as any).tick ?? null, at: new Date().toISOString(), done: step.done, sleep_s: step.sleep_s, summary: step.summary })
             )
             .run();
         } catch {}
