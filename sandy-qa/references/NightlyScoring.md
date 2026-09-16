@@ -151,6 +151,14 @@ injectable function so the E2E harness can pin it.
 
 ## 5. Module — `src/lib/dispositionSweep.ts` (mirrors retellSweep)
 
+> **2026-09-16 — superseded timing (see `CronContinuation.md`).** The Sandy
+> scheduler now bounds cron dispatch time, so the sweep no longer runs in
+> one tick. §5.1–5.3 below still describe *what* happens; *when* is now one
+> bounded phase per `qa-cron-ticker` step (initiate → poll → fill 200
+> rows/step → select → enqueue 3/step), resumable from `cursor`, with
+> expired export ids re-initiated on the spot (≤3). §6's window/latch/
+> catch-up semantics are unchanged.
+
 Entry: `sweepDispositions(db, request, env)` called from
 `runHourlyPump` when the tick qualifies (§6). Phases, in order:
 

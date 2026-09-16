@@ -1,5 +1,8 @@
 // Hourly Retell auto-pull (SofiaRetellSpec §8 R4) — rides the existing
-// "7 * * * *" cron (Sandy caps at 2 schedules; no new schedule possible).
+// "7 * * * *" cron + the qa-cron-ticker workflow (Sandy caps at 2 schedules;
+// no new schedule possible). CronContinuation §2.5: each call is ONE
+// bounded step (list + ≤3 enqueues) and reports `more` while unexamined
+// candidates remain — the ticker calls again ~15 s later.
 //
 // Stateless by design: each sweep lists the newest ended Sofia calls and
 // filters a trailing window, relying on D1 (existing eval / any prior
@@ -14,7 +17,7 @@ import { listRetellCalls } from "./providers/retell.js";
 
 const SWEEP_WINDOW_MS = 26 * 3600_000; // trailing window; overlap is idempotent
 const MIN_DURATION_MS = 30_000; // short-call skip list (spec R4)
-const MAX_ENQUEUES_PER_SWEEP = 10; // backlog surge guard on first activation
+export const MAX_ENQUEUES_PER_STEP = 3; // bounded step (each enqueue ≈ 1–2 s)
 
 export interface SweepResult {
   skipped?: string;
@@ -23,6 +26,8 @@ export interface SweepResult {
   enqueued?: number;
   existing?: number;
   errors?: number;
+  /** unexamined candidates remain after the per-step enqueue cap */
+  more?: boolean;
 }
 
 export async function sweepRetellCalls(
@@ -72,8 +77,10 @@ export async function sweepRetellCalls(
   let enqueued = 0;
   let existing = 0;
   let errors = 0;
+  let examined = 0;
   for (const c of candidates) {
-    if (enqueued >= MAX_ENQUEUES_PER_SWEEP) break;
+    if (enqueued >= MAX_ENQUEUES_PER_STEP) break;
+    examined++;
     const scored = await db
       .prepare(
         "SELECT 1 AS x FROM qa_evaluations WHERE team_id = 'sofia' AND dialpad_call_id = ? LIMIT 1"
@@ -115,5 +122,6 @@ export async function sweepRetellCalls(
     enqueued,
     existing,
     errors,
+    more: examined < candidates.length,
   };
 }

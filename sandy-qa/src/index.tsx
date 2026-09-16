@@ -41,6 +41,9 @@ export interface Env {
   // switch for agent-facing email from Sandy.
   GAS_WEBAPP_URL_MS?: string;
   GAS_WEBAPP_URL_SALES?: string;
+  // Dashboard-set app secret: HR-bonus GAS renderer (monthly export on the
+  // 1st — maintenance.ts runDailyMaintenance).
+  GAS_WEBAPP_URL_HR?: string;
   // Optional: pre-select a specific workflow. Leave unset to list all available.
   WORKFLOW_ID?: string;
   // Provisioned automatically by Sandy at publish time for apps with cron schedules.
@@ -48,6 +51,19 @@ export interface Env {
   SANDY_CRON_DISPATCH_SECRET?: string;
 }
 
+// Secrets the cron/ticker jobs need (maintenance.ts CronEnv) — one place,
+// shared by the cron handler and the qa-cron-ticker callback.
+function cronEnvOf(env: Env) {
+  return {
+    RETELL_API_KEY: env.RETELL_API_KEY,
+    DIALPAD_API_KEY: env.DIALPAD_API_KEY,
+    PULPO_MCP_URL: env.PULPO_MCP_URL,
+    PULPO_MCP_TOKEN: env.PULPO_MCP_TOKEN,
+    GAS_WEBAPP_URL_SOFIA: env.GAS_WEBAPP_URL_SOFIA,
+    GAS_WEBAPP_URL_HR: env.GAS_WEBAPP_URL_HR,
+    GSHEETS_SA_JSON: env.GSHEETS_SA_JSON,
+  };
+}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -190,35 +206,44 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
     //
     //   await triggerWorkflow(env.WORKFLOW_ID!, { triggered_by: "cron", cron });
     //   await triggerWorkflowWithCallback(env.WORKFLOW_ID!, "my-workflow", request, { cron });
+    //
+    // CronContinuation.md §2.1 (2026-09-16): the Sandy scheduler bounds how
+    // long a dispatch may take (value unpublished; ticks carrying minutes
+    // of work were cut before their cron_runs INSERT). So: INSERT the row
+    // FIRST (a tick with no row is now impossible; a row stuck on
+    // {"phase":"started"} is the cut-off signature), acknowledge at once,
+    // and run the light tick inside waitUntil (~30 s budget). The heavy
+    // work (sweeps, EOD, pump) runs as qa-cron-ticker workflow steps.
     if (url.pathname === "/_sandy/cron" && request.method === "POST") {
       if (request.headers.get("X-Sandy-Cron-Secret") !== env.SANDY_CRON_DISPATCH_SECRET) {
         return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
       }
       const { cron } = await request.json() as { cron: string; timestamp: string };
-      const { runHourlyPump, runDailyMaintenance } = await import("./lib/maintenance.js");
-      const cronEnv = {
-        RETELL_API_KEY: env.RETELL_API_KEY,
-        DIALPAD_API_KEY: env.DIALPAD_API_KEY,
-        PULPO_MCP_URL: env.PULPO_MCP_URL,
-        PULPO_MCP_TOKEN: env.PULPO_MCP_TOKEN,
-        GAS_WEBAPP_URL_SOFIA: env.GAS_WEBAPP_URL_SOFIA,
-        GAS_WEBAPP_URL_HR: env.GAS_WEBAPP_URL_HR,
-        GSHEETS_SA_JSON: env.GSHEETS_SA_JSON,
-      };
-      let note: string;
-      try {
-        note =
-          cron === "37 9 * * *"
-            ? await runDailyMaintenance(env.DB, request, cronEnv)
-            : await runHourlyPump(env.DB, request, cronEnv); // "7 * * * *" + default
-      } catch (err) {
-        note = JSON.stringify({ error: String((err as any)?.message ?? err).slice(0, 300) });
-      }
-      await env.DB.prepare("INSERT INTO cron_runs (cron, note) VALUES (?, ?)")
-        .bind(cron, note)
+      const ins = await env.DB.prepare("INSERT INTO cron_runs (cron, note) VALUES (?, ?)")
+        .bind(cron, JSON.stringify({ phase: "started" }))
         .run();
-      console.log(`[cron] ${cron}: ${note}`);
-      return Response.json({ ok: true, note });
+      const rowId = ins.meta.last_row_id;
+      ctx.waitUntil(
+        (async () => {
+          let note: string;
+          try {
+            const { runHourlyPump, runDailyMaintenance } = await import("./lib/maintenance.js");
+            note =
+              cron === "37 9 * * *"
+                ? await runDailyMaintenance(env.DB, request, cronEnvOf(env))
+                : await runHourlyPump(env.DB, request, cronEnvOf(env)); // "7 * * * *" + default
+          } catch (err) {
+            note = JSON.stringify({ error: String((err as any)?.message ?? err).slice(0, 300) });
+          }
+          try {
+            await env.DB.prepare("UPDATE cron_runs SET note = ? WHERE id = ?").bind(note, rowId).run();
+          } catch (err) {
+            console.log(`[cron] note update failed: ${String(err).slice(0, 200)}`);
+          }
+          console.log(`[cron] ${cron}: ${note}`);
+        })()
+      );
+      return Response.json({ ok: true, cron, cron_run_id: rowId, note: "accepted — continuation running" });
     }
 
     // POST /api/v1/callbacks/:workflow-name — receives results POSTed back by a Sandy Workflow.
@@ -248,6 +273,38 @@ es.onerror = () => { if (v.className === 'wait') { v.textContent = 'CONNECTION E
         .set({ status: body.status ?? "error", result: JSON.stringify(body) })
         .where(eq(workflowRuns.run_id, body.run_id));
       console.log(`[callback] workflow=${workflowName} run_id=${body.run_id} status=${body.status}`);
+      // qa-cron-ticker (CronContinuation §2.2/§2.3): each "running" callback
+      // asks for ONE bounded step; the reply {done, sleep_s} drives the
+      // workflow's loop. Final "complete"/"error" callbacks only annotate.
+      if (workflowName === "qa-cron-ticker") {
+        if (body.status !== "running") {
+          try {
+            await env.DB.prepare("UPDATE workflow_runs SET result = ? WHERE run_id = ?")
+              .bind(JSON.stringify({ final: body, at: new Date().toISOString() }), body.run_id)
+              .run();
+          } catch {}
+          return Response.json({ ok: true, done: true });
+        }
+        let step: { done: boolean; sleep_s: number; summary: Record<string, unknown> };
+        try {
+          const { runTickerStep } = await import("./lib/maintenance.js");
+          step = await runTickerStep(env.DB, request, cronEnvOf(env));
+        } catch (err) {
+          // A throwing step ends the run (state lives in D1; the next cron
+          // tick re-triggers) — never spin on a broken step.
+          step = { done: true, sleep_s: 30, summary: { error: String((err as any)?.message ?? err).slice(0, 300) } };
+        }
+        try {
+          await env.DB.prepare("UPDATE workflow_runs SET status = 'running', result = ? WHERE run_id = ?")
+            .bind(
+              JSON.stringify({ tick: (body as any).tick ?? null, at: new Date().toISOString(), done: step.done, sleep_s: step.sleep_s, summary: step.summary }),
+              body.run_id
+            )
+            .run();
+        } catch {}
+        console.log(`[ticker] tick=${(body as any).tick} done=${step.done} sleep=${step.sleep_s}s ${JSON.stringify(step.summary).slice(0, 600)}`);
+        return Response.json({ ok: true, done: step.done, sleep_s: step.sleep_s });
+      }
       // qa-insights: persist narrative assessments (CoachingLoopSpec §8).
       if (workflowName === "qa-insights") {
         try {

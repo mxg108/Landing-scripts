@@ -764,7 +764,8 @@ async function eodTeam(
     return {
       report_date: row.report_date,
       status: "fetching",
-      note: `export not ready (${missing.join(",")}) — next tick resumes`,
+      more: true, // CronContinuation §2.5: the ticker re-polls in ~15 s
+      note: `export not ready (${missing.join(",")}) — next step resumes`,
       ...(fetched.reinitiated.length ? { reinitiated: fetched.reinitiated } : {}),
     };
 
