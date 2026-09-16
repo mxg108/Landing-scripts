@@ -262,7 +262,7 @@ const { privateKey } = generateKeyPairSync("rsa", {
 const SA = JSON.stringify({ client_email: "sa@test.iam.gserviceaccount.com", private_key: privateKey });
 
 // URL-routed fetch stub: records every call; `state.ready` gates the exports.
-const state = { ready: true, exports: {}, n: 0, puts: {}, log: [], expired: new Set() };
+const state = { ready: true, exports: {}, n: 0, puts: {}, log: [], expired: new Set(), rate_limited: false };
 const CSV_BY_KEY = {
   "calls:1-1": toCsv(CALL_COLS, RECORDS_D),
   "calls:today": toCsv(CALL_COLS, RECORDS_TODAY),
@@ -302,6 +302,7 @@ async function fetchStub(url, init = {}) {
     return reply({ request_id: id });
   }
   let m = url.match(/^https:\/\/dialpad\.com\/api\/v2\/stats\/(req-\d+)$/);
+  if (m && state.rate_limited) return reply({}, 429); // Dialpad rate pressure (live 2026-09-08)
   if (m && state.expired.has(m[1]))
     return { ok: false, status: 400, json: async () => ({}), text: async () => "Results have expired" };
   if (m) return state.ready
@@ -417,6 +418,20 @@ await test("a stale row from another day is resumed before any new gate decision
   assert.equal(out.member_support.status, "completed");
   const ids = JSON.parse(raw.prepare("SELECT export_ids FROM qa_eod_reports WHERE report_date='2026-08-30'").get().export_ids);
   assert.deepEqual(Object.keys(ids).sort(), ["calls:1-2", "daily:2-3", "onduty:1-3", "users:2-3"]); // today-local = Sep 1 21:07 → days_ago 2
+});
+
+await test("stats poll 429 = not-ready (fetching), never an error row (live 2026-09-08)", async () => {
+  state.rate_limited = true;
+  state.ready = true;
+  const out = await E.runEodReports(db, env, opts(Date.UTC(2026, 8, 4, 13, 7))); // report 2026-09-03
+  assert.equal(out.member_support.status, "fetching", JSON.stringify(out.member_support));
+  assert.match(out.member_support.note ?? "", /not ready/);
+  const r = raw.prepare("SELECT status, export_ids FROM qa_eod_reports WHERE report_date='2026-09-03'").get();
+  assert.equal(r.status, "fetching");
+  assert.equal(Object.keys(JSON.parse(r.export_ids)).length, 6); // ids persisted for the resume
+  state.rate_limited = false;
+  const out2 = await E.runEodReports(db, env, opts(Date.UTC(2026, 8, 4, 14, 7)));
+  assert.equal(out2.member_support.status, "completed", JSON.stringify(out2.member_support));
 });
 
 console.log(`${pass} passed, ${failures.length} failed`);

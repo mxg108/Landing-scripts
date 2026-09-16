@@ -111,7 +111,9 @@ message (§4.4).
    which already hosts two tick-gated jobs (Retell sweep, disposition sweep).
    The shift report runs FIRST in the pump: it is human-facing and
    time-sensitive; the sweeps are not.
-3. **Bounded time per tick.** Same ~12 s poll budget as the disposition
+3. **Bounded time per tick** (*2026-09-16: the poll now repeats every ~15 s
+   as `qa-cron-ticker` steps rather than once per hourly tick — see
+   `CronContinuation.md` §2.5; the budget below is per step*). Same ~12 s poll budget as the disposition
    sweep (`POLL_ATTEMPTS`/`POLL_SPACING_MS`, shared constants). Exports not
    ready → the latch row keeps its request ids and the NEXT tick resumes
    (report ≤ 1 h late, and it says so). The 06:07 UTC-12 tick also hosts the

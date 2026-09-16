@@ -1,16 +1,24 @@
-// Nightly disposition sweep (NightlyScoring.md, owner sign-off 2026-08-30)
-// — rides the "7 * * * *" cron like retellSweep (Sandy caps at 2 schedules;
-// no new slot possible). Replaces the manual daily selection routine for
-// Member Support: pull yesterday's dispositions records export from the
-// Dialpad Stats API, fill D1 dispositions (UPDATE-only during shadow —
-// §2.1, the AA0/CL0 sync-collision class), select up to per_agent calls
-// per active roster agent (random, distinct-disposition preference), and
-// enqueue them through the normal scoring path with emails suppressed.
+// Nightly disposition sweep (NightlyScoring.md, owner sign-off 2026-08-30;
+// CronContinuation.md §2.4 for the 2026-09-16 step refactor).
+// — rides the "7 * * * *" cron + the qa-cron-ticker workflow (Sandy caps
+// at 2 schedules; no new slot possible). Replaces the manual daily
+// selection routine for Member Support: pull yesterday's dispositions
+// records export from the Dialpad Stats API, fill D1 dispositions
+// (UPDATE-only during shadow — §2.1, the AA0/CL0 sync-collision class),
+// select up to per_agent calls per active roster agent (random,
+// distinct-disposition preference), and enqueue them through the normal
+// scoring path with emails suppressed.
 //
 // State machine: one qa_disposition_pulls row per (team, local day) is the
-// re-run latch, the resume handle (bounded poll budget per tick — a slow
-// export finishes on the next hourly tick), and the audit trail. All
-// failures degrade to a report, never a throw — the cron handler stays up.
+// re-run latch, the resume handle, and the audit trail. Since the Sandy
+// scheduler started bounding cron dispatch time (2026-09-14) the sweep no
+// longer runs in one tick: every call to sweepDispositions performs ONE
+// bounded phase transition (≤ a few seconds) and reports `more` while
+// work remains; the ticker workflow calls again ~15 s later. Phases:
+//   initiate → poll → fill (200 rows/step) → select → enqueue (3/step) → done
+// Every phase resumes exactly from `cursor`; a cut step re-does at most
+// one chunk (fill is wins-once, enqueue is 409-idempotent). All failures
+// degrade to a report, never a throw — the cron handler stays up.
 
 import type { StatsContext } from "../routes/scoring.js";
 import {
@@ -18,7 +26,9 @@ import {
   localDay,
   naiveLocalToIso,
   parseCsv,
-  pollAndDownload,
+  pollErrorStatus,
+  pollOnce,
+  type FetchLike,
 } from "./dialpadStats.js";
 
 // SR1 (ShiftReport §10.3): the Stats client + CSV/tz helpers now live in
@@ -30,6 +40,9 @@ export { localDay, naiveLocalToIso, parseCsv } from "./dialpadStats.js";
 const SANDY_BASE = 10_000_000;
 const CATCHUP_WINDOW_HOURS = 6; // §6: retries until local_hour_utc + 6
 const ID_CHUNK = 20; // triple-key + link = 4 params/id; D1 param cap ~100
+export const FILL_ROWS_PER_STEP = 200; // 5 D1 batches of 80 statements
+export const ENQUEUES_PER_STEP = 3; // each ≈ 1–2 s (provider meta fetch + 6 queries)
+const MAX_REINITS = 3; // expired export ids re-initiated on the spot, then error
 
 export interface NightlySweepConfig {
   enabled?: boolean;
@@ -53,6 +66,17 @@ export interface StatsRow {
   connected_at: string | null; // ISO UTC
   ended_at: string | null; // ISO UTC
   duration_s: number | null;
+}
+
+// A selected call, persisted in qa_disposition_pulls.picks between the
+// select and enqueue phases.
+export interface Pick {
+  call_id: string;
+  agent_email: string;
+  disposition_category: string | null;
+  disposition: string | null;
+  connected_at: string | null;
+  ended_at: string | null;
 }
 
 // ── pure helpers (harness-tested) ──────────────────────────────────────────
@@ -172,6 +196,13 @@ export function pickForAgent(
   return picked;
 }
 
+// True when any team's last step reported more work — the ticker's loop
+// condition (CronContinuation §2.3).
+export function sweepHasMore(out: Record<string, any> | null | undefined): boolean {
+  if (!out) return false;
+  return Object.values(out).some((r: any) => r && r.more === true);
+}
+
 // ── D1 fills (§5.2 — UPDATE-only during shadow) ────────────────────────────
 // Constraints (NightlyScoring §2): never INSERT cc_calls rows (sync id/uq
 // collision class), never touch last_updated_at (the sync watermark is
@@ -262,6 +293,7 @@ async function attemptedCallIds(
 export interface SweepTestOpts {
   nowMs?: number;
   rng?: () => number;
+  fetchImpl?: FetchLike; // Dialpad Stats API stub (harness)
 }
 
 export async function sweepDispositions(
@@ -292,12 +324,23 @@ export async function sweepDispositions(
     try {
       out[team.id] = await sweepTeam(db, request, env, team.id, String(cfg.callcenter_id), sw, testOpts);
     } catch (err) {
-      out[team.id] = { error: String((err as any)?.message ?? err).slice(0, 200) };
+      out[team.id] = { error: String((err as any)?.message ?? err).slice(0, 200), more: false };
     }
   }
   return out;
 }
 
+const parseJson = (text: string | null | undefined, fallback: any) => {
+  if (!text) return fallback;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return fallback;
+  }
+};
+
+// One phase transition for one team (CronContinuation §2.4). Returns the
+// step report with `more` = call again soon.
 async function sweepTeam(
   db: D1Database,
   request: Request,
@@ -308,12 +351,13 @@ async function sweepTeam(
   testOpts: SweepTestOpts
 ): Promise<any> {
   const now = new Date(testOpts.nowMs ?? Date.now());
+  const fetchImpl = testOpts.fetchImpl ?? fetch;
   const tz = sw.timezone ?? "America/Mexico_City";
   const localHourUtc = sw.local_hour_utc ?? 6;
   const nowIso = now.toISOString();
 
-  // Resume any in-flight pull first (slow export, worker death mid-run) —
-  // the fill + enqueue phases are idempotent, so re-walking is safe.
+  // Resume any in-flight pull first (slow export, worker death mid-run,
+  // a cut step) — every phase is idempotent, so re-walking is safe.
   let pull = await db
     .prepare(
       "SELECT * FROM qa_disposition_pulls WHERE team_id = ? AND status IN ('pending','fetching') ORDER BY pull_date LIMIT 1"
@@ -324,22 +368,25 @@ async function sweepTeam(
   if (!pull) {
     const hour = now.getUTCHours();
     if (hour < localHourUtc || hour >= localHourUtc + CATCHUP_WINDOW_HOURS)
-      return { skipped: "outside_window" };
+      return { skipped: "outside_window", more: false };
     const pullDate = localDay(tz, new Date(now.getTime() - 24 * 3600_000));
     const existing = await db
       .prepare("SELECT * FROM qa_disposition_pulls WHERE team_id = ? AND pull_date = ?")
       .bind(teamId, pullDate)
       .first<any>();
-    if (existing?.status === "completed") return { skipped: "already_completed", pull_date: pullDate };
+    if (existing?.status === "completed")
+      return { skipped: "already_completed", pull_date: pullDate, more: false };
     if (existing?.status === "error") {
       // retry within the catch-up window with a FRESH export (same row)
       await db
         .prepare(
-          "UPDATE qa_disposition_pulls SET status = 'pending', request_id = NULL, updated_at = ? WHERE id = ?"
+          `UPDATE qa_disposition_pulls SET status = 'pending', request_id = NULL, phase = NULL,
+             cursor = 0, export_json = NULL, picks = NULL, reinits = 0, updated_at = ? WHERE id = ?`
         )
         .bind(nowIso, existing.id)
         .run();
-      pull = { ...existing, status: "pending", request_id: null };
+      pull = { ...existing, status: "pending", request_id: null, phase: null, cursor: 0,
+        export_json: null, picks: null, reinits: 0 };
     } else if (!existing) {
       await db
         .prepare(
@@ -355,16 +402,24 @@ async function sweepTeam(
       pull = existing; // pending/fetching found by date (shouldn't happen — resumed above)
     }
   }
-  if (!pull) return { skipped: "no_work" };
+  if (!pull) return { skipped: "no_work", more: false };
 
-  const markError = async (message: string) => {
+  const report: Record<string, any> = parseJson(pull.report, {});
+  const saveState = async (fields: Record<string, any>) => {
+    const cols = Object.keys(fields);
     await db
       .prepare(
-        "UPDATE qa_disposition_pulls SET status = 'error', report = ?, updated_at = ? WHERE id = ?"
+        `UPDATE qa_disposition_pulls SET ${cols.map((c) => `${c} = ?`).join(", ")}, updated_at = ? WHERE id = ?`
       )
-      .bind(JSON.stringify({ error: message.slice(0, 300) }), nowIso, pull.id)
+      .bind(...cols.map((c) => fields[c]), nowIso, pull.id)
       .run();
-    return { pull_date: pull.pull_date, status: "error", error: message.slice(0, 200) };
+  };
+  const markError = async (message: string) => {
+    await saveState({
+      status: "error",
+      report: JSON.stringify({ ...report, error: message.slice(0, 300) }),
+    });
+    return { pull_date: pull.pull_date, status: "error", error: message.slice(0, 200), more: false };
   };
 
   // days_ago relative to today-local — normally 1; a pull retried across
@@ -373,101 +428,192 @@ async function sweepTeam(
   const daysAgo = Math.round(
     (Date.parse(todayLocal) - Date.parse(pull.pull_date)) / 86_400_000
   );
-  if (daysAgo < 1 || daysAgo > 20) return await markError(`pull_date ${pull.pull_date} out of export range (days_ago=${daysAgo})`);
+  if (daysAgo < 1 || daysAgo > 20)
+    return await markError(`pull_date ${pull.pull_date} out of export range (days_ago=${daysAgo})`);
 
-  let requestId: string | null = pull.request_id ?? null;
-  if (!requestId) {
-    requestId = await initiateStatsExport(env.DIALPAD_API_KEY!, {
-      exportType: "records",
-      statType: "dispositions",
-      timezone: tz,
-      targetId: callcenterId,
-      daysAgo: [daysAgo, daysAgo],
-    });
-    await db
-      .prepare(
-        "UPDATE qa_disposition_pulls SET status = 'fetching', request_id = ?, updated_at = ? WHERE id = ?"
-      )
-      .bind(requestId, nowIso, pull.id)
-      .run();
-  }
+  const initiate = () =>
+    initiateStatsExport(
+      env.DIALPAD_API_KEY!,
+      {
+        exportType: "records",
+        statType: "dispositions",
+        timezone: tz,
+        targetId: callcenterId,
+        daysAgo: [daysAgo, daysAgo],
+      },
+      fetchImpl
+    );
 
-  let csv: string | null;
-  try {
-    csv = await pollAndDownload(env.DIALPAD_API_KEY!, requestId);
-  } catch (err) {
-    return await markError(String((err as any)?.message ?? err));
-  }
-  if (csv === null) return { pull_date: pull.pull_date, status: "fetching", note: "export not ready — next tick resumes" };
+  const phase: string = pull.phase ?? (pull.request_id ? "poll" : "initiate");
+  const base = { pull_date: pull.pull_date, status: "fetching" };
 
-  const rows = parseExportCsv(csv);
-  const report: Record<string, any> = {
-    rows_in_export: rows.length,
-    with_disposition: rows.filter((r) => r.disposition_category).length,
-  };
-
-  // §5.2 fill BEFORE any enqueue — the trigger freezes grounding + SOP
-  // retrieval into the payload at enqueue time.
-  Object.assign(report, await fillDispositions(db, teamId, rows));
-  report.fill_missing = report.with_disposition - report.fill_updated; // not yet mirrored (or already stamped)
-
-  // §4 eligibility
-  const roster = await db
-    .prepare("SELECT id, name, email FROM qa_agents WHERE team_id = ? AND active = 1")
-    .bind(teamId)
-    .all<any>();
-  const byEmail = new Map<string, any>(
-    roster.results.filter((a: any) => a.email).map((a: any) => [String(a.email).toLowerCase(), a])
-  );
-  const minS = sw.min_duration_s ?? 240;
-  const maxS = sw.max_duration_s ?? 1800;
-  const unmatched = new Set<string>();
-  const eligibleByAgent = new Map<string, StatsRow[]>();
-  for (const r of rows) {
-    if (!r.operator_email) continue;
-    if (!byEmail.has(r.operator_email)) {
-      unmatched.add(r.operator_email);
-      continue;
+  // ── initiate ────────────────────────────────────────────────────────────
+  if (phase === "initiate") {
+    let requestId: string;
+    try {
+      requestId = await initiate();
+    } catch (err) {
+      return await markError(String((err as any)?.message ?? err));
     }
-    if (r.duration_s === null || r.duration_s < minS || r.duration_s > maxS) continue;
-    if (!r.recording_url) continue; // no audio → unscorable (Spanish audio SOT)
-    const list = eligibleByAgent.get(r.operator_email) ?? [];
-    list.push(r);
-    eligibleByAgent.set(r.operator_email, list);
+    await saveState({ status: "fetching", request_id: requestId, phase: "poll" });
+    return { ...base, phase: "poll", note: "export initiated — next step polls", more: true };
   }
-  report.agents_matched = eligibleByAgent.size;
-  report.agents_unmatched = unmatched.size;
-  report.eligible = [...eligibleByAgent.values()].reduce((n, l) => n + l.length, 0);
 
-  // Already scored/queued (triple-key + link). Prior attempts on THIS
-  // export's eligible calls consume the agent's nightly slots — a crash
-  // resume never over-selects, and a midday manual score counts as one of
-  // the agent's calls for the day.
-  const allEligibleIds = [...eligibleByAgent.values()].flat().map((r) => r.call_id);
-  const attempted = await attemptedCallIds(db, teamId, allEligibleIds);
+  // ── poll (ONE status check; the ticker spaces the retries) ───────────────
+  if (phase === "poll") {
+    let csv: string | null;
+    try {
+      csv = await pollOnce(env.DIALPAD_API_KEY!, String(pull.request_id), fetchImpl);
+    } catch (err) {
+      const status = pollErrorStatus(err);
+      if (status !== 400 && status !== 404) return await markError(String((err as any)?.message ?? err));
+      // Dialpad expires request ids ~1 h after issue (400, later 404).
+      // Results are cached by parameters, so a fresh id is usually
+      // complete within a second (ShiftReport §10 probe) — re-initiate on
+      // the spot, bounded.
+      const reinits = (pull.reinits ?? 0) + 1;
+      if (reinits > MAX_REINITS) return await markError(`export id expired ${reinits}× (last: ${String((err as any)?.message ?? err).slice(0, 80)})`);
+      let requestId: string;
+      try {
+        requestId = await initiate();
+      } catch (e2) {
+        return await markError(String((e2 as any)?.message ?? e2));
+      }
+      await saveState({ request_id: requestId, reinits });
+      return { ...base, phase: "poll", note: `export id expired — re-initiated (${reinits})`, more: true };
+    }
+    if (csv === null)
+      return { ...base, phase: "poll", note: "export not ready — next step resumes", more: true };
+    const rows = parseExportCsv(csv);
+    report.rows_in_export = rows.length;
+    report.with_disposition = rows.filter((r) => r.disposition_category).length;
+    report.fill_updated = 0;
+    report.evals_backfilled = 0;
+    await saveState({
+      export_json: JSON.stringify(rows),
+      phase: "fill",
+      cursor: 0,
+      report: JSON.stringify(report),
+    });
+    return { ...base, phase: "fill", rows_in_export: rows.length, more: true };
+  }
 
-  const rng = testOpts.rng ?? Math.random;
-  const perAgent = sw.per_agent ?? 3;
-  const maxEnqueues = sw.max_enqueues ?? 120;
-  const reviewerEmail = (sw.reviewer_email ?? "qa-system@hellolanding.com").toLowerCase();
-  const { autoScoreTrigger } = await import("../routes/scoring.js");
+  // ── fill (§5.2, chunked; BEFORE any enqueue — the trigger freezes
+  //    grounding + SOP retrieval into the payload at enqueue time) ─────────
+  if (phase === "fill") {
+    const rows: StatsRow[] = parseJson(pull.export_json, []);
+    const dispositioned = rows.filter((r) => r.disposition_category);
+    const cursor = Number(pull.cursor ?? 0);
+    const chunk = dispositioned.slice(cursor, cursor + FILL_ROWS_PER_STEP);
+    if (chunk.length) {
+      const f = await fillDispositions(db, teamId, chunk);
+      report.fill_updated = (report.fill_updated ?? 0) + f.fill_updated;
+      report.evals_backfilled = (report.evals_backfilled ?? 0) + f.evals_backfilled;
+    }
+    const next = cursor + FILL_ROWS_PER_STEP;
+    const done = next >= dispositioned.length;
+    if (done) report.fill_missing = (report.with_disposition ?? 0) - (report.fill_updated ?? 0);
+    await saveState({
+      cursor: done ? 0 : next,
+      phase: done ? "select" : "fill",
+      report: JSON.stringify(report),
+    });
+    return {
+      ...base,
+      phase: done ? "select" : "fill",
+      filled: Math.min(next, dispositioned.length),
+      of: dispositioned.length,
+      more: true,
+    };
+  }
 
-  let selected = 0;
-  let enqueued = 0;
-  let skippedExisting = 0;
-  let errors = 0;
-  const errorSamples: string[] = [];
-  let capDropped = 0;
-  for (const [agentEmail, list] of eligibleByAgent) {
-    const prior = list.filter((r) => attempted.has(r.call_id)).length;
-    const pool = list.filter((r) => !attempted.has(r.call_id));
-    const picks = pickForAgent(pool, Math.max(0, perAgent - prior), rng);
-    selected += picks.length;
-    for (const pick of picks) {
-      if (enqueued >= maxEnqueues) {
-        capDropped++;
+  // ── select (§4 eligibility + one-attempt dedupe + random picks) ──────────
+  if (phase === "select") {
+    const rows: StatsRow[] = parseJson(pull.export_json, []);
+    const roster = await db
+      .prepare("SELECT id, name, email FROM qa_agents WHERE team_id = ? AND active = 1")
+      .bind(teamId)
+      .all<any>();
+    const byEmail = new Map<string, any>(
+      roster.results.filter((a: any) => a.email).map((a: any) => [String(a.email).toLowerCase(), a])
+    );
+    const minS = sw.min_duration_s ?? 240;
+    const maxS = sw.max_duration_s ?? 1800;
+    const unmatched = new Set<string>();
+    const eligibleByAgent = new Map<string, StatsRow[]>();
+    for (const r of rows) {
+      if (!r.operator_email) continue;
+      if (!byEmail.has(r.operator_email)) {
+        unmatched.add(r.operator_email);
         continue;
       }
+      if (r.duration_s === null || r.duration_s < minS || r.duration_s > maxS) continue;
+      if (!r.recording_url) continue; // no audio → unscorable (Spanish audio SOT)
+      const list = eligibleByAgent.get(r.operator_email) ?? [];
+      list.push(r);
+      eligibleByAgent.set(r.operator_email, list);
+    }
+    report.agents_matched = eligibleByAgent.size;
+    report.agents_unmatched = unmatched.size;
+    report.eligible = [...eligibleByAgent.values()].reduce((n, l) => n + l.length, 0);
+
+    // Already scored/queued (triple-key + link). Prior attempts on THIS
+    // export's eligible calls consume the agent's nightly slots — a crash
+    // resume never over-selects, and a midday manual score counts as one of
+    // the agent's calls for the day.
+    const allEligibleIds = [...eligibleByAgent.values()].flat().map((r) => r.call_id);
+    const attempted = await attemptedCallIds(db, teamId, allEligibleIds);
+
+    const rng = testOpts.rng ?? Math.random;
+    const perAgent = sw.per_agent ?? 3;
+    const maxEnqueues = sw.max_enqueues ?? 120;
+    const picks: Pick[] = [];
+    let selected = 0;
+    let capDropped = 0;
+    for (const [agentEmail, list] of eligibleByAgent) {
+      const prior = list.filter((r) => attempted.has(r.call_id)).length;
+      const pool = list.filter((r) => !attempted.has(r.call_id));
+      const chosen = pickForAgent(pool, Math.max(0, perAgent - prior), rng);
+      selected += chosen.length;
+      for (const pick of chosen) {
+        if (picks.length >= maxEnqueues) {
+          capDropped++;
+          continue;
+        }
+        picks.push({
+          call_id: pick.call_id,
+          agent_email: agentEmail,
+          disposition_category: pick.disposition_category,
+          disposition: pick.disposition,
+          connected_at: pick.connected_at,
+          ended_at: pick.ended_at,
+        });
+      }
+    }
+    report.selected = selected;
+    if (capDropped) report.cap_dropped = capDropped; // no silent caps
+    report.enqueued = 0;
+    report.skipped_existing = 0;
+    report.errors = 0;
+    await saveState({
+      picks: JSON.stringify(picks),
+      export_json: null, // ~100 KB/day — not kept past this phase
+      phase: "enqueue",
+      cursor: 0,
+      report: JSON.stringify(report),
+    });
+    return { ...base, phase: "enqueue", selected, to_enqueue: picks.length, more: true };
+  }
+
+  // ── enqueue (3 per step through the normal scoring trigger) ─────────────
+  if (phase === "enqueue") {
+    const picks: Pick[] = parseJson(pull.picks, []);
+    const cursor = Number(pull.cursor ?? 0);
+    const chunk = picks.slice(cursor, cursor + ENQUEUES_PER_STEP);
+    const reviewerEmail = (sw.reviewer_email ?? "qa-system@hellolanding.com").toLowerCase();
+    const { autoScoreTrigger } = await import("../routes/scoring.js");
+    const errorSamples: string[] = report.error_samples ?? [];
+    for (const pick of chunk) {
       const statsContext: StatsContext = {
         disposition_category: pick.disposition_category,
         disposition: pick.disposition,
@@ -477,37 +623,45 @@ async function sweepTeam(
       try {
         const res = await autoScoreTrigger(request, db, teamId, env as any, {
           callId: pick.call_id,
-          agentEmail,
+          agentEmail: pick.agent_email,
           managerEmail: reviewerEmail,
           suppressEmail: sw.suppress_email !== false,
           statsContext,
         });
-        if (res.status === 200) enqueued++;
-        else if (res.status === 409) skippedExisting++;
+        if (res.status === 200) report.enqueued = (report.enqueued ?? 0) + 1;
+        else if (res.status === 409) report.skipped_existing = (report.skipped_existing ?? 0) + 1;
         else {
-          errors++;
+          report.errors = (report.errors ?? 0) + 1;
           if (errorSamples.length < 3)
             errorSamples.push(`${pick.call_id}: HTTP ${res.status} ${(await res.text()).slice(0, 120)}`);
         }
       } catch (err) {
-        errors++;
+        report.errors = (report.errors ?? 0) + 1;
         if (errorSamples.length < 3)
           errorSamples.push(`${pick.call_id}: ${String((err as any)?.message ?? err).slice(0, 120)}`);
       }
     }
+    if (errorSamples.length) report.error_samples = errorSamples;
+    const next = cursor + chunk.length;
+    if (next >= picks.length) {
+      await saveState({
+        status: "completed",
+        phase: "done",
+        cursor: next,
+        picks: null,
+        report: JSON.stringify(report),
+      });
+      return { pull_date: pull.pull_date, status: "completed", phase: "done", more: false, ...report };
+    }
+    await saveState({ cursor: next, report: JSON.stringify(report) });
+    return {
+      ...base,
+      phase: "enqueue",
+      enqueued_so_far: next,
+      of: picks.length,
+      more: true,
+    };
   }
-  report.selected = selected;
-  report.enqueued = enqueued;
-  report.skipped_existing = skippedExisting;
-  report.errors = errors;
-  if (errorSamples.length) report.error_samples = errorSamples;
-  if (capDropped) report.cap_dropped = capDropped; // no silent caps
 
-  await db
-    .prepare(
-      "UPDATE qa_disposition_pulls SET status = 'completed', report = ?, updated_at = ? WHERE id = ?"
-    )
-    .bind(JSON.stringify(report), nowIso, pull.id)
-    .run();
-  return { pull_date: pull.pull_date, status: "completed", ...report };
+  return await markError(`unknown phase ${phase}`);
 }
