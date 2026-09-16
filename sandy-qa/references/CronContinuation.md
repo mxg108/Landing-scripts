@@ -130,13 +130,19 @@ carries `more`. EOD: unchanged state machine; the result carries `more`
 while `fetching`, and because the ticker re-polls every 15 s the "today"
 export becomes ready within a few steps instead of expiring.
 
-### 2.6 Daily maintenance
+### 2.6 Daily maintenance + one-shot jobs (CC4, done 2026-09-16)
 
-Prune + digest + drain stay inline in the `waitUntil` continuation (a
-few seconds). **Open item (before Oct 1):** the EOM assessments trigger +
-HR-bonus GAS dispatch also live there today; the GAS POST alone can take
-10–30 s. Move them to ticker steps (a `qa_cron_jobs` progress row) as
-phase 2 — tracked in §7.
+Prune + digest + ticker trigger stay inline in the `waitUntil`
+continuation (a few seconds). The EOM work is no longer inline: on the
+1st (LA) the daily tick INSERTs two `qa_cron_jobs` rows (migration 0018)
+— `eom_assessments` and `hr_bonus`, key = closed month `YYYY-MM` — and
+`runTickerStep` executes the oldest pending row first, one handler step
+per tick (`src/lib/cronJobs.ts`): `eom_assessments` = one step (the
+qa-insights batch trigger; the builder skips covered agents), `hr_bonus`
+= one TEAM per step (`cursor` = team index; the GAS render POST is the
+10–30 s part). A throwing step retries on later ticks (3 attempts →
+`error`, message in `report.last_error`). Re-run a month: INSERT a fresh
+row (or reset `status='pending', cursor=0`); both jobs are idempotent.
 
 ## 3. Schema — migration `0017_cron_continuation.sql`
 
@@ -192,8 +198,12 @@ cleared at `select` so the table does not grow.
 ## 7. Ladder
 
 - **CC0** this doc. **CC1** migration + sweep state machine + harness
-  (`node tests/cron_ticker.test.mjs`). **CC2** ticker workflow + app
-  plumbing + build. **CC3** live: publish, watch one hourly tick + the
-  09-15 recovery sweep end-to-end. **CC4 (before Oct 1)** EOM/HR dispatch
-  as ticker steps. **CC5** ask Engineering for the dispatch bound value
-  and whether callback requests carry a bound; record here.
+(`node tests/cron_ticker.test.mjs`) — done. **CC2** ticker workflow +
+app plumbing + build — done (v0.74/v0.75, wf v0.1). **CC3** live —
+done: 09-15 recovery sweep 50/50 in 9 min, EOD 09-15 completed on the
+15-s cadence, 09-11 re-armed per owner. **CC4** EOM/HR dispatch as
+ticker steps — done (migration 0018, `cronJobs.ts`,
+`node tests/cron_jobs.test.mjs`); first live run = Oct 1 09:37 UTC
+(watch `qa_cron_jobs` for key `2026-09`). **CC5** ask Engineering for
+the dispatch bound value and whether callback requests carry a bound;
+record here.
