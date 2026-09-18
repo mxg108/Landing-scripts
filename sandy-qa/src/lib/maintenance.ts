@@ -40,6 +40,9 @@ export interface CronEnv {
   PULPO_MCP_TOKEN?: string;
   GAS_WEBAPP_URL_SOFIA?: string;
   GAS_WEBAPP_URL_HR?: string;
+  // DailyDigest §5: nightly per-agent digest through the team webapps.
+  GAS_WEBAPP_URL_MS?: string;
+  GAS_WEBAPP_URL_SALES?: string;
   // ShiftReport §10: Google service-account JSON for the EOD sheet sink.
   GSHEETS_SA_JSON?: string;
 }
@@ -62,6 +65,15 @@ export async function runTickerStep(
   const summary: Record<string, any> = {};
   let progressing = false;
 
+  // 0. One-shot cron jobs (EOM assessments, HR bonus dispatch — CC4): the
+  //    oldest pending job advances one handler step.
+  try {
+    const { runCronJobsStep } = await import("./cronJobs.js");
+    summary.jobs = await runCronJobsStep(db, request, env);
+    if (summary.jobs?.more) progressing = true;
+  } catch (err) {
+    summary.jobs = { error: String((err as any)?.message ?? err).slice(0, 200) };
+  }
   // 1. Nightly disposition sweep — one phase transition per team.
   try {
     const { sweepDispositions, sweepHasMore } = await import("./dispositionSweep.js");
@@ -262,54 +274,30 @@ export async function runDailyMaintenance(
 
   const digest = await sofiaDigest(db, env.GAS_WEBAPP_URL_SOFIA);
 
-  // EOM assessments (CoachingLoopSpec §8, CL4): on the 1st (LA), generate
-  // the closed month's progression assessments — one qa-insights batch run,
-  // one item per agent with finalized evals and no assessment already
-  // covering the month (the guard that also avoids double-spend while
-  // Railway's own monthly export still writes assessments during shadow).
-  // CronContinuation §2.6 / CC4: this branch + the HR dispatch below still
-  // run inside the daily tick's waitUntil budget — move to ticker steps
-  // before 2026-10-01.
+  // EOM (CoachingLoopSpec §8 CL4 + HRBonusSheet §6): on the 1st (LA) the
+  // closed month's progression assessments (one qa-insights batch run; the
+  // builder skips agents already covered) and the HR-bonus workbook push to
+  // GAS (tabs rewrite in place). Both used to run inline here; since the
+  // daily tick lives inside a ~30 s waitUntil continuation they are now
+  // qa_cron_jobs rows executed by the ticker one bounded step at a time
+  // (CronContinuation §2.6 / CC4, src/lib/cronJobs.ts). Re-run a month by
+  // inserting a fresh row.
   let eom: any = null;
   const laDay = new Intl.DateTimeFormat("sv-SE", {
     timeZone: "America/Los_Angeles",
   }).format(new Date());
-  let hrBonus: any = null;
   if (laDay.endsWith("-01")) {
     const [y, m] = laDay.slice(0, 7).split("-").map(Number);
     const closed = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
     try {
-      const { eomAssessmentBatch } = await import("../routes/insights.js");
-      eom = await eomAssessmentBatch(
-        db, request, ["member_support", "sales", "sofia"], closed
-      );
+      const { enqueueCronJob } = await import("./cronJobs.js");
+      eom = {
+        month: closed,
+        eom_assessments: await enqueueCronJob(db, "eom_assessments", closed),
+        hr_bonus: await enqueueCronJob(db, "hr_bonus", closed),
+      };
     } catch (err) {
-      eom = { triggered: false, error: String((err as any)?.message ?? err).slice(0, 200) };
-    }
-    // HR bonus workbook (HRBonusSheet §6, Sandy-era transport): compute
-    // the closed month's payload and push it to the GAS renderer. The
-    // Railway GAS trigger is retired — this branch IS the monthly export.
-    // Re-runs are safe (tabs rewrite in place); secret absent → skipped.
-    try {
-      const teams = await db
-        .prepare("SELECT id, hr_export FROM teams WHERE hr_export IS NOT NULL")
-        .all<any>();
-      const { hrExportFor, fetchMonthPayload, dispatchHrBonus } = await import("./hrBonus.js");
-      const { loadTeamConfig } = await import("./teamConfig.js");
-      for (const t of teams.results) {
-        const hr = hrExportFor(t.hr_export);
-        if (!hr) continue;
-        const config = await loadTeamConfig(db, t.id);
-        const payload = await fetchMonthPayload(db, config, hr, closed);
-        const receipt = await dispatchHrBonus(payload, env.GAS_WEBAPP_URL_HR);
-        (hrBonus ??= {})[t.id] = {
-          month: closed,
-          agents: payload.agents.length,
-          gas_receipt: receipt,
-        };
-      }
-    } catch (err) {
-      hrBonus = { error: String((err as any)?.message ?? err).slice(0, 200) };
+      eom = { month: closed, error: String((err as any)?.message ?? err).slice(0, 200) };
     }
   }
 
@@ -317,6 +305,5 @@ export async function runDailyMaintenance(
   return JSON.stringify({
     pruned: summary, ticker, digest,
     ...(eom ? { eom } : {}),
-    ...(hrBonus ? { hr_bonus: hrBonus } : {}),
   });
 }

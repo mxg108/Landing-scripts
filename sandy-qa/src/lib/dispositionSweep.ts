@@ -46,6 +46,7 @@ const MAX_REINITS = 3; // expired export ids re-initiated on the spot, then erro
 
 export interface NightlySweepConfig {
   enabled?: boolean;
+  digest?: { enabled?: boolean; [k: string]: any }; // DailyDigest.md §0
   per_agent?: number;
   min_duration_s?: number;
   max_duration_s?: number;
@@ -644,6 +645,10 @@ async function sweepTeam(
     if (errorSamples.length) report.error_samples = errorSamples;
     const next = cursor + chunk.length;
     if (next >= picks.length) {
+      // DailyDigest.md §1: the night's cohort is defined by the picks, so
+      // keep their ids on the pull row (picks itself is cleared) and hand
+      // the night to the digest job once every pick is enqueued.
+      report.picked_call_ids = picks.map((p) => p.call_id);
       await saveState({
         status: "completed",
         phase: "done",
@@ -651,6 +656,15 @@ async function sweepTeam(
         picks: null,
         report: JSON.stringify(report),
       });
+      if ((sw as any).digest?.enabled) {
+        try {
+          const { enqueueCronJob } = await import("./cronJobs.js");
+          const q = await enqueueCronJob(db, "daily_digest", `${teamId}:${pull.pull_date}`);
+          report.digest_job = q.queued ? "queued" : "exists";
+        } catch (err) {
+          report.digest_job = `error: ${String((err as any)?.message ?? err).slice(0, 120)}`;
+        }
+      }
       return { pull_date: pull.pull_date, status: "completed", phase: "done", more: false, ...report };
     }
     await saveState({ cursor: next, report: JSON.stringify(report) });

@@ -61,6 +61,9 @@ function cronEnvOf(env: Env) {
     PULPO_MCP_TOKEN: env.PULPO_MCP_TOKEN,
     GAS_WEBAPP_URL_SOFIA: env.GAS_WEBAPP_URL_SOFIA,
     GAS_WEBAPP_URL_HR: env.GAS_WEBAPP_URL_HR,
+    // DailyDigest.md §5: the digest job sends through the team webapps.
+    GAS_WEBAPP_URL_MS: env.GAS_WEBAPP_URL_MS,
+    GAS_WEBAPP_URL_SALES: env.GAS_WEBAPP_URL_SALES,
     GSHEETS_SA_JSON: env.GSHEETS_SA_JSON,
   };
 }

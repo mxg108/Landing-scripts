@@ -59,6 +59,26 @@ function doPost(e) {
     var disclaimer = (typeof payload.disclaimer === 'string')
       ? payload.disclaimer : '';
 
+    // ── HTML-email mode (Sandy) — pre-rendered body, GAS is a pure sender.
+    //    Used by the nightly per-agent QA digest (sandy-qa/references/
+    //    DailyDigest.md §5). The app owns the layout; this branch only
+    //    delivers. TO_OVERRIDE still wins so staging teams stay contained.
+    if (payload.html_email && typeof payload.html_email === 'object') {
+      var m = payload.html_email;
+      var htmlTo = (CONFIG.EMAIL && CONFIG.EMAIL.TO_OVERRIDE) || m.to || '';
+      if (!htmlTo) {
+        return _jsonResponse({ status: 'error', message: 'html_email: no recipient' });
+      }
+      if (!m.html || !m.subject) {
+        return _jsonResponse({ status: 'error', message: 'html_email: subject and html are required' });
+      }
+      var htmlOpts = { htmlBody: m.html, name: 'Landing QA System' };
+      if (m.cc && m.cc !== htmlTo && !(CONFIG.EMAIL && CONFIG.EMAIL.TO_OVERRIDE)) htmlOpts.cc = m.cc;
+      GmailApp.sendEmail(htmlTo, m.subject, m.text || 'Open in an HTML-capable email client.', htmlOpts);
+      Logger.log('[doPost] html_email mode → To: %s (%s)', htmlTo, m.subject);
+      return _jsonResponse({ status: 'ok', message: 'html_email dispatched to ' + htmlTo });
+    }
+
     // ── Digest mode (Sandy daily cron) — summary email, no entry ───
     if (payload.digest && typeof payload.digest === 'object') {
       var d = payload.digest;
