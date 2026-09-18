@@ -212,7 +212,7 @@ export async function progressionRequest(
   return json({ ready: false, job_id: jobId, status: "pending" }, 202);
 }
 
-async function triggerInsights(
+export async function triggerInsights(
   db: D1Database,
   request: Request,
   payload: any
@@ -452,6 +452,15 @@ export async function insightsCallback(
   for (const item of items) {
     const ref = item.ref ?? {};
     try {
+      // Daily digest (DailyDigest.md §4): the row records its own failure
+      // (summary_error) so the facts-only email still goes out — an
+      // item error must reach persistDigestSummary, not the catch below.
+      if (ref.kind === "daily_digest") {
+        const { persistDigestSummary } = await import("../lib/dailyDigest.js");
+        await persistDigestSummary(db, ref, item);
+        persisted++;
+        continue;
+      }
       if (!item.ok) throw new Error(item.error ?? "item failed");
       if (ref.kind === "team") {
         const parsed = parseItemJson(item.text ?? "");

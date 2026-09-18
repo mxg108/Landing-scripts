@@ -128,8 +128,8 @@ await test("unknown job → error row; queue moves on", async () => {
   assert.equal(r.more, false);
 });
 
-await test("default handler map names the two monthly jobs", () => {
-  assert.deepEqual(Object.keys(C.DEFAULT_HANDLERS).sort(), ["eom_assessments", "hr_bonus"]);
+await test("default handler map names the monthly jobs + the daily digest", () => {
+  assert.deepEqual(Object.keys(C.DEFAULT_HANDLERS).sort(), ["daily_digest", "eom_assessments", "hr_bonus"]);
 });
 
 console.log(`cron_jobs: ${pass} passed, ${failures.length} failed`);

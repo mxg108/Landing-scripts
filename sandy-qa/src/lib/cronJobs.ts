@@ -23,6 +23,10 @@ export interface JobStepResult {
   phase?: string | null;
   cursor?: number;
   report?: any;
+  // Waiting on something external (a queue draining, a workflow run):
+  // the runner stamps next_at = now + wait_s and neither picks nor counts
+  // the row until then, so the ticker sleeps instead of spinning.
+  wait_s?: number;
 }
 
 export type JobHandler = (
@@ -73,9 +77,18 @@ const hrBonus: JobHandler = async (db, _request, env, row, report) => {
   return { done: cursor + 1 >= teams.length, cursor: cursor + 1, report: out };
 };
 
+// Daily agent QA digest (DailyDigest.md): enqueued by the nightly sweep's
+// done transition, key '<team>:<pull_date>'; waits for the picks to score,
+// summarizes via qa-insights, sends one email per agent.
+const dailyDigest: JobHandler = async (db, request, env, row, report) => {
+  const { dailyDigestJob } = await import("./dailyDigest.js");
+  return dailyDigestJob(db, request, env, row, report);
+};
+
 export const DEFAULT_HANDLERS: Record<string, JobHandler> = {
   eom_assessments: eomAssessments,
   hr_bonus: hrBonus,
+  daily_digest: dailyDigest,
 };
 
 // ── queue ──────────────────────────────────────────────────────────────────
@@ -112,14 +125,20 @@ export async function runCronJobsStep(
   const nowIso = new Date().toISOString();
   const row = await db
     .prepare(
-      "SELECT * FROM qa_cron_jobs WHERE status IN ('pending','running') ORDER BY id LIMIT 1"
+      "SELECT * FROM qa_cron_jobs WHERE status IN ('pending','running') AND (next_at IS NULL OR next_at <= ?) ORDER BY id LIMIT 1"
     )
+    .bind(nowIso)
     .first<CronJobRow>();
   if (!row) return { more: false };
 
+  // Rows parked by wait_s (next_at in the future) are not "more" — the
+  // hourly cron re-enters and picks them up once their wake-up passes.
   const remaining = async () => {
     const r = await db
-      .prepare("SELECT COUNT(*) AS n FROM qa_cron_jobs WHERE status IN ('pending','running')")
+      .prepare(
+        "SELECT COUNT(*) AS n FROM qa_cron_jobs WHERE status IN ('pending','running') AND (next_at IS NULL OR next_at <= ?)"
+      )
+      .bind(new Date().toISOString())
       .first<any>();
     return Number(r?.n ?? 0) > 0;
   };
@@ -166,21 +185,27 @@ export async function runCronJobsStep(
   }
   const cursor = step.cursor ?? row.cursor ?? 0;
   const phase = step.phase === undefined ? row.phase : step.phase;
+  const nextAt =
+    !step.done && step.wait_s && step.wait_s > 0
+      ? new Date(Date.now() + step.wait_s * 1000).toISOString()
+      : null;
   await db
     .prepare(
-      "UPDATE qa_cron_jobs SET status = ?, phase = ?, cursor = ?, report = ?, updated_at = ? WHERE id = ?"
+      "UPDATE qa_cron_jobs SET status = ?, phase = ?, cursor = ?, report = ?, next_at = ?, updated_at = ? WHERE id = ?"
     )
     .bind(
       step.done ? "completed" : "running",
       phase,
       cursor,
       JSON.stringify(step.report ?? report ?? {}),
+      nextAt,
       nowIso,
       row.id
     )
     .run();
   return {
     job: row.job, key: row.key, status: step.done ? "completed" : "running",
-    phase, cursor, more: step.done ? await remaining() : true,
+    phase, cursor, ...(nextAt ? { next_at: nextAt } : {}),
+    more: step.done || nextAt ? await remaining() : true,
   };
 }
