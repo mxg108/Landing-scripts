@@ -40,6 +40,9 @@ export interface CronEnv {
   PULPO_MCP_TOKEN?: string;
   GAS_WEBAPP_URL_SOFIA?: string;
   GAS_WEBAPP_URL_HR?: string;
+  // DailyDigest §5: nightly per-agent digest through the team webapps.
+  GAS_WEBAPP_URL_MS?: string;
+  GAS_WEBAPP_URL_SALES?: string;
   // ShiftReport §10: Google service-account JSON for the EOD sheet sink.
   GSHEETS_SA_JSON?: string;
 }
