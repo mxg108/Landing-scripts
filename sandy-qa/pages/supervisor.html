@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Supervisor Deliverables</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/header.css" />
+  <style>
+    :root { --navy:#15192D; --accent:#1A61D9; --bg:#E7EFFB; --surface:#fff; --border:#c9d5e8; --text:#15192D; --muted:#5a6478; --green:#28A745; --amber:#E8A317; --red:#D9534F; }
+    *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:'DM Mono', monospace; background:var(--bg); color:var(--text); min-height:100vh; }
+    h1, h2, h3 { font-family:'Fraunces', serif; }
+    .container { max-width:1100px; margin:0 auto; padding:24px; display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+    .container .wide { grid-column:1 / -1; }
+    .card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:18px; }
+    .card h2 { font-size:1rem; margin-bottom:10px; color:var(--navy); display:flex; align-items:center; gap:8px; }
+    .hint { font-size:.72rem; color:var(--muted); line-height:1.5; margin-bottom:10px; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0; }
+    input, select, textarea { font-family:'DM Mono', monospace; font-size:.78rem; padding:7px 9px; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--text); }
+    input[type=number] { width:96px; }
+    button.act { font-family:'DM Mono', monospace; font-size:.75rem; padding:7px 14px; border-radius:6px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+    button.act.secondary { background:transparent; color:var(--accent); }
+    button.act.small { padding:4px 9px; font-size:.68rem; }
+    button.act:disabled { opacity:.5; cursor:not-allowed; }
+    table { width:100%; border-collapse:collapse; font-size:.76rem; }
+    th { text-align:left; font-size:.64rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); padding:6px 6px; border-bottom:1px solid var(--border); }
+    td { padding:7px 6px; border-bottom:1px solid #eef2f8; vertical-align:top; }
+    td a { color:var(--accent); }
+    .pill { display:inline-block; font-size:.62rem; font-weight:500; padding:2px 8px; border-radius:999px; color:#fff; text-transform:uppercase; letter-spacing:.04em; }
+    .pill.draft { background:var(--muted); } .pill.submitted { background:var(--green); } .pill.none { background:transparent; color:var(--muted); border:1px solid var(--border); }
+    .pill.open { background:var(--accent); } .pill.in_progress { background:var(--amber); } .pill.done { background:var(--green); } .pill.dropped { background:var(--muted); }
+    .chip { display:inline-flex; align-items:center; gap:6px; font-size:.7rem; padding:4px 10px; border-radius:999px; border:1px solid var(--border); background:var(--bg); }
+    .chip.ok { border-color:var(--green); } .chip.no { border-color:var(--red); color:var(--red); }
+    .shiftgrid { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:8px; }
+    .shift { border:1px solid var(--border); border-radius:8px; padding:10px; display:flex; flex-direction:column; gap:6px; }
+    .shift b { font-family:'Fraunces', serif; font-size:.95rem; }
+    .status-line { font-size:.72rem; color:var(--muted); margin-top:6px; min-height:1em; }
+    .empty { color:var(--muted); font-size:.78rem; padding:8px 2px; }
+    .targets { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
+    .targets label { font-size:.68rem; color:var(--muted); display:flex; flex-direction:column; gap:3px; }
+    .kpi { font-family:'Fraunces', serif; font-size:1.3rem; }
+    @media (max-width: 820px) { .container { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <div id="appHeader"></div>
+  <div class="container">
+
+    <div class="card wide">
+      <h2>Daily — end-of-shift report</h2>
+      <div class="hint">One report per shift. Call metrics, ticket counts and unattended Slack tags are pulled in for you; attendance and the "why / what was done / what's next" are yours. <span id="eodLine"></span></div>
+      <div class="row">
+        <label>Date <input type="date" id="dailyDate"></label>
+        <span class="status-line" id="dailyStatus"></span>
+      </div>
+      <div class="shiftgrid" id="shiftGrid"><div class="empty">Loading…</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Weekly — performance review</h2>
+      <div class="hint">Abandon rate vs target, productivity and CSAT per agent (Dialpad), QA reviews per agent (two per week), coaching conducted, open action plans.</div>
+      <div class="row">
+        <button class="act small secondary" onclick="shiftWeek(-1)">‹</button>
+        <input id="weekKey" style="width:110px" placeholder="2026-W38">
+        <button class="act small secondary" onclick="shiftWeek(1)">›</button>
+        <select id="weekSup"></select>
+        <button class="act" onclick="openReport('weekly')">Open</button>
+      </div>
+      <div id="weekList" class="hint"></div>
+    </div>
+
+    <div class="card">
+      <h2>Tuesday meeting tracker</h2>
+      <div class="hint">The five tables of the Supervisor meeting, pre-filled from last week's review, the fortnight's shift reports and the action-plan register. Rotating presenter suggested from the last tracker.</div>
+      <div class="row">
+        <label>Meeting date <input type="date" id="meetingDate"></label>
+        <button class="act" onclick="openTracker()">Open tracker</button>
+      </div>
+      <div id="trackerList" class="hint"></div>
+    </div>
+
+    <div class="card">
+      <h2>Monthly — abandon-rate review</h2>
+      <div class="hint">Month-to-date vs target, week by week, worst days, action plans closed this month and their results.</div>
+      <div class="row">
+        <input type="month" id="monthKey">
+        <select id="monthSup"></select>
+        <button class="act" onclick="openReport('monthly')">Open</button>
+      </div>
+      <div id="monthList" class="hint"></div>
+    </div>
+
+    <div class="card">
+      <h2>Targets</h2>
+      <div class="hint">Targets the Direction index states are pre-filled (CSAT 4.1, two QA reviews per agent per week). The rest are the team's to set; every review shows "target not set" until they are.</div>
+      <div class="targets" id="targets"></div>
+      <div class="row" style="margin-top:8px"><button class="act small" onclick="saveTargets()">Save targets</button><span class="status-line" id="targetStatus"></span></div>
+    </div>
+
+    <div class="card wide">
+      <h2>Action plans <span class="pill open" id="planCount">…</span></h2>
+      <div class="hint">§6 — Issue → Cause → Action → Owner → Follow-up → Result. Review these before opening new ones; every weekly review and tracker lists what is still open.</div>
+      <div class="row" style="align-items:flex-start">
+        <select id="npArea"></select>
+        <input id="npAgent" placeholder="Agent (optional)" style="width:150px">
+        <input id="npIssue" placeholder="Issue — what is below expectation?" style="flex:1 1 220px">
+        <input id="npCause" placeholder="Cause — why?" style="flex:1 1 160px">
+        <input id="npAction" placeholder="Action — what will be done?" style="flex:1 1 220px">
+        <input id="npOwner" placeholder="Owner" style="width:110px">
+        <input id="npDue" type="date" title="Follow-up date">
+        <button class="act small" onclick="createPlan()">Add</button>
+      </div>
+      <div class="row"><label style="font-size:.72rem"><input type="checkbox" id="showClosed" onchange="loadPlans()"> show closed</label><span class="status-line" id="planStatus"></span></div>
+      <div id="plans"><div class="empty">Loading…</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Sources</h2>
+      <div class="row" id="sources"></div>
+      <div class="hint" id="sourceLinks" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card">
+      <h2>Recent reports</h2>
+      <div id="recent"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+
+  <script src="/static/header.js"></script>
+  <script>
+    const TEAM_ID = (location.pathname.match(/^\/supervisor\/([^\/]+)/) || [, 'member_support'])[1];
+    const API = `/api/${TEAM_ID}/sup`;
+    const TEAM_LABEL = { member_support: 'Member Support', sales: 'Sales', sofia: 'Sofia AI' }[TEAM_ID] || TEAM_ID;
+    window.QAHeader.init({ page: 'plain', team: TEAM_ID, title: `Supervisor Deliverables — ${TEAM_LABEL}` });
+    const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+    async function api(url, opts) {
+      const res = await fetch(url, opts);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+      return data;
+    }
+    const post = (url, body) => api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+    let ST = null, REPORTS = [];
+
+    const TARGET_LABELS = { abandon_rate_pct: 'Abandon rate % (max)', sl_pct: 'Service level %', productivity_per_hour: 'Productivity — calls per on-duty hour', qa_score: 'QA score (min)', csat: 'CSAT (min)', qa_reviews_per_agent_week: 'QA reviews per agent per week' };
+
+    function supOptions(sel, mine) {
+      const opts = [`<option value="">Team (all agents)</option>`].concat((ST.supervisors || []).map(s => `<option value="${esc(s.label)}"${mine && s.label === mine ? ' selected' : ''}>${esc(s.label)} (${s.agents} agents)</option>`));
+      sel.innerHTML = opts.join('');
+    }
+    function weekOf(dateIso) { // ISO week key, Monday-based (mirrors the server)
+      const d = new Date(dateIso + 'T00:00:00Z'); const day = (d.getUTCDay() + 6) % 7;
+      d.setUTCDate(d.getUTCDate() - day + 3); const y = d.getUTCFullYear(); const jan4 = new Date(Date.UTC(y, 0, 4));
+      const mondayW1 = jan4.getTime() - ((jan4.getUTCDay() + 6) % 7) * 864e5;
+      const wk = 1 + Math.floor((d.getTime() - mondayW1) / (7 * 864e5));
+      return `${y}-W${String(wk).padStart(2, '0')}`;
+    }
+    function shiftWeek(n) {
+      const m = document.getElementById('weekKey').value.match(/^(\d{4})-W(\d{2})$/); if (!m) return;
+      const jan4 = new Date(Date.UTC(+m[1], 0, 4)); const monday = jan4.getTime() - ((jan4.getUTCDay() + 6) % 7) * 864e5 + (+m[2] - 1 + n) * 7 * 864e5;
+      document.getElementById('weekKey').value = weekOf(new Date(monday).toISOString().slice(0, 10)); renderLists();
+    }
+
+    async function load() {
+      ST = await api(`${API}/status`);
+      document.getElementById('dailyDate').value = ST.today;
+      document.getElementById('weekKey').value = ST.week;
+      document.getElementById('monthKey').value = ST.month;
+      document.getElementById('meetingDate').value = ST.next_meeting;
+      supOptions(document.getElementById('weekSup'), ST.me.label);
+      supOptions(document.getElementById('monthSup'), ST.me.label);
+      document.getElementById('eodLine').textContent = ST.eod ? `Latest EOD call report: ${ST.eod.latest_date} (${ST.eod.status}).` : 'No EOD call report rows yet.';
+      document.getElementById('targets').innerHTML = Object.keys(TARGET_LABELS).map(k =>
+        `<label>${esc(TARGET_LABELS[k])}<input type="number" step="0.1" data-target="${k}" value="${ST.targets[k] ?? ''}" placeholder="not set"></label>`).join('');
+      const src = ST.sources;
+      const chip = (ok, label, why) => `<span class="chip ${ok ? 'ok' : 'no'}" title="${esc(why)}">${ok ? '✓' : '✗'} ${label}</span>`;
+      document.getElementById('sources').innerHTML =
+        chip(src.dialpad, 'Dialpad', 'DIALPAD_API_KEY — daily call metrics, weekly productivity + CSAT pulls') +
+        chip(src.sheets, 'Google Sheet', 'GSHEETS_SA_JSON + eod_sheet.spreadsheet_id — publish to the EOD workbook') +
+        chip(src.slack_post, 'Slack post', 'SLACK_BOT_TOKEN + deliverables.slack_channel — publish reports to the channel') +
+        chip(src.slack_audit, 'Slack tag audit', 'SLACK_USER_TOKEN — unattended @member-support mentions') +
+        chip(src.snowflake, 'Mission Control tickets', 'SNOWFLAKE_MCP_TOKEN — ticket counts via the Sandy Snowflake gateway');
+      const links = [];
+      if (ST.config.spreadsheet_id) links.push(`<a href="https://docs.google.com/spreadsheets/d/${esc(ST.config.spreadsheet_id)}/edit" target="_blank" rel="noopener">EOD workbook</a>`);
+      if (ST.config.wfm_dashboard_url) links.push(`<a href="${esc(ST.config.wfm_dashboard_url)}" target="_blank" rel="noopener">Workforce Management dashboard (Sigma)</a>`);
+      if (ST.config.attendance_channel) links.push(`<a href="https://hellolanding.slack.com/archives/${esc(ST.config.attendance_channel)}" target="_blank" rel="noopener">attendance channel</a>`);
+      if (ST.config.slack_channel) links.push(`<a href="https://hellolanding.slack.com/archives/${esc(ST.config.slack_channel)}" target="_blank" rel="noopener">report channel</a>`);
+      links.push(`<a href="/coaching/${TEAM_ID}">coaching</a>`, `<a href="/dashboard/${TEAM_ID}">team dashboard</a>`);
+      document.getElementById('sourceLinks').innerHTML = `You are ${esc(ST.me.email)}${ST.me.label ? ` (supervisor label: <b>${esc(ST.me.label)}</b>)` : ' — <i>no supervisor label registered for your email; weekly reviews default to the whole team. Register it under Manage roster.</i>'}. · ${links.join(' · ')}`;
+      const areas = ['abandon_rate','productivity','qa','csat','schedule','tickets','slack','training','attendance','other'];
+      document.getElementById('npArea').innerHTML = areas.map(a => `<option value="${a}">${a.replace('_', ' ')}</option>`).join('');
+      document.getElementById('npOwner').value = ST.me.label || ST.me.email.split('@')[0];
+      await Promise.all([loadReports(), loadPlans()]);
+    }
+
+    async function loadReports() {
+      REPORTS = (await api(`${API}/reports?limit=120`)).reports;
+      renderLists();
+      const recent = REPORTS.slice(0, 25);
+      document.getElementById('recent').innerHTML = recent.length ? `<table><thead><tr><th>Kind</th><th>Period</th><th>Who</th><th>Status</th><th>Pushed</th></tr></thead><tbody>${recent.map(r =>
+        `<tr><td>${esc(r.kind)}</td><td><a href="${linkFor(r)}">${esc(r.period_key)}${r.shift ? ' · ' + esc(r.shift) : ''}</a></td><td>${esc(r.supervisor || r.owner_email.split('@')[0])}</td><td><span class="pill ${r.status}">${esc(r.status)}</span></td><td>${(r.published || []).map(p => p.target).join(', ') || '—'}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">No reports yet.</div>';
+    }
+    const linkFor = r => r.kind === 'biweekly' ? `/supervisor/${TEAM_ID}/tracker/${r.period_key}` : `/supervisor/${TEAM_ID}/report/${r.id}`;
+
+    function renderLists() {
+      const date = document.getElementById('dailyDate').value;
+      const grid = document.getElementById('shiftGrid');
+      grid.innerHTML = (ST.shifts || []).map(s => {
+        const r = REPORTS.find(x => x.kind === 'daily' && x.period_key === date && x.shift === s.key);
+        return `<div class="shift"><b>${esc(s.label)}</b><span class="hint" style="margin:0">${esc(s.start)}–${esc(s.end)}</span>
+          <span>${r ? `<span class="pill ${r.status}">${r.status}</span> <span class="hint" style="margin:0">${esc(r.owner_email.split('@')[0])}${(r.published||[]).length ? ' · pushed' : ''}</span>` : '<span class="pill none">not started</span>'}</span>
+          <button class="act small" onclick="openDaily('${esc(s.key)}')">${r ? 'Open' : 'Start'}</button></div>`;
+      }).join('') + `<div class="shift"><b>Full day</b><span class="hint" style="margin:0">00:00–24:00</span><span>${(() => { const r = REPORTS.find(x => x.kind === 'daily' && x.period_key === date && !x.shift); return r ? `<span class="pill ${r.status}">${r.status}</span>` : '<span class="pill none">optional</span>'; })()}</span><button class="act small secondary" onclick="openDaily('')">Open</button></div>`;
+      const wk = document.getElementById('weekKey').value;
+      const wl = REPORTS.filter(x => x.kind === 'weekly' && x.period_key === wk);
+      document.getElementById('weekList').innerHTML = wl.length ? 'This week: ' + wl.map(r => `<a href="${linkFor(r)}">${esc(r.supervisor || 'Team')}</a> <span class="pill ${r.status}">${r.status}</span>`).join(' · ') : 'No weekly review started for this week.';
+      const mk = document.getElementById('monthKey').value;
+      const ml = REPORTS.filter(x => x.kind === 'monthly' && x.period_key === mk);
+      document.getElementById('monthList').innerHTML = ml.length ? 'This month: ' + ml.map(r => `<a href="${linkFor(r)}">${esc(r.supervisor || 'Team')}</a> <span class="pill ${r.status}">${r.status}</span>`).join(' · ') : '';
+      const tl = REPORTS.filter(x => x.kind === 'biweekly').slice(0, 4);
+      document.getElementById('trackerList').innerHTML = tl.length ? 'Trackers: ' + tl.map(r => `<a href="${linkFor(r)}">${esc(r.period_key)}</a> <span class="pill ${r.status}">${r.status}</span>`).join(' · ') : '';
+    }
+    document.getElementById('dailyDate').addEventListener('change', renderLists);
+    document.getElementById('weekKey').addEventListener('change', renderLists);
+    document.getElementById('monthKey').addEventListener('change', renderLists);
+
+    async function openDaily(shift) {
+      const st = document.getElementById('dailyStatus'); st.textContent = 'Opening…';
+      try {
+        const r = await post(`${API}/reports`, { kind: 'daily', period_key: document.getElementById('dailyDate').value, shift: shift || undefined });
+        location.href = r.url;
+      } catch (e) { st.textContent = e.message; }
+    }
+    async function openReport(kind) {
+      const key = kind === 'weekly' ? document.getElementById('weekKey').value : document.getElementById('monthKey').value;
+      const sup = (kind === 'weekly' ? document.getElementById('weekSup') : document.getElementById('monthSup')).value || null;
+      try { const r = await post(`${API}/reports`, { kind, period_key: key, supervisor: sup }); location.href = r.url; }
+      catch (e) { alert(e.message); }
+    }
+    function openTracker() { location.href = `/supervisor/${TEAM_ID}/tracker/${document.getElementById('meetingDate').value}`; }
+
+    async function saveTargets() {
+      const t = {}; document.querySelectorAll('[data-target]').forEach(i => { t[i.dataset.target] = i.value === '' ? null : Number(i.value); });
+      const st = document.getElementById('targetStatus');
+      try { await api(`${API}/targets`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targets: t }) }); st.textContent = 'Saved.'; }
+      catch (e) { st.textContent = e.message; }
+    }
+
+    async function loadPlans() {
+      const closed = document.getElementById('showClosed').checked;
+      const data = await api(`${API}/action-plans?status=${closed ? 'all' : 'open'}`);
+      const open = data.plans.filter(p => p.status === 'open' || p.status === 'in_progress').length;
+      const badge = document.getElementById('planCount'); badge.textContent = String(open);
+      document.getElementById('plans').innerHTML = data.plans.length ? `<table><thead><tr><th>Area</th><th>Agent</th><th>Issue</th><th>Cause</th><th>Action</th><th>Owner</th><th>Follow-up</th><th>Result</th><th>Status</th></tr></thead><tbody>${data.plans.map(p => `<tr>
+        <td>${esc(p.area)}</td><td>${esc(p.agent_name || '')}</td><td>${esc(p.issue)}</td><td>${esc(p.cause || '')}</td><td>${esc(p.action)}</td><td>${esc(p.owner)}</td><td>${esc(p.follow_up_date || '')}</td>
+        <td><input value="${esc(p.result || '')}" placeholder="result…" style="width:140px" onchange="patchPlan(${p.id}, { result: this.value })"></td>
+        <td><select onchange="patchPlan(${p.id}, { status: this.value })">${['open','in_progress','done','dropped'].map(s => `<option value="${s}"${s === p.status ? ' selected' : ''}>${s.replace('_',' ')}</option>`).join('')}</select></td></tr>`).join('')}</tbody></table>` : '<div class="empty">No action plans — open one when a metric is below target.</div>';
+    }
+    async function patchPlan(id, body) {
+      const st = document.getElementById('planStatus');
+      try { await api(`${API}/action-plans/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); st.textContent = 'Updated.'; loadPlans(); }
+      catch (e) { st.textContent = e.message; }
+    }
+    async function createPlan() {
+      const g = id => document.getElementById(id).value.trim();
+      const st = document.getElementById('planStatus');
+      try {
+        await post(`${API}/action-plans`, { area: g('npArea'), agent_name: g('npAgent') || undefined, issue: g('npIssue'), cause: g('npCause') || undefined, action: g('npAction'), owner: g('npOwner'), follow_up_date: g('npDue') || undefined });
+        ['npAgent','npIssue','npCause','npAction','npDue'].forEach(id => document.getElementById(id).value = '');
+        st.textContent = 'Added.'; loadPlans();
+      } catch (e) { st.textContent = e.message; }
+    }
+    load().catch(e => { document.getElementById('shiftGrid').innerHTML = `<div class="empty">Could not load: ${esc(e.message)}</div>`; });
+  </script>
+</body>
+</html>

@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Supervisor report</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/header.css" />
+  <style>
+    :root { --navy:#15192D; --accent:#1A61D9; --bg:#E7EFFB; --surface:#fff; --border:#c9d5e8; --text:#15192D; --muted:#5a6478; --green:#28A745; --amber:#E8A317; --red:#D9534F; }
+    *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:'DM Mono', monospace; background:var(--bg); color:var(--text); min-height:100vh; }
+    h1, h2, h3 { font-family:'Fraunces', serif; }
+    .container { max-width:1080px; margin:0 auto; padding:24px; display:flex; flex-direction:column; gap:16px; }
+    .card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:18px; }
+    .card h2 { font-size:1rem; margin-bottom:10px; color:var(--navy); }
+    .toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; position:sticky; top:0; z-index:5; background:var(--surface); }
+    .toolbar .grow { flex:1 1 auto; }
+    .meta { font-size:.74rem; color:var(--muted); line-height:1.5; }
+    .meta b { color:var(--text); }
+    button.act { font-family:'DM Mono', monospace; font-size:.74rem; padding:7px 13px; border-radius:6px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+    button.act.secondary { background:transparent; color:var(--accent); }
+    button.act.danger { border-color:var(--red); color:var(--red); background:transparent; }
+    button.act.small { padding:4px 9px; font-size:.66rem; }
+    button.act:disabled { opacity:.5; cursor:not-allowed; }
+    .pill { display:inline-block; font-size:.62rem; font-weight:500; padding:2px 8px; border-radius:999px; color:#fff; text-transform:uppercase; letter-spacing:.04em; }
+    .pill.draft { background:var(--muted); } .pill.submitted { background:var(--green); } .pill.ok { background:var(--green); } .pill.warn { background:var(--amber); } .pill.bad { background:var(--red); } .pill.info { background:var(--accent); }
+    .auto { background:var(--bg); border-radius:8px; padding:12px; font-size:.76rem; line-height:1.55; margin-bottom:12px; }
+    .auto .kpis { display:flex; gap:14px; flex-wrap:wrap; margin-bottom:8px; }
+    .auto .kpi { display:flex; flex-direction:column; min-width:110px; }
+    .auto .kpi b { font-family:'Fraunces', serif; font-size:1.25rem; }
+    .auto .kpi span { font-size:.64rem; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+    .auto ul { margin:4px 0 4px 18px; }
+    .auto .note { color:var(--muted); font-style:italic; }
+    table { width:100%; border-collapse:collapse; font-size:.74rem; }
+    th { text-align:left; font-size:.62rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); padding:5px 6px; border-bottom:1px solid var(--border); }
+    td { padding:5px 6px; border-bottom:1px solid #e3e9f3; vertical-align:top; }
+    td a { color:var(--accent); }
+    .below { color:var(--red); font-weight:500; }
+    .field { display:flex; flex-direction:column; gap:4px; margin-bottom:10px; }
+    .field label { font-size:.72rem; color:var(--text); }
+    .field .help { font-size:.66rem; color:var(--muted); }
+    textarea, input[type=text], input[type=date], select { font-family:'DM Mono', monospace; font-size:.78rem; padding:8px 10px; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--text); width:100%; }
+    textarea { min-height:64px; resize:vertical; }
+    .rows td input { width:100%; font-family:'DM Mono', monospace; font-size:.72rem; padding:4px 6px; border:1px solid var(--border); border-radius:4px; }
+    .status-line { font-size:.72rem; color:var(--muted); min-height:1em; }
+    .events { font-size:.66rem; color:var(--muted); }
+    pre.preview { white-space:pre-wrap; font-size:.74rem; line-height:1.5; background:var(--bg); border-radius:8px; padding:12px; }
+    .empty { color:var(--muted); font-size:.76rem; }
+    @media print {
+      body { background:#fff; } .toolbar, .noprint, #appHeader, .qa-header { display:none !important; }
+      .card { border:none; padding:0 0 12px; } textarea, input, select { border:none; padding:0; background:transparent; resize:none; }
+      textarea { min-height:0; height:auto; overflow:visible; }
+    }
+  </style>
+</head>
+<body>
+  <div id="appHeader"></div>
+  <div class="container">
+    <div class="card toolbar">
+      <div class="meta grow" id="meta">Loading…</div>
+      <button class="act secondary small" onclick="location.href=`/supervisor/${TEAM_ID}`">‹ Hub</button>
+      <button class="act secondary small" onclick="reload(true)" title="Recompute the machine facts">Refresh facts</button>
+      <button class="act secondary small" id="liveBtn" hidden onclick="fetchLive()" title="Mission Control ticket counts + unattended Slack tags">Fetch tickets &amp; Slack</button>
+      <button class="act secondary small" id="pullBtn" hidden onclick="refreshPull()" title="Re-pull Dialpad productivity + CSAT for the week">Re-pull Dialpad</button>
+      <button class="act secondary small" onclick="preview()">Preview</button>
+      <button class="act secondary small" onclick="window.print()">Print</button>
+      <button class="act small" id="saveBtn" onclick="save()">Save draft</button>
+      <button class="act small" id="submitBtn" onclick="submit()">Submit</button>
+      <button class="act secondary small" id="reopenBtn" hidden onclick="reopen()">Reopen</button>
+      <button class="act secondary small" id="slackBtn" onclick="publish('slack')">Push → Slack</button>
+      <button class="act secondary small" id="sheetBtn" onclick="publish('sheet')">Push → Sheet</button>
+    </div>
+    <div class="status-line noprint" id="status"></div>
+    <div id="sections"></div>
+    <div class="card noprint" id="previewCard" hidden><h2>Preview (what Slack / the sheet will get)</h2><pre class="preview" id="previewBody"></pre></div>
+    <div class="card noprint"><h2>Add an action plan from this report</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start">
+        <select id="npArea" style="width:150px"></select>
+        <input type="text" id="npAgent" placeholder="Agent (optional)" style="width:150px">
+        <input type="text" id="npIssue" placeholder="Issue" style="flex:1 1 200px">
+        <input type="text" id="npCause" placeholder="Cause" style="flex:1 1 160px">
+        <input type="text" id="npAction" placeholder="Action" style="flex:1 1 200px">
+        <input type="text" id="npOwner" placeholder="Owner" style="width:110px">
+        <input type="date" id="npDue" style="width:150px">
+        <button class="act small" onclick="createPlan()">Add</button>
+      </div>
+      <div class="status-line" id="planStatus"></div>
+    </div>
+    <div class="card noprint"><h2>History</h2><div class="events" id="events"></div></div>
+  </div>
+
+  <script src="/static/header.js"></script>
+  <script>
+    const M = location.pathname.match(/^\/supervisor\/([^\/]+)\/report\/(\d+)/);
+    const TEAM_ID = M ? M[1] : 'member_support'; const ID = M ? M[2] : '';
+    const API = `/api/${TEAM_ID}/sup`;
+    const TEAM_LABEL = { member_support: 'Member Support', sales: 'Sales', sofia: 'Sofia AI' }[TEAM_ID] || TEAM_ID;
+    window.QAHeader.init({ page: 'plain', team: TEAM_ID, title: `Supervisor report — ${TEAM_LABEL}` });
+    const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+    const pct = v => v === null || v === undefined ? '—' : `${v}%`;
+    const num = (v, d = 1) => v === null || v === undefined ? '—' : String(Math.round(Number(v) * 10 ** d) / 10 ** d);
+    const sec = v => { if (v === null || v === undefined) return '—'; const s = Math.round(v); return s >= 60 ? `${Math.floor(s/60)}m ${String(s%60).padStart(2,'0')}s` : `${s}s`; };
+    async function api(url, opts) { const r = await fetch(url, opts); const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.detail || d.error || `HTTP ${r.status}`); return d; }
+    const post = (url, body) => api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+    const setStatus = t => { document.getElementById('status').textContent = t; };
+    let R = null;
+
+    // ── auto-facts panels ─────────────────────────────────────────────────
+    const kpi = (label, value) => `<div class="kpi"><b>${value}</b><span>${esc(label)}</span></div>`;
+    const tgt = (v, t, lowerIsBetter) => (v === null || v === undefined || t === null || t === undefined) ? '' : ` <span class="pill ${lowerIsBetter ? (v <= t ? 'ok' : 'bad') : (v >= t ? 'ok' : 'bad')}">${lowerIsBetter ? (v <= t ? 'on target' : 'over target') : (v >= t ? 'on target' : 'below target')}</span>`;
+    const AUTO = {
+      calls(a) {
+        const c = a.calls || {}; const p = c.shift || c.full_day;
+        let h = `<div class="kpis">`;
+        if (p) h += kpi('Abandon rate', pct(p.abandon_pct) + tgt(p.abandon_pct, c.target, true)) + kpi('Abandoned', `${p.abandoned}`) + kpi('Inbound', `${p.inbound}`) + kpi('Service level', pct(p.sl_pct)) + kpi('ASA', sec(p.asa_s)) + kpi('Avg wait (abandoned)', sec(p.avg_wait_abandoned_s)) + kpi('Longest wait', sec(p.longest_wait_abandoned_s)) + kpi('Agents on duty', `${p.agents_on_duty ?? '—'}`);
+        h += `</div>`;
+        if (c.note) h += `<div class="note">${esc(c.note)}</div>`;
+        if (c.by_shift) h += `<table><thead><tr><th>Window</th><th>Inbound</th><th>Abandoned</th><th>Rate</th><th>SL</th><th>On duty</th></tr></thead><tbody>${Object.entries(c.by_shift).map(([k, v]) => v ? `<tr><td>${esc(k)}</td><td>${v.inbound}</td><td>${v.abandoned}</td><td>${pct(v.abandon_pct)}</td><td>${pct(v.sl_pct)}</td><td>${v.agents_on_duty ?? '—'}</td></tr>` : '').join('')}${c.full_day ? `<tr><td><b>Full day</b></td><td>${c.full_day.inbound}</td><td>${c.full_day.abandoned}</td><td>${pct(c.full_day.abandon_pct)}</td><td>${pct(c.full_day.sl_pct)}</td><td>${c.full_day.agents_on_duty ?? '—'}</td></tr>` : ''}</tbody></table>`;
+        if (c.mtd) h += `<div style="margin-top:6px">Month to date: <b>${pct(c.mtd.abandon_pct)}</b> (${c.mtd.abandoned} of ${c.mtd.inbound} inbound over ${c.mtd.days_with_data} days${c.mtd.days_missing ? `, ${c.mtd.days_missing} missing` : ''})${c.sheet_url ? ` · <a href="${esc(c.sheet_url)}" target="_blank" rel="noopener">EOD workbook</a>` : ''}</div>`;
+        return h;
+      },
+      attendance(a) {
+        const t = a.attendance || {};
+        return `<div class="kpis">${kpi('On duty (Dialpad)', `${t.agents_on_duty ?? '—'}`)}${kpi('Handled calls', `${t.agents_handled ?? '—'}`)}${kpi('Active roster', `${t.roster_active ?? '—'}`)}</div><div class="note">${esc(t.note || '')}${t.attendance_channel ? ` · <a href="https://hellolanding.slack.com/archives/${esc(t.attendance_channel)}" target="_blank" rel="noopener">attendance channel</a>` : ''}</div>`;
+      },
+      tickets(a) {
+        const t = a.tickets || {};
+        if (t.status !== 'ready') return `<div class="note">Ticket counts ${t.status === 'unavailable' ? 'unavailable: ' + esc(t.error) : 'not fetched yet — use "Fetch tickets & Slack"'}. Queue ${t.queue_id ?? ''}: ${(t.categories || []).join(', ')}. Enter counts manually below if needed.</div>`;
+        return `<div class="note">Mission Control queue ${t.queue_id}, as of ${esc(String(t.as_of || '?').slice(0, 16).replace('T', ' '))} · fetched ${esc(String(t.fetched_at || '').slice(11, 16))} UTC</div><table><thead><tr><th>Category</th><th>New</th><th>Working</th><th>Need action</th><th>Total</th></tr></thead><tbody>${(t.categories || []).map(c => `<tr><td>${esc(c.label)}</td><td>${c.new}</td><td>${c.working}</td><td>${c.need_action}</td><td>${c.total}</td></tr>`).join('')}<tr><td><b>Queue total (open)</b></td><td colspan="4">${t.total_open}</td></tr></tbody></table>`;
+      },
+      slack(a) {
+        const s = a.slack || {};
+        if (s.status !== 'ready') return `<div class="note">Unattended-mention audit ${s.status === 'unavailable' ? 'unavailable: ' + esc(s.error) : 'not fetched yet — use "Fetch tickets & Slack"'}. List pending tags manually below.</div>`;
+        return `<div class="kpis">${kpi('Unattended mentions', `${s.count}`)}${kpi('Scanned', `${s.scanned}`)}</div>${s.items && s.items.length ? `<ul>${s.items.map(i => `<li>#${esc(i.channel)} ${esc(String(i.ts_iso).slice(11, 16))} ${esc(i.author)} — ${esc(i.text)} <a href="${esc(i.permalink)}" target="_blank" rel="noopener">open</a></li>`).join('')}</ul>` : '<div class="note">Every @member-support / @member-support-mgrs mention in the window has a reply or a reaction.</div>'}${s.note ? `<div class="note">${esc(s.note)}</div>` : ''}`;
+      },
+      follow_ups(a) {
+        const f = a.follow_ups || {}; const q = a.qa_today || {};
+        return `<div class="kpis">${kpi('Open action plans', `${f.open_count ?? 0}`)}${kpi('QA reviews today', `${q.human_reviews ?? 0}`)}${kpi('Coachings today', `${q.coachings_conducted ?? 0}`)}</div>${(f.open_action_plans || []).length ? `<table><thead><tr><th>Area</th><th>Issue</th><th>Action</th><th>Owner</th><th>Follow-up</th></tr></thead><tbody>${f.open_action_plans.map(p => `<tr><td>${esc(p.area)}</td><td>${esc((p.agent_name ? p.agent_name + ': ' : '') + p.issue)}</td><td>${esc(p.action)}</td><td>${esc(p.owner)}</td><td>${esc(p.follow_up_date || '')}</td></tr>`).join('')}</tbody></table>` : ''}`;
+      },
+      abandon(a) {
+        const ab = a.abandon || {}; const w = ab.week || ab.month || {}; const isMonth = !!ab.month;
+        let h = `<div class="kpis">${kpi(isMonth ? (a.period && a.period.is_closed ? 'Month' : 'Month to date') : 'Week', pct(w.abandon_pct) + tgt(w.abandon_pct, ab.target, true))}${kpi('Abandoned', `${w.abandoned ?? 0}`)}${kpi('Inbound', `${w.inbound ?? 0}`)}${kpi('Service level', pct(w.sl_pct))}${isMonth ? kpi('Prev month', pct(ab.prev_month && ab.prev_month.abandon_pct)) : kpi('Prev week', pct(w.prev_week && w.prev_week.abandon_pct))}${!isMonth && ab.mtd ? kpi('Month to date', pct(ab.mtd.abandon_pct)) : ''}</div>`;
+        if ((w.days_missing || []).length) h += `<div class="note">No call data for ${w.days_missing.length} day(s): ${w.days_missing.join(', ')}</div>`;
+        if (w.by_day && w.by_day.length) h += `<table><thead><tr><th>Day</th><th>Inbound</th><th>Abandoned</th><th>Rate</th><th>SL</th></tr></thead><tbody>${w.by_day.map(d => `<tr><td>${esc(d.weekday)} ${esc(d.date)}</td><td>${d.inbound}</td><td>${d.abandoned}</td><td class="${ab.target !== null && d.abandon_pct > ab.target ? 'below' : ''}">${pct(d.abandon_pct)}</td><td>${pct(d.sl_pct)}</td></tr>`).join('')}</tbody></table>`;
+        if (ab.weeks) h += `<div style="margin-top:6px">By week: ${ab.weeks.map(x => `${esc(x.week)} <b>${pct(x.abandon_pct)}</b>`).join(' · ')}</div>`;
+        if (w.by_shift) h += `<div style="margin-top:6px">By shift: ${Object.entries(w.by_shift).map(([k, v]) => `${esc(k)} <b>${pct(v.abandon_pct)}</b>`).join(' · ')}</div>`;
+        if (w.worst_days) h += `<div>Worst days: ${w.worst_days.map(d => `${esc(d.date)} ${pct(d.abandon_pct)}`).join(', ') || '—'}${ab.sheet_url ? ` · <a href="${esc(ab.sheet_url)}" target="_blank" rel="noopener">EOD workbook</a>` : ''}</div>`;
+        return h;
+      },
+      productivity(a) {
+        const p = a.productivity || {};
+        const link = p.wfm_dashboard_url ? `<a href="${esc(p.wfm_dashboard_url)}" target="_blank" rel="noopener">Workforce Management dashboard</a> (primary source for trends; its productivity % is the share of logged time not "Available")` : '';
+        if (p.status !== 'ready') return `<div class="note">Dialpad pull <b>${esc(p.status)}</b>${p.error ? ': ' + esc(p.error) : ''}${p.status === 'pending' || p.status === 'fetching' ? ' — the hourly job is fetching the week\'s per-agent stats; refresh in a minute.' : ''} · ${link}</div>`;
+        let h = `<div class="kpis">${kpi('Team calls / on-duty hour', num(p.team && p.team.per_hour, 2) + tgt(p.team && p.team.per_hour, p.target, false))}${kpi('Answered', `${p.team && p.team.answered}`)}${kpi('Outbound', `${p.team && p.team.outbound}`)}${kpi('On-duty hours', num((p.team && p.team.on_duty_min || 0) / 60, 0))}</div><div class="note">${esc(p.definition)} · window ${esc(p.window && p.window.start)} → ${esc(p.window && p.window.end)} · ${link}</div><table><thead><tr><th>Agent</th><th>Calls/h</th><th>Answered</th><th>Outbound</th><th>Missed</th><th>Talk min</th><th>On-duty h</th><th>Days</th></tr></thead><tbody>${(p.agents || []).map(x => `<tr><td>${esc(x.name)}${x.on_roster ? '' : ' <span class="pill info">not on roster</span>'}</td><td class="${p.target !== null && x.per_hour !== null && x.per_hour < p.target ? 'below' : ''}">${num(x.per_hour, 2)}</td><td>${x.answered}</td><td>${x.outbound}</td><td>${x.missed}</td><td>${num(x.talk_min, 0)}</td><td>${num(x.on_duty_min / 60, 1)}</td><td>${x.days_on_duty}</td></tr>`).join('')}</tbody></table>`;
+        const w = p.wfm;
+        if (w && w.status === 'ready') h += `<div style="margin-top:8px"><b>Workforce Management parity</b> <span class="note">(${esc(w.source)} — productivity = share of logged time not Available / Unavailable, the dashboard's formula)</span><table><thead><tr><th>Agent</th><th>Productivity %</th><th>Logged h</th><th>Available h</th><th>Status mix (h)</th></tr></thead><tbody>${w.agents.map(x => `<tr><td>${esc(x.name || x.email)}</td><td>${num(x.productivity_pct, 1)}%</td><td>${num(x.logged_h, 1)}</td><td>${num(x.available_h, 1)}</td><td>${esc(Object.entries(x.by_status || {}).filter(([k]) => k !== 'Available').sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => `${k} ${v}`).join(' · '))}</td></tr>`).join('')}</tbody></table></div>`;
+        else if (w) h += `<div class="note">WFM parity pull unavailable: ${esc(w.error)}</div>`;
+        return h;
+      },
+      qa(a) {
+        const q = a.qa || {}; const c = a.coaching || {};
+        let h = `<div class="kpis">${kpi('Supervisor reviews', `${q.totals && q.totals.human_reviews}`)}${kpi('Target / agent', `${q.target_reviews ?? '—'}`)}${kpi('Agents under target', `${q.totals && q.totals.agents_below_target} of ${q.totals && q.totals.agents}`)}${kpi('Avg score', num(q.totals && q.totals.avg_score) + tgt(q.totals && q.totals.avg_score, q.target_score, false))}${kpi('AI scorings', `${q.totals && q.totals.ai_reviews}`)}${kpi('Coachings conducted', `${c.counts && c.counts.conducted}`)}${kpi('Confirmations due', `${c.counts && c.counts.due_confirmations}`)}</div>`;
+        h += `<table><thead><tr><th>Agent</th><th>Reviews</th><th>AI</th><th>Avg</th><th>Needs coaching</th><th>Last opportunity noted</th></tr></thead><tbody>${(q.per_agent || []).map(x => `<tr><td><a href="/dashboard/${TEAM_ID}/agent/${encodeURIComponent(x.name)}" target="_blank" rel="noopener">${esc(x.name)}</a></td><td class="${x.meets_target === false ? 'below' : ''}">${x.human_reviews}</td><td>${x.ai_reviews}</td><td>${num(x.avg_score)}</td><td>${x.needs_coaching}</td><td>${esc(x.last_opportunity || '')}</td></tr>`).join('')}</tbody></table>`;
+        if ((c.sessions || []).length) h += `<div style="margin-top:8px"><b>Coaching conducted in the window</b><ul>${c.sessions.map(s => `<li>${esc(s.agent_name)} — ${esc(String(s.completed_at || '').slice(0, 10))}${s.tags && s.tags.length ? ' [' + esc(s.tags.join(', ')) + ']' : ''}: ${esc(s.coaching_summary || '')}${s.action_plan ? ' → ' + esc(s.action_plan) : ''}${s.action_plan_deadline ? ' (by ' + esc(s.action_plan_deadline) + ')' : ''} <a href="/coaching/${TEAM_ID}/session/${s.id}" target="_blank" rel="noopener">session</a></li>`).join('')}</ul></div>`;
+        if ((c.due_confirmations || []).length) h += `<div class="note">Commitments awaiting confirmation: ${c.due_confirmations.map(d => `${esc(d.agent_name)} (${esc(d.action_plan_deadline)})`).join(', ')} — <a href="/coaching/${TEAM_ID}">coaching queue</a></div>`;
+        return h;
+      },
+      csat(a) {
+        const c = a.csat || {};
+        if (c.status !== 'ready') return `<div class="note">Dialpad CSAT pull <b>${esc(c.status)}</b>${c.error ? ': ' + esc(c.error) : ''}${c.status === 'pending' || c.status === 'fetching' ? ' — fetching with the productivity pull; refresh in a minute.' : ''}</div>`;
+        let h = `<div class="kpis">${kpi('Team CSAT', num(c.team_avg, 2) + tgt(c.team_avg, c.target, false))}${kpi('Responses', `${c.responses}`)}${kpi('Attributed', `${c.attributed}`)}${kpi('Below ' + (c.target ?? '—'), `${(c.below_target || []).length}`)}</div>${c.note ? `<div class="note">${esc(c.note)}</div>` : ''}<table><thead><tr><th>Agent</th><th>Avg</th><th>Responses</th><th>Low-scored calls to review</th></tr></thead><tbody>${(c.agents || []).map(x => `<tr><td>${esc(x.name)}</td><td class="${c.target !== null && x.avg !== null && x.avg < c.target ? 'below' : ''}">${num(x.avg, 2)}</td><td>${x.responses}</td><td>${(x.low_calls || []).map(l => `<a href="${esc(l.link)}" target="_blank" rel="noopener">${esc(l.call_id.slice(-6))} (${l.score})</a>`).join(' · ')}</td></tr>`).join('')}</tbody></table>`;
+        const w = c.wfm;
+        if (w && w.status === 'ready') h += `<div style="margin-top:8px"><b>Workforce Management parity</b> <span class="note">(${esc(w.source)} — human responses only; team ${num(w.team_avg, 2)} from ${w.responses})</span><table><thead><tr><th>Operator</th><th>Avg</th><th>Responses</th></tr></thead><tbody>${w.agents.map(x => `<tr><td>${esc(x.name || x.operator)}</td><td class="${c.target !== null && x.avg !== null && x.avg < c.target ? 'below' : ''}">${num(x.avg, 2)}</td><td>${x.responses}</td></tr>`).join('')}</tbody></table></div>`;
+        else if (w) h += `<div class="note">WFM parity pull unavailable: ${esc(w.error)}</div>`;
+        return h;
+      },
+      action_plans(a) {
+        const p = a.action_plans || {}; const open = p.open || [];
+        return `<div class="kpis">${kpi('Open', `${open.length}`)}${kpi('Recently closed', `${(p.recently_closed || p.closed_this_month || []).length}`)}</div>${open.length ? `<table><thead><tr><th>Area</th><th>Issue</th><th>Cause</th><th>Action</th><th>Owner</th><th>Follow-up</th><th>Status</th></tr></thead><tbody>${open.map(x => `<tr><td>${esc(x.area)}</td><td>${esc((x.agent_name ? x.agent_name + ': ' : '') + x.issue)}</td><td>${esc(x.cause || '')}</td><td>${esc(x.action)}</td><td>${esc(x.owner)}</td><td>${esc(x.follow_up_date || '')}</td><td>${esc(x.status)}</td></tr>`).join('')}</tbody></table>` : '<div class="note">No open action plans.</div>'}${(p.recently_closed || p.closed_this_month || []).length ? `<div style="margin-top:6px"><b>Closed</b><ul>${(p.recently_closed || p.closed_this_month).map(x => `<li>${esc(x.issue)} → ${esc(x.result || 'no result recorded')}</li>`).join('')}</ul></div>` : ''}`;
+      },
+    };
+
+    // ── manual fields ─────────────────────────────────────────────────────
+    function fieldHtml(f, v) {
+      if (f.type === 'textarea') return `<div class="field"><label>${esc(f.label)}</label>${f.help ? `<span class="help">${esc(f.help)}</span>` : ''}<textarea data-key="${esc(f.key)}">${esc(v ?? '')}</textarea></div>`;
+      if (f.type === 'text') return `<div class="field"><label>${esc(f.label)}</label>${f.help ? `<span class="help">${esc(f.help)}</span>` : ''}<input type="text" data-key="${esc(f.key)}" value="${esc(v ?? '')}"></div>`;
+      if (f.type === 'checkbox') return `<div class="field"><label><input type="checkbox" data-key="${esc(f.key)}" ${v ? 'checked' : ''}> ${esc(f.label)}</label></div>`;
+      if (f.type === 'rows') {
+        const rows = Array.isArray(v) && v.length ? v : [{}];
+        return `<div class="field"><label>${esc(f.label)}</label>${f.help ? `<span class="help">${esc(f.help)}</span>` : ''}<table class="rows" data-rows="${esc(f.key)}"><thead><tr>${f.columns.map(c => `<th>${esc(c.label)}</th>`).join('')}<th class="noprint"></th></tr></thead><tbody>${rows.map(r => rowHtml(f, r)).join('')}</tbody></table><div class="noprint"><button class="act small secondary" type="button" onclick="addRow('${esc(f.key)}')">+ row</button></div></div>`;
+      }
+      return '';
+    }
+    const rowHtml = (f, r) => `<tr>${f.columns.map(c => `<td${c.width ? ` style="width:${c.width}px"` : ''}><input data-col="${esc(c.key)}" value="${esc(r[c.key] ?? '')}"></td>`).join('')}<td class="noprint"><button class="act small danger" type="button" onclick="this.closest('tr').remove()">×</button></td></tr>`;
+    function addRow(key) { const f = specField(key); document.querySelector(`[data-rows="${key}"] tbody`).insertAdjacentHTML('beforeend', rowHtml(f, {})); }
+    function specField(key) { for (const s of R.spec) for (const f of s.fields) if (f.key === key) return f; }
+    function collect() {
+      const m = { ...(R.manual || {}) };
+      document.querySelectorAll('[data-key]').forEach(el => { m[el.dataset.key] = el.type === 'checkbox' ? el.checked : el.value; });
+      document.querySelectorAll('[data-rows]').forEach(t => {
+        const f = specField(t.dataset.rows);
+        m[t.dataset.rows] = [...t.querySelectorAll('tbody tr')].map(tr => Object.fromEntries(f.columns.map(c => [c.key, tr.querySelector(`[data-col="${c.key}"]`).value]))).filter(r => Object.values(r).some(v => String(v).trim()));
+      });
+      return m;
+    }
+
+    function render() {
+      const a = R.auto || {};
+      const scope = R.kind === 'daily' ? (a.period && a.period.shift ? `${a.period.shift.label} · ${a.period.shift.window}` : 'Full day') : (R.supervisor ? `Supervisor ${R.supervisor}` : 'Whole team');
+      document.getElementById('meta').innerHTML = `<b>${esc(R.kind)}</b> · <b>${esc(R.period.label)}</b> · ${esc(scope)} · <span class="pill ${R.status}">${R.status}</span> · owner ${esc(R.owner_email.split('@')[0])}${R.submitted_at ? ` · submitted ${esc(R.submitted_at.slice(0, 16).replace('T', ' '))} UTC` : ''}${(R.published || []).length ? ` · pushed: ${R.published.map(p => p.permalink ? `<a href="${esc(p.permalink)}" target="_blank" rel="noopener">${p.target}</a>` : p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">${p.target}</a>` : p.target).join(', ')}` : ''}`;
+      document.getElementById('liveBtn').hidden = R.kind !== 'daily';
+      document.getElementById('pullBtn').hidden = R.kind !== 'weekly';
+      document.getElementById('reopenBtn').hidden = R.status !== 'submitted';
+      document.getElementById('submitBtn').hidden = R.status === 'submitted';
+      document.getElementById('sections').innerHTML = R.spec.map(s => `<div class="card"><h2>${esc(s.title)}</h2>${s.auto && AUTO[s.auto] ? `<div class="auto">${AUTO[s.auto](a)}</div>` : ''}${s.fields.map(f => fieldHtml(f, (R.manual || {})[f.key])).join('')}</div>`).join('');
+      document.getElementById('events').innerHTML = (R.events || []).map(e => `${esc(e.at.slice(0, 16).replace('T', ' '))} · ${esc(e.action)} · ${esc(e.actor_email.split('@')[0])}`).join('<br>') || 'no events';
+      const areas = ['abandon_rate','productivity','qa','csat','schedule','tickets','slack','training','attendance','other'];
+      document.getElementById('npArea').innerHTML = areas.map(x => `<option value="${x}">${x.replace('_', ' ')}</option>`).join('');
+      document.getElementById('npOwner').value = document.getElementById('npOwner').value || R.supervisor || R.owner_email.split('@')[0];
+    }
+    async function reload(force) {
+      setStatus(force ? 'Recomputing…' : 'Loading…');
+      R = await api(`${API}/reports/${ID}${force ? '?recompute=1' : ''}`);
+      render(); setStatus('');
+    }
+    async function save() {
+      setStatus('Saving…');
+      try { const r = await api(`${API}/reports/${ID}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ manual: collect() }) }); R.manual = collect(); setStatus(`Saved ${r.updated_at.slice(11, 19)} UTC.`); }
+      catch (e) { setStatus('Save failed: ' + e.message); }
+    }
+    async function submit() {
+      if (!confirm('Submit this report? The machine facts are frozen into the record (you can reopen it later).')) return;
+      setStatus('Submitting…');
+      try { await post(`${API}/reports/${ID}/submit`, { manual: collect() }); await reload(); setStatus('Submitted.'); }
+      catch (e) { setStatus('Submit failed: ' + e.message); }
+    }
+    async function reopen() { try { await post(`${API}/reports/${ID}/reopen`); await reload(); } catch (e) { setStatus(e.message); } }
+    async function fetchLive() {
+      setStatus('Fetching ticket counts and Slack mentions…');
+      try { await save(); await post(`${API}/reports/${ID}/live`); await reload(); setStatus('Live sections updated.'); }
+      catch (e) { setStatus('Live fetch failed: ' + e.message); }
+    }
+    async function refreshPull() {
+      setStatus('Re-pulling Dialpad…');
+      try { const r = await post(`${API}/reports/${ID}/refresh-pull`); setStatus(`Pull queued (${r.ticker && r.ticker.status}). Refresh facts in about a minute.`); }
+      catch (e) { setStatus('Pull failed: ' + e.message); }
+    }
+    async function preview() {
+      await save();
+      const p = await api(`${API}/reports/${ID}/preview`);
+      document.getElementById('previewBody').textContent = p.text; document.getElementById('previewCard').hidden = false;
+      document.getElementById('previewCard').scrollIntoView({ behavior: 'smooth' });
+    }
+    async function publish(target) {
+      await save();
+      if (!confirm(`Push this ${R.kind} report to ${target === 'slack' ? 'the team Slack channel' : 'the EOD Google Sheet'}?`)) return;
+      setStatus(`Pushing to ${target}…`);
+      try { const r = await post(`${API}/reports/${ID}/publish`, { target }); await reload(); setStatus(`Pushed to ${target}${r.permalink ? ' — ' + r.permalink : r.tab ? ' — tab ' + r.tab : ''}.`); }
+      catch (e) { setStatus(`Push to ${target} failed: ${e.message}`); }
+    }
+    async function createPlan() {
+      const g = id => document.getElementById(id).value.trim();
+      const st = document.getElementById('planStatus');
+      try {
+        await post(`${API}/action-plans`, { area: g('npArea'), agent_name: g('npAgent') || undefined, issue: g('npIssue'), cause: g('npCause') || undefined, action: g('npAction'), owner: g('npOwner'), follow_up_date: g('npDue') || undefined, source_report_id: Number(ID) });
+        ['npAgent','npIssue','npCause','npAction','npDue'].forEach(id => document.getElementById(id).value = '');
+        st.textContent = 'Action plan added.'; await reload();
+      } catch (e) { st.textContent = e.message; }
+    }
+    document.addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); save(); } });
+    reload().catch(e => setStatus('Could not load: ' + e.message));
+  </script>
+</body>
+</html>

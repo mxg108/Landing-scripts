@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Supervisor meeting tracker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/header.css" />
+  <style>
+    :root { --navy:#15192D; --accent:#1A61D9; --bg:#E7EFFB; --surface:#fff; --border:#c9d5e8; --text:#15192D; --muted:#5a6478; --green:#28A745; --amber:#E8A317; --red:#D9534F; }
+    *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:'DM Mono', monospace; background:var(--bg); color:var(--text); min-height:100vh; }
+    h1, h2, h3 { font-family:'Fraunces', serif; }
+    .container { max-width:1180px; margin:0 auto; padding:24px; display:flex; flex-direction:column; gap:16px; }
+    .card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:18px; }
+    .card h2 { font-size:1rem; margin-bottom:8px; color:var(--navy); }
+    .toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; position:sticky; top:0; z-index:5; }
+    .toolbar .grow { flex:1 1 auto; }
+    .meta { font-size:.74rem; color:var(--muted); line-height:1.5; } .meta b { color:var(--text); }
+    button.act { font-family:'DM Mono', monospace; font-size:.74rem; padding:7px 13px; border-radius:6px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+    button.act.secondary { background:transparent; color:var(--accent); } button.act.small { padding:4px 9px; font-size:.66rem; }
+    .pill { display:inline-block; font-size:.62rem; font-weight:500; padding:2px 8px; border-radius:999px; color:#fff; text-transform:uppercase; letter-spacing:.04em; }
+    .pill.draft { background:var(--muted); } .pill.submitted { background:var(--green); }
+    table { width:100%; border-collapse:collapse; font-size:.74rem; table-layout:fixed; }
+    th { text-align:left; font-size:.62rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); padding:6px; border-bottom:1px solid var(--border); }
+    td { padding:6px; border-bottom:1px solid #e3e9f3; vertical-align:top; line-height:1.45; word-wrap:break-word; }
+    td.h { font-weight:500; width:170px; }
+    td[contenteditable] { background:#f6f9ff; border-radius:4px; min-height:1.4em; outline:none; }
+    td[contenteditable]:focus { background:#fff; box-shadow:inset 0 0 0 1px var(--accent); }
+    td[data-auto="1"] { color:#2e3a55; }
+    .hint { font-size:.7rem; color:var(--muted); line-height:1.5; margin-bottom:8px; }
+    input[type=text], textarea { font-family:'DM Mono', monospace; font-size:.78rem; padding:8px 10px; border:1px solid var(--border); border-radius:6px; width:100%; }
+    textarea { min-height:60px; resize:vertical; }
+    .field { display:flex; flex-direction:column; gap:4px; margin-bottom:10px; } .field label { font-size:.72rem; }
+    .status-line { font-size:.72rem; color:var(--muted); min-height:1em; }
+    .data { font-size:.72rem; color:var(--muted); display:flex; gap:14px; flex-wrap:wrap; }
+    .data b { color:var(--text); }
+    @media print { body { background:#fff; } .toolbar, .noprint, #appHeader, .qa-header { display:none !important; } .card { border:none; padding:0 0 14px; } td[contenteditable] { background:transparent; } }
+  </style>
+</head>
+<body>
+  <div id="appHeader"></div>
+  <div class="container">
+    <div class="card toolbar">
+      <div class="meta grow" id="meta">Loading…</div>
+      <button class="act secondary small" onclick="location.href=`/supervisor/${TEAM_ID}`">‹ Hub</button>
+      <button class="act secondary small" onclick="load()">Refresh</button>
+      <button class="act secondary small" onclick="window.print()">Print</button>
+      <button class="act small" onclick="save()">Save</button>
+      <button class="act small" id="submitBtn" onclick="submit()">Submit</button>
+      <button class="act secondary small" onclick="publish('slack')">Push → Slack</button>
+      <button class="act secondary small" onclick="publish('sheet')">Push → Sheet</button>
+    </div>
+    <div class="status-line noprint" id="status"></div>
+    <div class="hint noprint">Blue cells are editable. Grey text is what the system pre-filled from last week's review, the fortnight's shift reports and the action-plan register; overwrite it where you know better. Empty cells you leave empty stay empty.</div>
+
+    <div class="card"><h2>Meeting</h2>
+      <div class="data" id="dataLine"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+        <div class="field"><label>Supervisor presenting <span class="hint" id="rotationHint"></span></label><input type="text" data-m="presenter"></div>
+        <div class="field"><label>Presentation / material link</label><input type="text" data-m="material"></div>
+        <div class="field"><label>Required topics / key learnings / expectations for the team meeting</label><textarea data-m="topics"></textarea></div>
+        <div class="field"><label>Training / refresher topics</label><textarea data-m="training_topics"></textarea></div>
+      </div>
+    </div>
+
+    <div class="card"><h2>1. Performance</h2><table id="t1"></table></div>
+    <div class="card"><h2>2. Performance &amp; coaching actions</h2><table id="t2"></table></div>
+    <div class="card"><h2>3. Operational review</h2><table id="t3"></table></div>
+    <div class="card"><h2>4. Bi-weekly actions &amp; decisions</h2><table id="t4"></table><div class="noprint" style="margin-top:6px"><button class="act small secondary" onclick="addDecision()">+ row</button> <span class="hint">Rows come from open action plans unless you write your own.</span></div></div>
+    <div class="card"><h2>5. Schedule review</h2><table id="t5"></table></div>
+    <div class="card noprint"><h2>Shift reports in the fortnight</h2><div id="dailies" class="hint"></div></div>
+  </div>
+
+  <script src="/static/header.js"></script>
+  <script>
+    const M = location.pathname.match(/^\/supervisor\/([^\/]+)\/tracker\/(\d{4}-\d{2}-\d{2})/);
+    const TEAM_ID = M ? M[1] : 'member_support'; const DATE = M ? M[2] : '';
+    const API = `/api/${TEAM_ID}/sup`;
+    const TEAM_LABEL = { member_support: 'Member Support', sales: 'Sales', sofia: 'Sofia AI' }[TEAM_ID] || TEAM_ID;
+    window.QAHeader.init({ page: 'plain', team: TEAM_ID, title: `Meeting tracker — ${TEAM_LABEL} · ${DATE}` });
+    const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+    const pct = v => v === null || v === undefined ? '—' : `${v}%`;
+    async function api(url, opts) { const r = await fetch(url, opts); const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.detail || d.error || `HTTP ${r.status}`); return d; }
+    const post = (url, body) => api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+    const setStatus = t => document.getElementById('status').textContent = t;
+    let T = null;
+
+    // editable cell: data-path = where the override lives in manual; data-autoval = what the system computed
+    const cell = (path, value, autoVal) => `<td contenteditable="true" data-path="${esc(path)}" data-autoval="${esc(autoVal ?? '')}" ${value && value === autoVal ? 'data-auto="1"' : ''}>${esc(value ?? '')}</td>`;
+    const ro = v => `<td>${esc(v ?? '')}</td>`;
+    const perfKeys = ['abandon', 'prod_team', 'prod_ind', 'qa', 'csat'];
+    const coachKeys = ['productivity', 'qa', 'csat', 'training'];
+    const opKeys = ['calls', 'schedule', 'tickets', 'slack'];
+    const schKeys = ['coverage', 'lunch', 'backoffice', 'peak'];
+
+    function render() {
+      const t = T.tracker, m = T.manual || {}, a = T.auto || {};
+      document.getElementById('meta').innerHTML = `<b>Supervisor meeting ${esc(DATE)}</b> · <span class="pill ${T.status}">${T.status}</span> · window ${esc(a.period && a.period.start)} → ${esc(a.period && a.period.end)} · last week ${esc(a.period && a.period.week)}${(T.published || []).length ? ` · pushed: ${T.published.map(p => p.permalink ? `<a href="${esc(p.permalink)}" target="_blank" rel="noopener">${p.target}</a>` : p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">${p.target}</a>` : p.target).join(', ')}` : ''}`;
+      document.getElementById('submitBtn').hidden = T.status === 'submitted';
+      const f = a.fortnight || {}, w = (a.weekly && a.weekly.abandon && a.weekly.abandon.week) || {};
+      document.getElementById('dataLine').innerHTML = `<span>Fortnight abandon rate <b>${pct(f.abandon_pct)}</b> (${f.abandoned ?? 0} of ${f.inbound ?? 0}, ${f.days_with_data ?? 0} days)</span><span>Last week <b>${pct(w.abandon_pct)}</b> · target <b>${pct(a.weekly && a.weekly.abandon && a.weekly.abandon.target)}</b></span><span>By shift: ${Object.entries(f.by_shift || {}).map(([k, v]) => `${esc(k)} <b>${pct(v.abandon_pct)}</b>`).join(' · ')}</span><span>By weekday: ${Object.entries(f.by_weekday || {}).filter(([, v]) => v.days).map(([k, v]) => `${esc(k)} <b>${pct(v.abandon_pct)}</b>`).join(' · ')}</span><span>Open action plans <b>${(a.action_plans && a.action_plans.open || []).length}</b></span>`;
+      const rot = a.rotation || {};
+      document.getElementById('rotationHint').textContent = rot.suggested_presenter ? `(rotation suggests ${rot.suggested_presenter}${rot.last_presenter ? '; last: ' + rot.last_presenter : ''})` : '';
+      document.querySelectorAll('[data-m]').forEach(el => { el.value = m[el.dataset.m] ?? (el.dataset.m === 'presenter' ? (t.presenter ?? '') : ''); });
+      document.getElementById('t1').innerHTML = `<thead><tr><th style="width:170px">Area</th><th>Current result</th><th>Target</th><th>Gap / status</th><th>Notes / why</th></tr></thead><tbody>${t.performance.map((r, i) => `<tr><td class="h">${esc(r.area)}</td>${ro(r.current)}${ro(r.target)}${ro(r.gap)}${cell(`perf_notes.${perfKeys[i]}`, r.notes, '')}</tr>`).join('')}</tbody>`;
+      document.getElementById('t2').innerHTML = `<thead><tr><th style="width:170px">Area</th><th>Agent / area</th><th>Issue / finding</th><th>Action taken</th><th>Follow-up</th></tr></thead><tbody>${t.coaching_actions.map((r, i) => `<tr><td class="h">${esc(r.area)}</td>${['agent','issue','action','follow_up'].map(k => cell(`coaching.${coachKeys[i]}.${k}`, r[k], autoOf('coaching', coachKeys[i], k, r[k]))).join('')}</tr>`).join('')}</tbody>`;
+      document.getElementById('t3').innerHTML = `<thead><tr><th style="width:170px">Area</th><th>Finding / data</th><th>Impact</th><th>Action / change</th><th>Follow-up</th></tr></thead><tbody>${t.operational.map((r, i) => `<tr><td class="h">${esc(r.area)}</td>${['finding','impact','action','follow_up'].map(k => cell(`operational.${opKeys[i]}.${k}`, r[k], autoOf('operational', opKeys[i], k, r[k]))).join('')}</tr>`).join('')}</tbody>`;
+      renderDecisions(t.decisions);
+      document.getElementById('t5').innerHTML = `<thead><tr><th style="width:170px">Area</th><th>Current schedule</th><th>Proposed change</th><th>Data supporting change</th><th>Expected impact</th></tr></thead><tbody>${t.schedule.map((r, i) => `<tr><td class="h">${esc(r.area)}</td>${['current','proposed','data','impact'].map(k => cell(`schedule.${schKeys[i]}.${k}`, r[k], autoOf('schedule', schKeys[i], k, r[k]))).join('')}</tr>`).join('')}</tbody>`;
+      const ds = a.dailies || [];
+      document.getElementById('dailies').innerHTML = ds.length ? ds.map(d => `<a href="/supervisor/${TEAM_ID}/report/${d.id}">${esc(d.date)} ${esc(d.shift || 'full day')}</a> <span class="pill ${d.status}">${d.status}</span>`).join(' · ') : 'No shift reports filed in the window yet.';
+    }
+    // A cell shows the manual override when one exists; otherwise the auto text. autoOf returns the auto text so we can tell them apart on save.
+    function autoOf(group, key, k, shown) { const o = ((T.manual || {})[group] || {})[key]; return o && o[k] ? '' : shown; }
+    function renderDecisions(rows) {
+      document.getElementById('t4').innerHTML = `<thead><tr><th style="width:40px">#</th><th>Topic / opportunity</th><th>What are we doing?</th><th>Owner</th><th>Due / follow-up</th></tr></thead><tbody>${rows.map((r, i) => `<tr data-decision="1"><td>${i + 1}.</td>${['topic','action','owner','due'].map(k => `<td contenteditable="true" data-dk="${k}">${esc(r[k] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody>`;
+    }
+    function addDecision() { document.querySelector('#t4 tbody').insertAdjacentHTML('beforeend', `<tr data-decision="1"><td>${document.querySelectorAll('#t4 tbody tr').length + 1}.</td>${['topic','action','owner','due'].map(k => `<td contenteditable="true" data-dk="${k}"></td>`).join('')}</tr>`); }
+    function setPath(obj, path, val) { const p = path.split('.'); let cur = obj; for (let i = 0; i < p.length - 1; i++) { cur[p[i]] = cur[p[i]] && typeof cur[p[i]] === 'object' ? cur[p[i]] : {}; cur = cur[p[i]]; } cur[p[p.length - 1]] = val; }
+    function collect() {
+      const m = JSON.parse(JSON.stringify(T.manual || {}));
+      document.querySelectorAll('[data-m]').forEach(el => { m[el.dataset.m] = el.value; });
+      document.querySelectorAll('td[data-path]').forEach(td => {
+        const text = td.textContent.trim(); const auto = td.dataset.autoval || '';
+        if (text && text !== auto) setPath(m, td.dataset.path, text);   // an override the supervisor typed
+        else if (!text) setPath(m, td.dataset.path, '');                 // cleared → back to auto
+      });
+      const dec = [...document.querySelectorAll('tr[data-decision]')].map(tr => Object.fromEntries([...tr.querySelectorAll('[data-dk]')].map(td => [td.dataset.dk, td.textContent.trim()]))).filter(r => Object.values(r).some(v => v));
+      m.decisions = dec;
+      return m;
+    }
+    async function load() { setStatus('Loading…'); T = await api(`${API}/tracker/${DATE}`); render(); setStatus(''); }
+    async function save() { setStatus('Saving…'); try { await api(`${API}/reports/${T.report_id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ manual: collect() }) }); await load(); setStatus('Saved.'); } catch (e) { setStatus('Save failed: ' + e.message); } }
+    async function submit() { if (!confirm('Submit the tracker for this meeting?')) return; try { await post(`${API}/reports/${T.report_id}/submit`, { manual: collect() }); await load(); setStatus('Submitted.'); } catch (e) { setStatus(e.message); } }
+    async function publish(target) { await save(); if (!confirm(`Push the tracker to ${target}?`)) return; setStatus(`Pushing to ${target}…`); try { const r = await post(`${API}/reports/${T.report_id}/publish`, { target }); await load(); setStatus(`Pushed to ${target}${r.permalink ? ' — ' + r.permalink : ''}.`); } catch (e) { setStatus(`Push failed: ${e.message}`); } }
+    document.addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); save(); } });
+    load().catch(e => setStatus('Could not load: ' + e.message));
+  </script>
+</body>
+</html>

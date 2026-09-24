@@ -41,6 +41,7 @@ import headerCss from "../../pages/static/header.css?raw";
 // @ts-ignore vite ?raw
 import headerJs from "../../pages/static/header.js?raw";
 import { accessEmail, canCoach, resolveAccess, selfAgentFor, type Access } from "../lib/rbac.js";
+import { handleSupervisorRoutes, type SupEnv } from "./supervisor.js";
 
 const RAILWAY_BASE = "https://hellolanding-qa.up.railway.app";
 const KNOWN_TEAMS = new Set(["member_support", "sales", "sofia"]);
@@ -198,12 +199,19 @@ export async function handleTeamRoutes(
   lookupAllow?: string,
   pulpo?: { url?: string; token?: string },
   gasUrls?: { member_support?: string; sales?: string; sofia?: string; hr?: string },
-  retellKey?: string
+  retellKey?: string,
+  supEnv: SupEnv = {}
 ): Promise<Response | null> {
   const path = url.pathname;
 
   // ── greeting page (platform default URL) ─────────────────────────────────
   if (path === "/") return html(GREETING_PAGE);
+
+  // ── supervisor deliverables (routes/supervisor.ts) ───────────────────────
+  if (path.startsWith("/supervisor/") || /^\/api\/[^/]+\/sup(\/|$)/.test(path)) {
+    const supRes = await handleSupervisorRoutes(request, db, url, lookupAllow, { DIALPAD_API_KEY: dialpadKey, ...supEnv });
+    if (supRes) return supRes;
+  }
 
   // ── static assets shared by the ported pages ──────────────────────────────
   if (path === "/static/header.css")

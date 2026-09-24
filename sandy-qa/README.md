@@ -1,3 +1,31 @@
+# ⏸ PAUSED — auto-scoring is OFF (since 2026-09-24)
+
+> **Owner instruction (Max Pérez, 2026-09-24): "Turn off all auto-scoring
+> pipelines. Nothing moves until Diana or Todd take over this project."**
+>
+> What is off (one switch — the `qa_settings` row `autoscore_paused`,
+> migration `0022`, read by `src/lib/pause.ts` on every ticker step):
+> - the nightly Member Support disposition sweep (no calls are selected or
+>   scored automatically),
+> - the hourly Sofia/Retell sweep,
+> - the one-shot cron jobs: EOM progression assessments, **HR-bonus GAS
+>   dispatch on the 1st**, the daily agent digest.
+>
+> What still runs: the EOD Google-Sheet report, the supervisor pulls, the
+> queue pump (only moves jobs a human submitted), the console "Score Call".
+> The hourly `cron_runs` note carries `"paused": {...}` while the pause is on.
+> Not touched: the laptop crons (`shadow_sync` every 30 min, parity nightly)
+> and the Railway service — see `references/RailwayRetirement.md`.
+>
+> **To resume** (new owner): `sandy.py db migrate <app-id> "DELETE FROM
+> qa_settings WHERE key='autoscore_paused'"` — no deploy. The first night
+> back sweeps only *yesterday*; days missed during the pause stay unscored
+> unless re-armed (`references/CronContinuation.md` §6.4). The September HR
+> bonus (`qa_cron_jobs` key `2026-09`) will need a manual `INSERT` if the
+> pause outlives Oct 1. Context for a new owner: this README, then
+> `references/` (one design doc per feature, each with its ladder), then the
+> open PRs on `mxg108/Landing-scripts`.
+
 # Sandy App — qa-scoring
 
 Landing's call-quality platform on Sandy: two-stage AI scoring (Gemini
