@@ -45,6 +45,8 @@ export interface CronEnv {
   GAS_WEBAPP_URL_SALES?: string;
   // ShiftReport §10: Google service-account JSON for the EOD sheet sink.
   GSHEETS_SA_JSON?: string;
+  // SupervisorDeliverables §4.5: Snowflake gateway token (WFM parity pull).
+  SNOWFLAKE_MCP_TOKEN?: string;
 }
 
 export interface TickerStep {
@@ -65,6 +67,15 @@ export async function runTickerStep(
   const summary: Record<string, any> = {};
   let progressing = false;
 
+  // ⏸ AUTO-SCORING PAUSE (migration 0022, src/lib/pause.ts): while the
+  // qa_settings row exists, steps 0–2 (cron jobs, disposition sweep, Retell
+  // sweep) are skipped. Steps 3–4 (EOD report, supervisor pulls, queue pump)
+  // still run — they do not score calls on their own.
+  const { getAutoscorePause } = await import("./pause.js");
+  const paused = await getAutoscorePause(db);
+  if (paused) {
+    summary.paused = paused;
+  } else {
   // 0. One-shot cron jobs (EOM assessments, HR bonus dispatch — CC4): the
   //    oldest pending job advances one handler step.
   try {
@@ -90,6 +101,7 @@ export async function runTickerStep(
   } catch (err) {
     summary.sweep = { error: String((err as any)?.message ?? err).slice(0, 200) };
   }
+  } // end of the pause gate
   // 3. EOD Google-Sheet report — one bounded poll pass (13–19 UTC gate).
   try {
     const { runEodReports } = await import("./eodReport.js");
@@ -97,6 +109,15 @@ export async function runTickerStep(
     if (Object.values(summary.eod ?? {}).some((r: any) => r?.more === true)) progressing = true;
   } catch (err) {
     summary.eod = { error: String((err as any)?.message ?? err).slice(0, 200) };
+  }
+  // 3b. Supervisor deliverables — weekly Dialpad pulls (productivity + CSAT
+  //     per agent; SupervisorDeliverables.md §4.4), one bounded poll pass.
+  try {
+    const { runSupervisorPulls } = await import("./supervisorFacts.js");
+    summary.sup_pulls = await runSupervisorPulls(db, env);
+    if (summary.sup_pulls?.more) progressing = true;
+  } catch (err) {
+    summary.sup_pulls = { error: String((err as any)?.message ?? err).slice(0, 200) };
   }
   // 4. Queue pump — one trigger when the single platform slot is free.
   let queued = 0;
@@ -175,7 +196,10 @@ export async function runHourlyPump(
   const queued = await db
     .prepare("SELECT COUNT(*) AS n FROM qa_score_queue WHERE status = 'queued'")
     .first<any>();
+  const { getAutoscorePause } = await import("./pause.js");
+  const paused = await getAutoscorePause(db);
   return JSON.stringify({
+    ...(paused ? { paused } : {}),
     ticker,
     ...(step ? { step: step.summary, step_done: step.done } : {}),
     still_queued: queued?.n ?? 0,

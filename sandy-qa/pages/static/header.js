@@ -99,6 +99,9 @@
       { key: 'teamview', label: 'Team View',     href: `/dashboard/${opts.team}`, showOn: ['agent', 'plain'] },
       { key: 'lookup',   label: 'Lookup',        href: `/lookup/${opts.team}`,    showOn: 'all' },
       { key: 'coaching', label: 'Coaching',      href: `/coaching/${opts.team}`,  showOn: ['team', 'agent'], gated: 'can_coach' },
+      // Supervisor deliverables (SupervisorDeliverables.md §5): same gate as
+      // coaching; shown on every page mode so the report editors can hop back.
+      { key: 'supervisor', label: 'Supervisor',  href: `/supervisor/${opts.team}`, showOn: ['team', 'agent', 'plain'], gated: 'can_coach' },
     ];
     const navHtml = navLinks
       .filter(n => n.showOn === 'all' || n.showOn.includes(opts.page))

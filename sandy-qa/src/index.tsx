@@ -44,6 +44,14 @@ export interface Env {
   // Dashboard-set app secret: HR-bonus GAS renderer (monthly export on the
   // 1st — maintenance.ts runDailyMaintenance).
   GAS_WEBAPP_URL_HR?: string;
+  // Dashboard-set app secrets (SupervisorDeliverables.md §7 — each one
+  // unlocks a section; absent → that section reads "unavailable", never a
+  // failed report): Slack bot token (publish reports to the team channel),
+  // Slack user token (search unattended @member-support mentions), and the
+  // sgmcp_* Snowflake gateway token (Mission Control ticket counts).
+  SLACK_BOT_TOKEN?: string;
+  SLACK_USER_TOKEN?: string;
+  SNOWFLAKE_MCP_TOKEN?: string;
   // Optional: pre-select a specific workflow. Leave unset to list all available.
   WORKFLOW_ID?: string;
   // Provisioned automatically by Sandy at publish time for apps with cron schedules.
@@ -65,6 +73,7 @@ function cronEnvOf(env: Env) {
     GAS_WEBAPP_URL_MS: env.GAS_WEBAPP_URL_MS,
     GAS_WEBAPP_URL_SALES: env.GAS_WEBAPP_URL_SALES,
     GSHEETS_SA_JSON: env.GSHEETS_SA_JSON,
+    SNOWFLAKE_MCP_TOKEN: env.SNOWFLAKE_MCP_TOKEN,
   };
 }
 
@@ -95,7 +104,13 @@ export default {
           sofia: env.GAS_WEBAPP_URL_SOFIA,
           hr: env.GAS_WEBAPP_URL_HR,
         },
-        env.RETELL_API_KEY
+        env.RETELL_API_KEY,
+        {
+          GSHEETS_SA_JSON: env.GSHEETS_SA_JSON,
+          SLACK_BOT_TOKEN: env.SLACK_BOT_TOKEN,
+          SLACK_USER_TOKEN: env.SLACK_USER_TOKEN,
+          SNOWFLAKE_MCP_TOKEN: env.SNOWFLAKE_MCP_TOKEN,
+        }
       );
       if (teamRes) return teamRes;
     } catch (err) {
