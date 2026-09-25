@@ -107,7 +107,7 @@ truncating at 50 docs (replaced by hit-tag scoping). Pulpo's own open
 items: `qa-automation/AI-Scoring/references/PulpoConnection.md` P5/P6; the
 *Unit Issues — Pests* label has no SOP coverage.
 
-### 2.2 Score drift since the Railway → Sandy migration; the harsher Claude judge; the calibration loop
+### 2.2 Score drift since the Railway → Sandy migration; the harsher Sonnet judge; the calibration loop
 
 **Numbers (Member Support, finalized evals, live D1):**
 
@@ -119,11 +119,12 @@ items: `qa-automation/AI-Scoring/references/PulpoConnection.md` P5/P6; the
 | Sep 2026 (Sandy) | Claude judge | 56.1 |
 | Sep 2026 (Sandy, same weeks) | Gemini judge / Plan-B | 73.2 / 71.8 |
 
-The judge in `src/routes/scoring.ts` is pinned to **`claude-sonnet-5`**
-(the owner refers to it as "the harsher Opus judge"; no Opus judge
-configuration exists in the repo — Opus is used for progression analysis
-only, `TwoStageScoringDesign.md` §10.2). On the same rubric and formula the
-Claude judge scores ~17–20 points below the Gemini judge. The 2026-08-31
+**The pinned judge is Claude Sonnet, not Opus.** `src/routes/scoring.ts`
+pins `claude-sonnet-5` (matching Railway's `SCORING_ANTHROPIC_MODEL`); no
+Opus judge configuration has ever existed in the repo — Opus is reserved
+for progression analysis (`TwoStageScoringDesign.md` §10.2). On the same
+rubric and formula the Sonnet judge scores ~17–20 points below the Gemini
+judge. The 2026-08-31
 decomposition (`references/RetrievalScope.md` §Why) ranks the causes:
 (1) judge model swap — largest; (2) Sofia SOP leakage — fixed by tag
 scoping; (3) selection change — random nightly sweep vs analyst-picked
